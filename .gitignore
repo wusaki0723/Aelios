@@ -6,6 +6,8 @@ __pycache__/
 
 # Runtime data
 saki-gateway/data/config.json
+saki-gateway/data/active_memory.md
+saki-gateway/data/core_profile.md
 saki-gateway/data/*.db
 saki-gateway/data/*.db-shm
 saki-gateway/data/*.db-wal

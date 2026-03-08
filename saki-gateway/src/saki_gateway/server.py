@@ -869,7 +869,7 @@ class GatewayApp:
     def dispatch_proactive_message(self, profile_id: str, content: str, source: str = "proactive") -> Dict[str, Any]:
         profile = self.runtime_store.profile_state(profile_id)
         channel = str(profile.get("last_channel", "") or "")
-        outbound_content = self._synthesize_outbound_message(profile_id, content, source)
+        outbound_content = self._prepare_outbound_message(profile_id, content, source)
         delivered = False
         note = ""
         if channel == "feishu" and self.feishu_channel is not None:
@@ -894,6 +894,11 @@ class GatewayApp:
             channel=channel,
         )
         return {"profile_id": profile_id, "content": outbound_content, "raw_content": content, "delivered": delivered, "note": note, "channel": channel}
+
+    def _prepare_outbound_message(self, profile_id: str, content: str, source: str) -> str:
+        if source == "scheduled_reminder":
+            return content
+        return self._synthesize_outbound_message(profile_id, content, source)
 
     def _synthesize_outbound_message(self, profile_id: str, content: str, source: str) -> str:
         chat_provider = self.config_store.config.chat_api

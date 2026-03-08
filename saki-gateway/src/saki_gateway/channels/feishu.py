@@ -471,7 +471,7 @@ class FeishuChannel:
 
     def _build_card(self, content: str, *, loading: bool) -> dict[str, Any]:
         safe_text = self._truncate_card_text(content)
-        status_line = "正在整理回复" if loading else "最新回复"
+        status_line = "正在整理中…" if loading else ""
         return {
             "config": {
                 "wide_screen_mode": True,
@@ -480,7 +480,7 @@ class FeishuChannel:
             "elements": [
                 {
                     "tag": "markdown",
-                    "content": f"**{status_line}**\n\n{safe_text}",
+                    "content": f"**{status_line}**\n\n{safe_text}" if status_line else safe_text,
                 }
             ],
         }

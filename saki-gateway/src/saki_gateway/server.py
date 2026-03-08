@@ -838,30 +838,59 @@ class GatewayApp:
     def dispatch_proactive_message(self, profile_id: str, content: str, source: str = "proactive") -> Dict[str, Any]:
         profile = self.runtime_store.profile_state(profile_id)
         channel = str(profile.get("last_channel", "") or "")
+        outbound_content = self._synthesize_outbound_message(profile_id, content, source)
         delivered = False
         note = ""
         if channel == "feishu" and self.feishu_channel is not None:
             open_id = str(profile.get("channel_user_id", "") or "")
             chat_id = str(profile.get("chat_id", "") or "")
             chat_type = "p2p" if not chat_id else "group"
-            self.feishu_channel.send_text(open_id, content, chat_id=chat_id, chat_type=chat_type)
+            self.feishu_channel.send_text(open_id, outbound_content, chat_id=chat_id, chat_type=chat_type)
             delivered = True
         elif channel == "qq" and self.napcat_channel is not None:
             user_id = str(profile.get("channel_user_id", "") or "")
             group_id = str(profile.get("chat_id", "") or "")
             message_type = "group" if group_id else "private"
-            self.napcat_channel.send_text(user_id, content, group_id=group_id, message_type=message_type)
+            self.napcat_channel.send_text(user_id, outbound_content, group_id=group_id, message_type=message_type)
             delivered = True
         else:
             note = "no live outbound channel was available; event recorded only"
         self._record_event(
             source,
-            {"content": content, "delivered": delivered, "note": note},
+            {"content": outbound_content, "raw_content": content, "delivered": delivered, "note": note},
             profile_id=profile_id,
             session_id=str(profile.get("last_session_id", "") or ""),
             channel=channel,
         )
-        return {"profile_id": profile_id, "content": content, "delivered": delivered, "note": note, "channel": channel}
+        return {"profile_id": profile_id, "content": outbound_content, "raw_content": content, "delivered": delivered, "note": note, "channel": channel}
+
+    def _synthesize_outbound_message(self, profile_id: str, content: str, source: str) -> str:
+        chat_provider = self.config_store.config.chat_api
+        if not self._provider_ready(chat_provider):
+            return content
+        profile = self.runtime_store.profile_state(profile_id)
+        session_id = str(profile.get("last_session_id", "") or "")
+        system = (
+            "你是伴侣聊天核。现在不是普通对话，而是在把系统事件转写成自然、亲密、不突兀的一条消息。"
+            "不要提系统、调度器、提醒服务、自动发送。"
+            "保留原意，写得像她/他自己主动说出来的一句话。"
+        )
+        user = f"事件类型：{source}\n原始内容：{content}"
+        try:
+            response = request_chat_completion(
+                chat_provider,
+                self._build_main_chat_messages(
+                    [{"role": "user", "content": user}],
+                    [],
+                    session_id,
+                )[:-1] + [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                stream=False,
+                temperature=0.7,
+            )
+            text = extract_text_content(response).strip()
+            return text or content
+        except Exception:
+            return content
 
     def upsert_panel_memory(self, body: Dict[str, Any], memory_id: str = "") -> Dict[str, Any]:
         raw_id = memory_id or str(body.get("id", "") or "") or f"mem_{len(self.memory_store.list_memories(1000)) + 1}"

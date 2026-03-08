@@ -60,7 +60,73 @@ def _clean_html(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _fetch_github_repo_context(url: str) -> Optional[Dict[str, Any]]:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc not in {"github.com", "www.github.com"}:
+        return None
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) < 2:
+        return None
+    owner, repo = parts[0], parts[1]
+    branch = "main"
+    api_base = f"https://api.github.com/repos/{owner}/{repo}"
+    headers = {
+        "User-Agent": "saki-gateway/0.1",
+        "Accept": "application/vnd.github+json",
+    }
+
+    def _get_json(target: str) -> Any:
+        req = urllib.request.Request(target, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
+
+    try:
+        repo_meta = _get_json(api_base)
+    except Exception:
+        return None
+    default_branch = str(repo_meta.get("default_branch", "") or "").strip()
+    if default_branch:
+        branch = default_branch
+    readme_text = ""
+    try:
+        readme_meta = _get_json(f"{api_base}/readme")
+        download_url = str(readme_meta.get("download_url", "") or "")
+        if download_url:
+            req = urllib.request.Request(download_url, headers={"User-Agent": "saki-gateway/0.1"})
+            with urllib.request.urlopen(req, timeout=15) as response:
+                readme_text = response.read().decode("utf-8", errors="replace")
+    except Exception:
+        readme_text = ""
+    file_names: list[str] = []
+    try:
+        tree = _get_json(f"{api_base}/contents")
+        if isinstance(tree, list):
+            entries = tree[:20]
+            file_names = [str(item.get("name", "") or "") for item in entries if isinstance(item, dict)]
+    except Exception:
+        file_names = []
+    description = str(repo_meta.get("description", "") or "")
+    language = str(repo_meta.get("language", "") or "")
+    stars = repo_meta.get("stargazers_count", 0)
+    context_parts = [
+        f"GitHub 仓库：{owner}/{repo}",
+        f"仓库描述：{description or '无'}",
+        f"默认分支：{branch}",
+        f"主要语言：{language or '未知'}",
+        f"Stars：{stars}",
+    ]
+    if file_names:
+        context_parts.append("根目录文件：" + ", ".join(file_names))
+    if readme_text.strip():
+        context_parts.append("README 摘录：\n" + readme_text[:4000])
+    content = "\n".join(part for part in context_parts if part)
+    return {"url": url, "content": content[:6000], "excerpt": content[:2000]}
+
+
 def _fetch_url_content(url: str) -> Dict[str, Any]:
+    github_context = _fetch_github_repo_context(url)
+    if github_context is not None:
+        return github_context
     req = urllib.request.Request(url, headers={"User-Agent": "saki-gateway/0.1"})
     with urllib.request.urlopen(req, timeout=15) as response:
         raw = response.read().decode("utf-8", errors="replace")

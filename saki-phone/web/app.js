@@ -1046,6 +1046,14 @@ class SakiPhoneApp {
         <button class="btn btn-primary btn-block btn-save" onclick="app.saveSection('dashboard_security')">保存密码设置</button>
       </div>
 
+      <div class="settings-section" id="sec-data-transfer">
+        <h4>${svgIcon('download', 'icon-sm')} 数据导入 / 导出</h4>
+        <div class="about-info" style="margin-bottom:12px;">导出内容包含人设、长期记忆和今日日志。导入采用合并更新，不会先清空现有数据。</div>
+        <button class="btn btn-primary btn-block btn-save" onclick="app.exportDataBackup()">导出 JSON</button>
+        <button class="btn btn-secondary btn-block" style="margin-top:10px;" onclick="app.openImportDataPicker()">导入 JSON</button>
+        <input type="file" id="data-import-input" accept="application/json,.json" style="display:none;" onchange="app.importDataBackup(event)">
+      </div>
+
       <!-- Theme -->
       <div class="settings-section">
         <h4>${svgIcon('star', 'icon-sm')} 主题</h4>
@@ -1272,6 +1280,58 @@ class SakiPhoneApp {
       this.showToast('已保存', 'success');
     } catch (err) {
       this.showToast(`保存失败: ${err.message}`, 'error');
+    }
+  }
+
+  async exportDataBackup() {
+    try {
+      const res = await this.apiFetch('/api/data/export');
+      if (!res.ok) throw new Error('Export failed');
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `aelios-backup-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      this.showToast('导出成功', 'success');
+    } catch (err) {
+      this.showToast(`导出失败: ${err.message}`, 'error');
+    }
+  }
+
+  openImportDataPicker() {
+    const input = document.getElementById('data-import-input');
+    if (!input) return;
+    input.value = '';
+    input.click();
+  }
+
+  async importDataBackup(event) {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const res = await this.apiFetch('/api/data/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error('Import failed');
+      const result = await res.json();
+      const imported = result.imported || {};
+      this.showToast(`导入成功：人设 ${imported.persona ? '已更新' : '未变更'}，记忆 ${imported.memories || 0} 条，日志 ${imported.logs || 0} 条`, 'success');
+      await Promise.all([this.renderSettings(), this.renderMemories()]);
+    } catch (err) {
+      this.showToast(`导入失败: ${err.message}`, 'error');
+    } finally {
+      if (event?.target) event.target.value = '';
     }
   }
 

@@ -151,6 +151,94 @@ class GatewayApp:
         payload["dashboard_security"] = dashboard_security
         return payload
 
+    def export_backup_payload(self) -> Dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "exported_at": datetime.now().isoformat(),
+            "persona": self.public_config_payload().get("persona") or {},
+            "memories": [
+                self._serialize_memory(record)
+                for record in self.memory_store.list_memories(
+                    limit=5000, memory_kind="long_term"
+                )
+                if getattr(record, "category", "") != "memory_refresh"
+            ],
+            "logs": [
+                self._serialize_memory(record)
+                for record in self.memory_store.list_memories(
+                    limit=5000, memory_kind="daily_log"
+                )
+            ],
+        }
+
+    def import_backup_payload(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        persona = body.get("persona") or {}
+        memories = body.get("memories") or []
+        logs = body.get("logs") or []
+        if not isinstance(persona, dict):
+            raise ValueError("persona must be an object")
+        if not isinstance(memories, list) or not isinstance(logs, list):
+            raise ValueError("memories and logs must be arrays")
+
+        persona_payload = {"persona": persona} if persona else {}
+        if persona_payload:
+            self.update_config(persona_payload)
+
+        imported_memories = 0
+        imported_logs = 0
+        for item in memories:
+            if not isinstance(item, dict):
+                continue
+            memory_id = str(item.get("id", "") or "").strip()
+            key = str(item.get("key", "") or item.get("title", "")).strip()
+            content = str(item.get("content", "") or "").strip()
+            if not memory_id or not key or not content:
+                continue
+            self.memory_store.upsert_memory(
+                memory_id=memory_id,
+                key=key,
+                content=content,
+                memory_kind="long_term",
+                category=str(item.get("category", "other") or "other").strip()
+                or "other",
+                importance=max(
+                    0.0, min(1.0, float(item.get("importance", 0.5) or 0.5))
+                ),
+                session_id=str(item.get("session_id", "") or ""),
+            )
+            imported_memories += 1
+
+        for item in logs:
+            if not isinstance(item, dict):
+                continue
+            memory_id = str(item.get("id", "") or "").strip()
+            key = str(item.get("key", "") or item.get("title", "")).strip()
+            content = str(item.get("content", "") or "").strip()
+            if not memory_id or not key or not content:
+                continue
+            self.memory_store.upsert_memory(
+                memory_id=memory_id,
+                key=key,
+                content=content,
+                memory_kind="daily_log",
+                category="daily_log",
+                importance=max(
+                    0.0, min(1.0, float(item.get("importance", 0.2) or 0.2))
+                ),
+                session_id=str(item.get("session_id", "") or ""),
+            )
+            imported_logs += 1
+
+        self._ensure_context_files(refresh=True)
+        return {
+            "ok": True,
+            "imported": {
+                "persona": bool(persona_payload),
+                "memories": imported_memories,
+                "logs": imported_logs,
+            },
+        }
+
     def start_channels(self) -> None:
         if self.feishu_channel is not None:
             self.feishu_channel.start(self.handle_feishu_message)
@@ -1908,6 +1996,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/context":
                 self._json(HTTPStatus.OK, app.get_context_payload())
                 return
+            if parsed.path == "/api/data/export":
+                self._json(HTTPStatus.OK, app.export_backup_payload())
+                return
             static_path = app.resolve_static_path(parsed.path)
             if static_path is not None:
                 self._serve_static(static_path)
@@ -1937,6 +2028,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/reminders":
                 self._json(HTTPStatus.CREATED, app.create_reminder_payload(body))
+                return
+            if parsed.path == "/api/data/import":
+                self._json(HTTPStatus.OK, app.import_backup_payload(body))
                 return
             if parsed.path == "/api/tools/execute":
                 tool_id = str(body.get("tool", ""))

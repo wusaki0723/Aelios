@@ -1620,25 +1620,19 @@ class GatewayApp:
     def _daily_log_session_ref(self, profile_id: str, day: datetime) -> str:
         return f"{profile_id}:{day.strftime('%Y-%m-%d')}"
 
-    def _serialize_daily_log(
+    def _summarize_daily_log_chunk(
         self,
         *,
         profile_id: str,
         day: datetime,
         messages: list[Dict[str, Any]],
-        threshold: int,
-        previous_threshold: int,
-    ) -> tuple[str, str]:
-        title = f"{day.strftime('%Y-%m-%d')} 聊天日志"
-        header = [
-            f"日期：{day.strftime('%Y-%m-%d')}",
-            f"档位：已整理 {threshold} 条消息",
-            f"上次档位：{previous_threshold}",
-            f"用户：{profile_id}",
-            "",
-            "聊天摘录：",
-        ]
-        body: list[str] = []
+        chunk_start: int,
+        chunk_end: int,
+    ) -> str:
+        provider = self._preferred_extraction_provider()
+        if provider is None:
+            return f"- 本段已覆盖第 {chunk_start}-{chunk_end} 条消息，但当前未配置可用提炼模型，暂未生成摘要。"
+        transcript_lines: list[str] = []
         for item in messages:
             role = "用户" if item.get("role") == "user" else "Aelios"
             timestamp = str(item.get("created_at", "") or "")
@@ -1649,18 +1643,85 @@ class GatewayApp:
             content = str(item.get("content", "") or "").strip()
             if not content:
                 continue
-            body.append(f"- [{time_label}] {role}：{content}")
-        return title, "\n".join(header + body).strip()
+            transcript_lines.append(f"[{time_label}] {role}：{content}")
+        if not transcript_lines:
+            return f"- 第 {chunk_start}-{chunk_end} 条消息没有可整理内容。"
+        prompt = (
+            f"你是今日日志整理助手。请把 {day.strftime('%Y-%m-%d')} 这一天里第 {chunk_start}-{chunk_end} 条聊天消息整理成“摘要”，而不是转抄原话。\n"
+            "只保留以下信息：\n"
+            "1. 用户今天发生了什么、在意什么\n"
+            "2. 用户表达出的情绪、状态、计划、偏好变化\n"
+            "3. 双方形成的新约定、提醒、需要后续跟进的点\n"
+            "4. 值得进入长期记忆的候选信息线索\n\n"
+            "严禁：\n"
+            "- 逐句转写对话\n"
+            "- 使用‘用户说/AI说’流水账\n"
+            "- 记录寒暄和废话\n\n"
+            "输出格式：\n"
+            "- 用 4~8 条中文要点总结\n"
+            "- 每条尽量一句话\n"
+            "- 直接输出摘要内容，不要加解释\n\n"
+            "聊天内容：\n"
+            + "\n".join(transcript_lines[:80])
+        )
+        try:
+            result = request_chat_completion(
+                provider,
+                [
+                    {"role": "system", "content": "你是摘要整理助手，只输出简明中文要点。"},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=False,
+                temperature=0.2,
+                timeout=30,
+            )
+            summary = extract_text_content(result).strip()
+        except Exception:
+            summary = ""
+        if self._looks_like_transcript(summary):
+            summary = ""
+        if not summary:
+            return f"- 第 {chunk_start}-{chunk_end} 条消息未成功生成摘要。"
+        return summary
+
+    def _looks_like_transcript(self, text: str) -> bool:
+        normalized = text.strip()
+        if not normalized:
+            return False
+        transcript_markers = [r"\[\d{2}:\d{2}\]", r"用户：", r"Aelios：", r"AI：", r"^-"]
+        hits = sum(1 for pattern in transcript_markers if re.search(pattern, normalized, flags=re.M))
+        return hits >= 2 and len(normalized.splitlines()) >= 4
+
+    def _compose_daily_log_content(
+        self,
+        *,
+        profile_id: str,
+        day: datetime,
+        processed_count: int,
+        sections: list[str],
+    ) -> tuple[str, str]:
+        title = f"{day.strftime('%Y-%m-%d')} 今日日志摘要"
+        header = [
+            f"日期：{day.strftime('%Y-%m-%d')}",
+            f"已整理消息：{processed_count}",
+            f"用户：{profile_id}",
+            "",
+            "今日日志摘要：",
+        ]
+        return title, "\n".join(header + sections).strip()
 
     def _update_daily_log(self, *, profile_id: str, session_id: str) -> None:
         day_start, day_end = self._local_day_bounds()
         start_iso = day_start.isoformat()
         end_iso = day_end.isoformat()
-        total_messages = self.runtime_store.count_messages_between(
+        all_messages = self.runtime_store.list_messages_between(
             profile_id=profile_id,
             start_at=start_iso,
             end_at=end_iso,
+            limit=2000,
         )
+        user_messages = [item for item in all_messages if item.get("role") == "user"]
+        total_messages = len(user_messages)
         threshold = total_messages // 20
         if threshold <= 0:
             return
@@ -1673,22 +1734,47 @@ class GatewayApp:
                 previous_threshold = max(0, int(match.group(1)) // 20)
         if threshold <= previous_threshold:
             return
-        messages = self.runtime_store.list_messages_between(
-            profile_id=profile_id,
-            start_at=start_iso,
-            end_at=end_iso,
-            limit=max(200, threshold * 30),
-        )
-        if not messages:
+        if not all_messages:
             return
         capped_count = threshold * 20
-        selected = messages[:capped_count]
-        title, content = self._serialize_daily_log(
+        chunk_start = previous_threshold * 20 + 1
+        target_user_ids = {item.get("id") for item in user_messages[previous_threshold * 20 : capped_count]}
+        selected = [item for item in all_messages if item.get("role") != "user" or item.get("id") in target_user_ids or len(target_user_ids) > 0]
+        if target_user_ids:
+            valid_target_ids = [int(i) for i in target_user_ids if i is not None]
+            if not valid_target_ids:
+                return
+            last_target_id = max(valid_target_ids)
+            selected = [item for item in all_messages if int(item.get("id", 0) or 0) <= last_target_id]
+            prev_target_id = 0
+            if previous_threshold > 0:
+                previous_ids = [item.get("id") for item in user_messages[: previous_threshold * 20] if item.get("id") is not None]
+                valid_previous_ids = [int(i) for i in previous_ids if i is not None]
+                prev_target_id = max(valid_previous_ids) if valid_previous_ids else 0
+            selected = [item for item in selected if int(item.get("id", 0) or 0) > prev_target_id]
+        if not selected:
+            return
+        summary = self._summarize_daily_log_chunk(
             profile_id=profile_id,
             day=day_start,
             messages=selected,
-            threshold=capped_count,
-            previous_threshold=previous_threshold * 20,
+            chunk_start=chunk_start,
+            chunk_end=capped_count,
+        )
+        sections: list[str] = []
+        if existing is not None:
+            marker = "今日日志摘要："
+            existing_content = existing.content or ""
+            if marker in existing_content:
+                tail = existing_content.split(marker, 1)[1].strip()
+                if tail:
+                    sections.append(tail)
+        sections.append(f"### 第 {threshold} 段（{chunk_start}-{capped_count}）\n{summary}")
+        title, content = self._compose_daily_log_content(
+            profile_id=profile_id,
+            day=day_start,
+            processed_count=capped_count,
+            sections=sections,
         )
         self.memory_store.upsert_memory(
             memory_id=log_id,
@@ -1726,7 +1812,60 @@ class GatewayApp:
         profile = profile_id or "local-user"
         self._update_daily_log(profile_id=profile, session_id=session_id)
         if self._should_trigger_goodnight_refresh(user_text):
+            self._force_daily_log(profile_id=profile, session_id=session_id)
             self._run_memory_digest(profile_id=profile, session_id=session_id)
+
+    def _force_daily_log(self, *, profile_id: str, session_id: str) -> None:
+        day_start, day_end = self._local_day_bounds()
+        start_iso = day_start.isoformat()
+        end_iso = day_end.isoformat()
+        all_messages = self.runtime_store.list_messages_between(
+            profile_id=profile_id,
+            start_at=start_iso,
+            end_at=end_iso,
+            limit=2000,
+        )
+        if not all_messages:
+            return
+        user_messages = [item for item in all_messages if item.get("role") == "user"]
+        if not user_messages:
+            return
+        log_id = self._daily_log_memory_id(profile_id, day_start)
+        existing = self.memory_store.get_memory(log_id)
+        if existing is not None and "### 晚安前补全摘要" in (existing.content or ""):
+            return
+        summary = self._summarize_daily_log_chunk(
+            profile_id=profile_id,
+            day=day_start,
+            messages=all_messages,
+            chunk_start=1,
+            chunk_end=len(user_messages),
+        )
+        sections: list[str] = []
+        if existing is not None:
+            marker = "今日日志摘要："
+            existing_content = existing.content or ""
+            if marker in existing_content:
+                tail = existing_content.split(marker, 1)[1].strip()
+                if tail:
+                    sections.append(tail)
+        sections.append(f"### 晚安前补全摘要（1-{len(user_messages)}）\n{summary}")
+        title, content = self._compose_daily_log_content(
+            profile_id=profile_id,
+            day=day_start,
+            processed_count=len(user_messages),
+            sections=sections,
+        )
+        self.memory_store.upsert_memory(
+            memory_id=log_id,
+            key=title,
+            content=content,
+            memory_kind="daily_log",
+            category="daily_log",
+            importance=0.2,
+            session_id=self._daily_log_session_ref(profile_id, day_start),
+        )
+        self._refresh_active_memory()
 
     def _run_memory_digest(self, profile_id: str = "", session_id: str = "") -> None:
         provider = self._preferred_extraction_provider()
@@ -1758,13 +1897,13 @@ class GatewayApp:
         ]
 
         digest_prompt = (
-            "你是长期记忆整理助手。现在只能基于‘今日聊天日志’来更新长期记忆。\n"
-            "请把已有长期记忆视为可修改的事实表，不要逐条照抄日志，不要生成日志型条目。\n"
+            "你是长期记忆整理助手。现在只能基于‘今日日志摘要’来更新长期记忆。\n"
+            "请把已有长期记忆视为可修改的事实表，不要逐条照抄摘要，不要生成日志型条目。\n"
             "只有以下类型允许进入长期记忆：世界书设定、稳定喜好、重要关系事实、长期边界、约定/承诺、纪念日、持续习惯、重要阶段事件。\n"
             "如果日志里没有值得长期保留的信息，就返回空数组。\n\n"
             "现有长期记忆：\n"
             + ("\n".join(existing_blocks[:40]) if existing_blocks else "- 暂无")
-            + "\n\n今日聊天日志：\n"
+            + "\n\n今日日志摘要：\n"
             + daily_log.content[:5000]
             + "\n\n"
             "输出 JSON 数组。每一项格式如下：\n"

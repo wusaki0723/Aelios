@@ -27,7 +27,7 @@ Aelios 是一个面向长期陪伴场景的 **AI 伴侣网关**。
   - MCP 调用
 - 调度器（提醒 / 主动消息）
 - 飞书通道
-- QQ / NapCat 通道（已接入基础通道能力）
+- QQ Bot 官方通道（已接入基础能力）
 
 ---
 
@@ -76,7 +76,7 @@ PYTHONPATH=src python3 -m saki_gateway
 - 工具模型 API
 - 搜索模型 API
 - 飞书配置（可选）
-- QQ / NapCat 配置（可选）
+- QQ Bot 配置（可选）
 
 ---
 
@@ -110,7 +110,7 @@ PYTHONPATH=src python3 -m saki_gateway
 - TTS API
 - Image API
 - 飞书通道
-- QQ / NapCat 通道
+- QQ Bot 通道
 - 面板密码
 - 调度器参数
 - Session 参数
@@ -196,27 +196,27 @@ Aelios 采用多 runtime 思路：
 
 ---
 
-## QQ / NapCat 通道
+## QQ Bot 通道
 
-当前已接入基础 QQ 通道能力，后端基于 NapCat / OneBot v11。
+当前已接入基础 QQ Bot 官方通道能力，后端基于 QQ 开放平台官方 API。
 
 当前支持：
 
-- NapCat HTTP API 出站
-- QQ 入站 webhook
-- 私聊 / 群聊 route 区分
+- QQ Bot 官方 WebSocket 入站
+- 私聊 / 群聊 @ route 区分
+- 图片与文件出站
 - QQ 主动消息与 reminder 统一走同一条出站链路
 
 配置项：
 
-- `channels.napcat_enabled`
-- `channels.napcat_base_url`
-- `channels.napcat_access_token`
+- `channels.qqbot_enabled`
+- `channels.qqbot_app_id`
+- `channels.qqbot_token`
 
-建议使用：
+接入说明：
 
-- NapCat / OneBot v11
-- 事件上报到网关 `POST /api/channels/qq/inbound`
+- 面板中填写 App ID 与 Token / Secret
+- 平台事件回调地址指向网关 `POST /api/channels/qq/inbound`
 
 ---
 

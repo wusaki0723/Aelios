@@ -1098,6 +1098,18 @@ class SakiPhoneApp {
           <label>主动消息空闲阈值 (小时)</label>
           <input type="number" id="cfg-scheduler-proactive_idle_hours" value="${scheduler.proactive_idle_hours || 72}">
         </div>
+        <div class="setting-item">
+          <label>额外空闲阈值 (分钟)</label>
+          <input type="number" id="cfg-scheduler-proactive_idle_minutes" value="${scheduler.proactive_idle_minutes || 0}">
+        </div>
+        <div class="setting-item">
+          <label>白天开始小时</label>
+          <input type="number" id="cfg-scheduler-proactive_day_start_hour" value="${scheduler.proactive_day_start_hour ?? 8}" min="0" max="23">
+        </div>
+        <div class="setting-item">
+          <label>白天结束小时</label>
+          <input type="number" id="cfg-scheduler-proactive_day_end_hour" value="${scheduler.proactive_day_end_hour ?? 22}" min="0" max="23">
+        </div>
         <button class="btn btn-primary btn-block btn-save" onclick="app.saveSection('scheduler')">保存</button>
       </div>
 
@@ -1124,23 +1136,23 @@ class SakiPhoneApp {
         </div>
 
         <div class="setting-item toggle" style="margin-top:16px;">
-          <label>QQ / NapCat</label>
+          <label>QQ Bot</label>
           <label class="switch">
-            <input type="checkbox" id="cfg-channels-napcat_enabled" ${channels.napcat_enabled ? 'checked' : ''}
-                   onchange="app.toggleNapcatFields()">
+            <input type="checkbox" id="cfg-channels-qqbot_enabled" ${channels.qqbot_enabled ? 'checked' : ''}
+                   onchange="app.toggleQQBotFields()">
             <span class="slider"></span>
           </label>
         </div>
-        <div id="napcat-fields" style="display:${channels.napcat_enabled ? 'block' : 'none'};">
+        <div id="qqbot-fields" style="display:${channels.qqbot_enabled ? 'block' : 'none'};">
           <div class="setting-item">
-            <label>NapCat Base URL</label>
-            <input type="text" id="cfg-channels-napcat_base_url" value="${this.escAttr(channels.napcat_base_url || '')}" placeholder="http://127.0.0.1:3000">
+            <label>App ID</label>
+            <input type="text" id="cfg-channels-qqbot_app_id" value="${this.escAttr(channels.qqbot_app_id || '')}" placeholder="QQ Bot AppID">
           </div>
           <div class="setting-item">
-            <label>Access Token</label>
-            <input type="password" id="cfg-channels-napcat_access_token" value="${this.escAttr(channels.napcat_access_token || '')}" placeholder="OneBot token，可留空">
+            <label>Token / Secret</label>
+            <input type="password" id="cfg-channels-qqbot_token" value="${this.escAttr(channels.qqbot_token || '')}" placeholder="QQ Bot Token / Secret">
           </div>
-          <div class="about-info" style="margin-bottom:12px;">建议使用 NapCat / OneBot v11 正向 HTTP API + 事件上报到网关 webhook。</div>
+          <div class="about-info" style="margin-bottom:12px;">使用 QQ 开放平台官方机器人接入。保存后即可由网关直接连接官方 QQBot 通道，不再依赖 NapCat。</div>
         </div>
         <button class="btn btn-primary btn-block btn-save" onclick="app.saveSection('channels')">保存</button>
       </div>
@@ -1272,9 +1284,9 @@ class SakiPhoneApp {
     if (fields) fields.style.display = enabled ? 'block' : 'none';
   }
 
-  toggleNapcatFields() {
-    const enabled = document.getElementById('cfg-channels-napcat_enabled')?.checked;
-    const fields = document.getElementById('napcat-fields');
+  toggleQQBotFields() {
+    const enabled = document.getElementById('cfg-channels-qqbot_enabled')?.checked;
+    const fields = document.getElementById('qqbot-fields');
     if (fields) fields.style.display = enabled ? 'block' : 'none';
   }
 
@@ -1336,14 +1348,23 @@ class SakiPhoneApp {
         break;
 
       case 'scheduler':
+        {
+          const idleHours = Number.parseInt(this.getVal('cfg-scheduler-proactive_idle_hours'), 10);
+          const idleMinutes = Number.parseInt(this.getVal('cfg-scheduler-proactive_idle_minutes'), 10);
+          const dayStart = Number.parseInt(this.getVal('cfg-scheduler-proactive_day_start_hour'), 10);
+          const dayEnd = Number.parseInt(this.getVal('cfg-scheduler-proactive_day_end_hour'), 10);
         payload = {
           scheduler: {
             enabled: this.getChecked('cfg-scheduler-enabled'),
             proactive_enabled: this.getChecked('cfg-scheduler-proactive_enabled'),
-            proactive_idle_hours: parseInt(this.getVal('cfg-scheduler-proactive_idle_hours')) || 72,
+            proactive_idle_hours: Number.isFinite(idleHours) ? idleHours : 72,
+            proactive_idle_minutes: Number.isFinite(idleMinutes) ? idleMinutes : 0,
+            proactive_day_start_hour: Number.isFinite(dayStart) ? dayStart : 8,
+            proactive_day_end_hour: Number.isFinite(dayEnd) ? dayEnd : 22,
           }
         };
         break;
+        }
 
       case 'channels':
         payload = {
@@ -1351,9 +1372,9 @@ class SakiPhoneApp {
             feishu_enabled: this.getChecked('cfg-channels-feishu_enabled'),
             feishu_app_id: this.getVal('cfg-channels-feishu_app_id'),
             feishu_app_secret: this.getVal('cfg-channels-feishu_app_secret'),
-            napcat_enabled: this.getChecked('cfg-channels-napcat_enabled'),
-            napcat_base_url: this.getVal('cfg-channels-napcat_base_url'),
-            napcat_access_token: this.getVal('cfg-channels-napcat_access_token'),
+            qqbot_enabled: this.getChecked('cfg-channels-qqbot_enabled'),
+            qqbot_app_id: this.getVal('cfg-channels-qqbot_app_id'),
+            qqbot_token: this.getVal('cfg-channels-qqbot_token'),
           }
         };
         break;

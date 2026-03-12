@@ -9,3 +9,6 @@ data/data/
 *.log
 .env
 .env.*
+data/config.json
+data/active_memory.md
+data/core_profile.md

@@ -1012,7 +1012,12 @@ class GatewayApp:
             system_parts.append(
                 "以下是近期活跃记忆，请在相关时自然接住。\n\n" + active_memory
             )
-        tool_contexts = self._dedupe_tool_contexts(tool_contexts, active_memory)
+        recent_daily_logs = self._render_recent_daily_logs_context()
+        if recent_daily_logs:
+            system_parts.append(
+                "以下是最近两天的日志摘要，仅在相关时自然吸收，不要逐句复述。\n\n" + recent_daily_logs
+            )
+        tool_contexts = self._dedupe_tool_contexts(tool_contexts, active_memory + "\n" + recent_daily_logs)
         if tool_contexts:
             context_lines = []
             for index, item in enumerate(tool_contexts, start=1):
@@ -1752,6 +1757,31 @@ class GatewayApp:
                 )
         return "\n".join(lines).strip() + "\n"
 
+    def _render_recent_daily_logs_context(self) -> str:
+        target_days = [
+            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1),
+            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0),
+        ]
+        labels = ["昨天日志", "今天日志"]
+        lines: list[str] = []
+        records = self.memory_store.list_memories(limit=8, memory_kind="daily_log")
+        for label, day in zip(labels, target_days):
+            day_key = day.strftime("%Y-%m-%d")
+            matched = None
+            for record in records:
+                content = str(record.content or "")
+                if day_key in content or day.strftime("%Y%m%d") in str(record.id or "") or day.strftime("%Y-%m-%d") in str(record.key or ""):
+                    matched = record
+                    break
+            if matched is None:
+                continue
+            snippet = str(matched.content or "").strip()
+            if not snippet:
+                continue
+            snippet = snippet[:1200]
+            lines.append(f"{label}：\n{snippet}")
+        return "\n\n".join(lines).strip()
+
     def _render_active_memory(self) -> str:
         lines = [f"更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]
         preferred_categories = {"preference", "promise", "anniversary", "identity", "relationship"}
@@ -1905,6 +1935,63 @@ class GatewayApp:
         )
         return hits >= 2 and len(normalized.splitlines()) >= 4
 
+    def _extract_daily_log_processed_count(self, content: str) -> int:
+        text = str(content or "")
+        patterns = [
+            r"已整理消息：\s*(\d+)",
+            r"已整理\s*(\d+)\s*条消息",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return max(0, int(match.group(1)))
+        ends = [int(end) for _, end in re.findall(r"### 第 \d+ 段（\d+-(\d+)）", text)]
+        return max(ends) if ends else 0
+
+    def _extract_daily_log_sections(self, content: str) -> list[tuple[str, str]]:
+        text = str(content or "")
+        marker = "今日日志摘要："
+        if marker in text:
+            text = text.split(marker, 1)[1].strip()
+        if not text:
+            return []
+        sections: list[tuple[str, str]] = []
+        current_header = ""
+        buffer: list[str] = []
+
+        def flush() -> None:
+            nonlocal current_header, buffer
+            if current_header:
+                body = "\n".join(buffer).strip()
+                sections.append((current_header, body))
+            current_header = ""
+            buffer = []
+
+        for line in text.splitlines():
+            if line.startswith("### "):
+                flush()
+                current_header = line.strip()
+                buffer = []
+            elif current_header:
+                buffer.append(line)
+        flush()
+        return sections
+
+    def _merge_daily_log_sections(
+        self, existing_content: str, header: str, summary: str
+    ) -> list[str]:
+        merged: list[tuple[str, str]] = []
+        seen_headers: set[str] = set()
+        for existing_header, body in self._extract_daily_log_sections(existing_content):
+            if existing_header == header:
+                continue
+            if existing_header in seen_headers:
+                continue
+            seen_headers.add(existing_header)
+            merged.append((existing_header, body))
+        merged.append((header, summary.strip()))
+        return [f"{h}\n{b}".strip() for h, b in merged if h and b.strip()]
+
     def _compose_daily_log_content(
         self,
         *,
@@ -1942,9 +2029,7 @@ class GatewayApp:
         existing = self.memory_store.get_memory(log_id)
         previous_threshold = 0
         if existing is not None:
-            match = re.search(r"已整理\s+(\d+)\s+条消息", existing.content)
-            if match:
-                previous_threshold = max(0, int(match.group(1)) // 20)
+            previous_threshold = max(0, self._extract_daily_log_processed_count(existing.content) // 20)
         if threshold <= previous_threshold:
             return
         if not all_messages:
@@ -1995,17 +2080,9 @@ class GatewayApp:
             chunk_start=chunk_start,
             chunk_end=capped_count,
         )
-        sections: list[str] = []
-        if existing is not None:
-            marker = "今日日志摘要："
-            existing_content = existing.content or ""
-            if marker in existing_content:
-                tail = existing_content.split(marker, 1)[1].strip()
-                if tail:
-                    sections.append(tail)
-        sections.append(
-            f"### 第 {threshold} 段（{chunk_start}-{capped_count}）\n{summary}"
-        )
+        existing_content = existing.content if existing is not None else ""
+        section_header = f"### 第 {threshold} 段（{chunk_start}-{capped_count}）"
+        sections = self._merge_daily_log_sections(existing_content, section_header, summary)
         title, content = self._compose_daily_log_content(
             profile_id=profile_id,
             day=day_start,
@@ -2072,8 +2149,7 @@ class GatewayApp:
             self._update_daily_log(profile_id=profile_id, session_id=session_id)
             return
 
-        match = re.search(r"已整理\s+(\d+)\s+条消息", existing.content or "")
-        processed_count = max(0, int(match.group(1))) if match else 0
+        processed_count = self._extract_daily_log_processed_count(existing.content or "")
         if len(user_messages) <= processed_count:
             return
 
@@ -2098,16 +2174,9 @@ class GatewayApp:
             chunk_start=processed_count + 1,
             chunk_end=len(user_messages),
         )
-        sections: list[str] = []
-        marker = "今日日志摘要："
         existing_content = existing.content or ""
-        if marker in existing_content:
-            tail = existing_content.split(marker, 1)[1].strip()
-            if tail:
-                sections.append(tail)
-        sections.append(
-            f"### 晚安前补全摘要（{processed_count + 1}-{len(user_messages)}）\n{summary}"
-        )
+        section_header = f"### 晚安前补全摘要（{processed_count + 1}-{len(user_messages)}）"
+        sections = self._merge_daily_log_sections(existing_content, section_header, summary)
         title, content = self._compose_daily_log_content(
             profile_id=profile_id,
             day=day_start,
@@ -2133,41 +2202,29 @@ class GatewayApp:
         if record is None:
             return {"ok": False, "reason": "daily log not found", "memory_id": log_id}
         content = record.content or ""
-        lines = content.splitlines()
-        deduped_lines: list[str] = []
-        seen_sections: set[str] = set()
-        current_header = ""
-        buffer: list[str] = []
-
-        def flush_section() -> None:
-            nonlocal current_header, buffer
-            if current_header:
-                normalized = current_header + "\n" + "\n".join(buffer).strip()
-                if normalized.strip() and normalized not in seen_sections:
-                    seen_sections.add(normalized)
-                    deduped_lines.append(current_header)
-                    deduped_lines.extend(buffer)
-            else:
-                for line in buffer:
-                    deduped_lines.append(line)
-            current_header = ""
-            buffer = []
-
-        for line in lines:
-            if line.startswith("### "):
-                flush_section()
-                current_header = line
-                buffer = []
-            else:
-                buffer.append(line)
-        flush_section()
-        new_content = "\n".join(deduped_lines).strip()
+        title, body = (content.split("今日日志摘要：", 1) + [""])[:2]
+        prefix = (title + "今日日志摘要：").strip() if "今日日志摘要：" in content else ""
+        merged: dict[str, str] = {}
+        order: list[str] = []
+        for header, section_body in self._extract_daily_log_sections(content):
+            if header not in merged:
+                order.append(header)
+            merged[header] = section_body.strip()
+        section_lines = [f"{header}\n{merged[header]}".strip() for header in order if merged.get(header)]
+        new_content = (prefix + "\n" + "\n".join(section_lines)).strip() if prefix else "\n".join(section_lines).strip()
         changed = new_content != content.strip()
         if changed:
+            processed_count = self._extract_daily_log_processed_count(new_content)
+            title_text, rebuilt = self._compose_daily_log_content(
+                profile_id=target_profile,
+                day=target_day,
+                processed_count=processed_count,
+                sections=section_lines,
+            )
             self.memory_store.upsert_memory(
                 memory_id=record.id,
-                key=record.key,
-                content=new_content,
+                key=title_text,
+                content=rebuilt,
                 memory_kind=record.memory_kind,
                 category=record.category,
                 importance=record.importance,

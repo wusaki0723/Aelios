@@ -22,3 +22,20 @@ This is a sanitized open-source version of the Python gateway used to power mult
 
 ## Notes
 This repository is intentionally sanitized for open-source release.
+
+## Memory prompt flow
+The runtime reply path now uses a cache-stable prompt order:
+1. base persona/system prompt
+2. fixed important memories (`importance = 1`)
+3. today log
+4. recent session context
+5. latest user message
+6. late-bound supplemental memory from the action runtime
+
+The action runtime no longer relies on `search_memory` during normal replies. Instead, the gateway precomputes a candidate pool from non-fixed long-term memories plus today/yesterday logs, and the action runtime selects only concise missing details worth appending at the end.
+
+## Human-like message segmentation
+Feishu and QQBot outbound text now prefer newline-based segmentation. Each non-empty line is sent as an individual message segment, with a short configurable delay between segments, and long lines still fall back to chunking by `send_chunk_chars`.
+
+## Privacy / sanitization
+This OSS build excludes personal memories, private profiles, live API keys/tokens, and conversation logs. Use `data/config.example.json` as the template for local configuration; create your own untracked `data/config.json` when deploying.

@@ -22,6 +22,7 @@ from .llm import extract_text_content, request_chat_completion, stream_chat_comp
 from .llm import extract_finish_reason, extract_tool_calls
 from .memory import MemoryStore
 from .runtime_store import RuntimeStore
+from .trilium import TriliumClient
 from .scheduler import GatewayScheduler
 from .tools import (
     build_default_registry,
@@ -83,12 +84,14 @@ class GatewayApp:
             self._runtime_db_path,
             self._event_log_path,
         )
+        self.trilium_client = TriliumClient(self.config_store.config.trilium)
         self.tools = build_default_registry(
             root,
             lambda: self.config_store.config,
             memory_store=self.memory_store,
             runtime_store=self.runtime_store,
             dispatch_message=self.dispatch_proactive_message,
+            trilium_client=self.trilium_client,
         )
         self._ensure_context_files(refresh=True)
         self.feishu_channel = self._build_feishu_channel()
@@ -153,6 +156,9 @@ class GatewayApp:
         dashboard_security = payload.get("dashboard_security") or {}
         dashboard_security["password"] = ""
         payload["dashboard_security"] = dashboard_security
+        trilium = payload.get("trilium") or {}
+        trilium["token"] = ""
+        payload["trilium"] = trilium
         return payload
 
     def export_backup_payload(self) -> Dict[str, Any]:
@@ -270,6 +276,15 @@ class GatewayApp:
         if self.napcat_channel is not None:
             self.napcat_channel.stop()
         config = self.config_store.update(payload)
+        self.trilium_client = TriliumClient(self.config_store.config.trilium)
+        self.tools = build_default_registry(
+            self.root,
+            lambda: self.config_store.config,
+            memory_store=self.memory_store,
+            runtime_store=self.runtime_store,
+            dispatch_message=self.dispatch_proactive_message,
+            trilium_client=self.trilium_client,
+        )
         self._ensure_context_files(refresh=True)
         self.feishu_channel = self._build_feishu_channel()
         self.qqbot_channel = self._build_qqbot_channel()
@@ -490,7 +505,7 @@ class GatewayApp:
         base_messages = self._build_main_chat_messages(
             messages, tool_contexts, session_id
         )
-        tool_specs = self._chat_tool_specs(profile_id)
+        tool_specs = self._chat_tool_specs(profile_id, messages)
         loop_tool_contexts: list[Dict[str, Any]] = []
         last_response: Dict[str, Any] = {}
         tool_provider = self._preferred_tool_provider()
@@ -687,6 +702,7 @@ class GatewayApp:
             "你是行动核（Action Runtime），不是直接对用户说话的伴侣人格。",
             "你的职责是判断是否需要调用工具，并在需要时优先调用工具。",
             "如果用户消息涉及链接、网页、文件、记忆检索、提醒、图片、搜索、外部信息获取，就优先用工具，不要直接假装自己看过。",
+            "Trilium 工具只在用户明确提出“笔记/日记/学习笔记/读书笔记/my notes/Trilium”时调用，普通聊天不要调用。",
             "同一轮请求中，同一个提醒只允许创建一次；一旦已经成功创建提醒，不要再次调用 create_reminder。",
             "长期记忆与聊天日志由网关在对话后统一维护，你不要主动调用 save_memory 保存聊天内容。",
             "如需了解用户的长期信息，可以调用 search_memory 检索，但不要把当前对话逐条写入长期记忆。",
@@ -719,11 +735,16 @@ class GatewayApp:
             + messages
         )
 
-    def _chat_tool_specs(self, profile_id: str) -> list[Dict[str, Any]]:
+    def _chat_tool_specs(
+        self, profile_id: str, messages: list[Dict[str, Any]]
+    ) -> list[Dict[str, Any]]:
+        allow_trilium = self._has_explicit_trilium_intent(messages)
         specs: list[Dict[str, Any]] = []
         for item in self.tools.list_enabled():
             tool_id = str(item.get("id", "") or "")
             if tool_id in {"send_proactive_message", "save_memory"}:
+                continue
+            if tool_id in {"search_trilium", "get_trilium_note"} and not allow_trilium:
                 continue
             specs.append(
                 {
@@ -737,6 +758,65 @@ class GatewayApp:
                 }
             )
         return specs
+
+    def _has_explicit_trilium_intent(self, messages: list[Dict[str, Any]]) -> bool:
+        latest_user = ""
+        for message in reversed(messages):
+            if str(message.get("role", "")) == "user":
+                latest_user = str(message.get("content", "") or "").lower()
+                break
+        if not latest_user:
+            return False
+        keywords = [
+            "my notes",
+            "diary note",
+            "diary notes",
+            "study note",
+            "study notes",
+            "book note",
+            "book notes",
+            "trilium",
+            "笔记",
+            "日记",
+            "学习笔记",
+            "读书笔记",
+            "我的笔记",
+        ]
+        return any(keyword in latest_user for keyword in keywords)
+
+    def _compact_trilium_search_context(
+        self, query: str, result: Dict[str, Any]
+    ) -> str:
+        status = str(result.get("status", "") or "")
+        if status == "trilium_unavailable" or not bool(result.get("ok", False)):
+            return "Trilium 当前不可用，已跳过笔记检索。"
+        items = result.get("items") or []
+        if not items:
+            return f"未找到与“{query}”相关的 Trilium 笔记。"
+        lines = []
+        for index, item in enumerate(items[:3], start=1):
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "") or "未命名")
+            note_id = str(item.get("noteId", "") or item.get("note_id", "") or "")
+            lines.append(f"{index}. {title} (id={note_id})")
+        return "Trilium 检索到候选笔记：" + "；".join(lines)
+
+    def _compact_trilium_note_context(self, result: Dict[str, Any]) -> str:
+        status = str(result.get("status", "") or "")
+        if status == "trilium_unavailable" or not bool(result.get("ok", False)):
+            return "Trilium 当前不可用，无法读取笔记内容。"
+        if status == "not_found":
+            return "未找到该 Trilium 笔记。"
+        note = result.get("note") or {}
+        title = str(note.get("title", "") or note.get("name", "") or "未命名")
+        raw_content = str(result.get("content", "") or "")
+        normalized = re.sub(r"\s+", " ", raw_content).strip()
+        max_chars = 800
+        preview = normalized[:max_chars]
+        if len(normalized) > max_chars:
+            preview += " …（内容较长，已截断）"
+        return f"笔记标题：{title}\n笔记摘要：{preview}".strip()
 
     def _enrich_tool_arguments(
         self, tool_name: str, arguments: Dict[str, Any], profile_id: str
@@ -798,6 +878,25 @@ class GatewayApp:
                 "url": "",
                 "note": "",
                 "context": "\n".join(snippets),
+            }
+        if tool_name == "search_trilium":
+            query = str(arguments.get("query", "") or "")
+            return {
+                "type": "trilium_search",
+                "query": query,
+                "url": "",
+                "note": "",
+                "context": self._compact_trilium_search_context(query, result),
+            }
+        if tool_name == "get_trilium_note":
+            note = result.get("note") or {}
+            title = str(note.get("title", "") or note.get("name", "") or "")
+            return {
+                "type": "trilium_note",
+                "query": "",
+                "url": "",
+                "note": title,
+                "context": self._compact_trilium_note_context(result),
             }
         if tool_name == "create_reminder":
             return {
@@ -1001,6 +1100,8 @@ class GatewayApp:
             "如果用户提到绝对时间但没有注明时区或 UTC 偏移，请按服务器本地时间理解。",
             "你是唯一直接对用户说话的模型。工具层、搜索层、识图层都只能给你补充上下文，不能替你发言。",
             "默认先用工具层/行动层完成搜索、读链接、识图、记忆检索和提醒创建；只有工具失败、未配置，或纯陪伴聊天不需要工具时，才由你直接兜底回答。",
+            "只有当用户明确提到日记、学习笔记、读书笔记、Trilium 或“我的笔记”时，才使用 Trilium 工具；普通闲聊不要触发。",
+            "使用 Trilium 时先调用 search_trilium，确认候选后再调用 get_trilium_note。",
         ]
         core_profile = self._read_text_file(self._core_memory_file())
         active_memory = self._read_text_file(self._active_memory_file())

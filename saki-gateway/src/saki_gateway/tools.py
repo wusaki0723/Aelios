@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .config import AppConfig
 from .llm import extract_text_content, request_chat_completion
 from .mcp import McpBridge
+from .trilium import TriliumClient
 
 
 ToolExecutor = Callable[[Dict[str, Any]], Dict[str, Any]]
@@ -409,6 +410,7 @@ def build_default_registry(
     memory_store: Any = None,
     runtime_store: Any = None,
     dispatch_message: Optional[Callable[[str, str, str], Dict[str, Any]]] = None,
+    trilium_client: Optional[TriliumClient] = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     mcp_bridge = McpBridge(config_getter)
@@ -634,6 +636,87 @@ def build_default_registry(
             "note": "This tool output is meant to be injected into the main chat model context, not sent to the user directly.",
         }
 
+    def search_trilium(args: Dict[str, Any]) -> Dict[str, Any]:
+        if trilium_client is None:
+            raise ValueError("trilium client is not available")
+        query = str(args.get("query", "")).strip()
+        if not query:
+            raise ValueError("query is required")
+        limit = int(args.get("limit", 5) or 5)
+        parent_note_id = str(args.get("parent_note_id", "")).strip() or None
+        health = trilium_client.health_check()
+        if not bool(health.get("ok", False)):
+            return {
+                "ok": False,
+                "status": "trilium_unavailable",
+                "query": query,
+                "items": [],
+                "error": health.get("detail", "trilium unavailable"),
+            }
+        items = trilium_client.search_notes(
+            query=query,
+            limit=limit,
+            parent_note_id=parent_note_id,
+        )
+        if not items:
+            return {
+                "ok": True,
+                "status": "no_notes_found",
+                "query": query,
+                "items": [],
+            }
+        compact_items = []
+        for item in items[: min(limit, 8)]:
+            if not isinstance(item, dict):
+                continue
+            compact_items.append(
+                {
+                    "noteId": str(item.get("noteId", "") or item.get("note_id", "")),
+                    "title": str(item.get("title", "") or item.get("name", "")),
+                    "type": str(item.get("type", "") or item.get("noteType", "")),
+                }
+            )
+        return {
+            "ok": True,
+            "status": "ok",
+            "query": query,
+            "items": compact_items,
+        }
+
+    def get_trilium_note(args: Dict[str, Any]) -> Dict[str, Any]:
+        if trilium_client is None:
+            raise ValueError("trilium client is not available")
+        note_id = str(args.get("note_id", "")).strip()
+        if not note_id:
+            raise ValueError("note_id is required")
+        health = trilium_client.health_check()
+        if not bool(health.get("ok", False)):
+            return {
+                "ok": False,
+                "status": "trilium_unavailable",
+                "note_id": note_id,
+                "note": {},
+                "content": "",
+                "error": health.get("detail", "trilium unavailable"),
+            }
+        note = trilium_client.get_note(note_id)
+        if not note:
+            return {
+                "ok": True,
+                "status": "not_found",
+                "note_id": note_id,
+                "note": {},
+                "content": "",
+            }
+        content = trilium_client.get_note_content(note_id)
+        return {
+            "ok": True,
+            "status": "ok",
+            "note_id": note_id,
+            "note": note,
+            "content": content,
+        }
+
     def call_mcp(args: Dict[str, Any]) -> Dict[str, Any]:
         server = str(args.get("server", "")).strip()
         tool = str(args.get("tool", "")).strip()
@@ -679,6 +762,37 @@ def build_default_registry(
             },
             enabled=True,
             execute=search_web,
+        )
+    )
+
+    registry.register(
+        ToolSpec(
+            tool_id="search_trilium",
+            description="Search Trilium notes (read-only). Use only for explicit note intent (diary/study/book notes or user asks for my notes). Return compact candidates before fetching full content.",
+            schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 5},
+                    "parent_note_id": {"type": "string"},
+                },
+                "required": ["query"],
+            },
+            enabled=trilium_client is not None and trilium_client.enabled,
+            execute=search_trilium,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            tool_id="get_trilium_note",
+            description="Fetch one Trilium note by id after search_trilium. Use only when user explicitly needs note details.",
+            schema={
+                "type": "object",
+                "properties": {"note_id": {"type": "string"}},
+                "required": ["note_id"],
+            },
+            enabled=trilium_client is not None and trilium_client.enabled,
+            execute=get_trilium_note,
         )
     )
     registry.register(

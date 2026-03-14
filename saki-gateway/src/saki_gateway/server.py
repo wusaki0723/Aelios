@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import json
 import mimetypes
 import re
@@ -9,6 +10,7 @@ import sys
 import threading
 from dataclasses import asdict
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,6 +35,7 @@ from .tools import (
 
 
 class GatewayApp:
+    CORE_PROFILE_SECTIONS = {"About Her", "Relationship Core", "My Profile"}
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.dashboard_root = self._find_dashboard_root()
@@ -60,6 +63,11 @@ class GatewayApp:
             self.config_store.config.memory.core_memory_path,
             "data/core_profile.md",
         )
+        self._digest_run_state_path = resolve_data_path(
+            self.root,
+            self.config_store.config.memory.digest_run_state_path,
+            "data/digest_run_state.json",
+        )
         self.config_store.config.memory.database_path = str(
             self._memory_db_path.relative_to(self.root)
         )
@@ -74,6 +82,9 @@ class GatewayApp:
         )
         self.config_store.config.memory.core_memory_path = str(
             self._core_memory_path.relative_to(self.root)
+        )
+        self.config_store.config.memory.digest_run_state_path = str(
+            self._digest_run_state_path.relative_to(self.root)
         )
         self.memory_store = MemoryStore(
             self._memory_db_path,
@@ -94,6 +105,7 @@ class GatewayApp:
             trilium_client=self.trilium_client,
         )
         self._ensure_context_files(refresh=True)
+        self._ensure_digest_run_state_file()
         self.feishu_channel = self._build_feishu_channel()
         self.qqbot_channel = self._build_qqbot_channel()
         self.napcat_channel = self._build_napcat_channel()
@@ -102,7 +114,7 @@ class GatewayApp:
             lambda: self.config_store.config.scheduler,
             self._deliver_due_reminder,
             self._send_idle_proactive_ping,
-            on_memory_digest=None,
+            on_memory_digest=self._run_scheduled_nightly_digest,
         )
         self._goodnight_phrases = [
             "晚安",
@@ -148,6 +160,7 @@ class GatewayApp:
                 "core_profile": str(self._core_memory_file()),
                 "active_memory": str(self._active_memory_file()),
                 "event_log": str(self._event_log_path),
+                "digest_run_state": str(self._digest_run_state_file()),
             },
         }
 
@@ -240,6 +253,7 @@ class GatewayApp:
             imported_logs += 1
 
         self._ensure_context_files(refresh=True)
+        self._ensure_digest_run_state_file()
         return {
             "ok": True,
             "imported": {
@@ -286,6 +300,7 @@ class GatewayApp:
             trilium_client=self.trilium_client,
         )
         self._ensure_context_files(refresh=True)
+        self._ensure_digest_run_state_file()
         self.feishu_channel = self._build_feishu_channel()
         self.qqbot_channel = self._build_qqbot_channel()
         self.napcat_channel = self._build_napcat_channel()
@@ -1582,6 +1597,7 @@ class GatewayApp:
             embedding=body.get("embedding") or [],
         )
         self._ensure_context_files(refresh=True)
+        self._ensure_digest_run_state_file()
         return {"item": self._serialize_memory(record)}
 
     def delete_panel_memory(self, memory_id: str) -> Dict[str, Any]:
@@ -1590,6 +1606,7 @@ class GatewayApp:
             raise KeyError("memory not found")
         self.memory_store.delete_memory(memory_id)
         self._ensure_context_files(refresh=True)
+        self._ensure_digest_run_state_file()
         return {
             "success": True,
             "deleted": self._serialize_memory(existing),
@@ -1599,6 +1616,7 @@ class GatewayApp:
     def clear_panel_memories(self) -> Dict[str, Any]:
         deleted = self.memory_store.delete_memories(["long_term", "daily_log"])
         self._ensure_context_files(refresh=True)
+        self._ensure_digest_run_state_file()
         return {
             "success": True,
             "deleted": deleted,
@@ -1833,14 +1851,342 @@ class GatewayApp:
     def _active_memory_file(self) -> Path:
         return self._hot_memory_path
 
+    def _digest_run_state_file(self) -> Path:
+        return self._digest_run_state_path
+
+    def _default_digest_run_state(self) -> Dict[str, str]:
+        return {
+            "id": "",
+            "run_state": "idle",
+            "status": "not_started",
+            "started_at": "",
+            "completed_at": "",
+            "error_message": "",
+        }
+
+    def _ensure_digest_run_state_file(self) -> None:
+        path = self._digest_run_state_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            return
+        self._write_text_file(
+            path,
+            json.dumps(self._default_digest_run_state(), ensure_ascii=False, indent=2) + "\n",
+        )
+
+    def _read_digest_run_state(self) -> Dict[str, str]:
+        path = self._digest_run_state_file()
+        raw = self._read_text_file(path)
+        if not raw:
+            return self._default_digest_run_state()
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return self._default_digest_run_state()
+        state = self._default_digest_run_state()
+        if isinstance(payload, dict):
+            for key in state:
+                state[key] = str(payload.get(key, state[key]) or "")
+        return state
+
+    def _write_digest_run_state(self, state: Dict[str, str]) -> None:
+        payload = self._default_digest_run_state()
+        for key in payload:
+            payload[key] = str(state.get(key, payload[key]) or "")
+        self._write_text_file(
+            self._digest_run_state_file(),
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
+
+    def _resolve_local_timezone_name(self) -> str:
+        configured = str(self.config_store.config.scheduler.local_timezone or "").strip()
+        if configured:
+            try:
+                ZoneInfo(configured)
+                return configured
+            except Exception:
+                pass
+        fallback = datetime.now().astimezone().tzinfo
+        key = getattr(fallback, "key", "") or str(fallback or "")
+        return key or "local"
+
+    def _now_in_local_timezone(self) -> datetime:
+        timezone_name = self._resolve_local_timezone_name()
+        try:
+            return datetime.now(ZoneInfo(timezone_name))
+        except Exception:
+            return datetime.now().astimezone()
+
+    def _normalize_core_proposal_content(self, value: str) -> str:
+        lines = []
+        for raw in str(value or "").splitlines():
+            line = raw.strip()
+            line = re.sub(r"^[#>*-]+\s*", "", line)
+            line = re.sub(r"\s+", " ", line).strip()
+            if line:
+                lines.append(line)
+        return "\n".join(lines).strip()
+
+    def _core_proposal_fingerprint(self, target_section: str, proposed_content: str) -> str:
+        normalized_section = str(target_section or "").strip().casefold()
+        normalized_content = self._normalize_core_proposal_content(proposed_content).casefold()
+        raw = f"{normalized_section}\n{normalized_content}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _create_core_update_proposal(
+        self,
+        *,
+        target_section: str,
+        proposed_content: str,
+        reason: str,
+        source_context: str,
+        proposal_type: str = "",
+        confidence: str = "medium",
+    ) -> Dict[str, Any]:
+        section = str(target_section or "").strip()
+        if section not in self.CORE_PROFILE_SECTIONS:
+            return {"ok": False, "reason": "invalid_target_section", "target_section": section}
+        normalized_content = self._normalize_core_proposal_content(proposed_content)
+        if not normalized_content:
+            return {"ok": False, "reason": "empty_content", "target_section": section}
+        normalized_type = str(proposal_type or "").strip().lower()
+        allowed_types = {"identity", "preference", "goal", "relationship", "routine", "other"}
+        if normalized_type not in allowed_types:
+            normalized_type = "other"
+        normalized_confidence = str(confidence or "").strip().lower()
+        if normalized_confidence not in {"low", "medium", "high"}:
+            normalized_confidence = "medium"
+        fingerprint = self._core_proposal_fingerprint(section, normalized_content)
+        before = self.memory_store.list_core_updates(status="open", limit=500)
+        before_ids = {item.id for item in before if item.fingerprint == fingerprint}
+        proposal = self.memory_store.create_or_touch_core_update(
+            target_section=section,
+            proposed_content=normalized_content,
+            reason=str(reason or "core update candidate"),
+            source_context=str(source_context or ""),
+            fingerprint=fingerprint,
+            proposal_type=normalized_type,
+            confidence=normalized_confidence,
+        )
+        created = proposal.id not in before_ids
+        return {
+            "ok": True,
+            "created": created,
+            "proposal_id": proposal.id,
+            "fingerprint": proposal.fingerprint,
+            "proposal_type": proposal.proposal_type,
+            "confidence": proposal.confidence,
+            "status": proposal.status,
+            "target_section": proposal.target_section,
+        }
+
+    def list_open_core_update_proposals(self, limit: int = 50) -> Dict[str, Any]:
+        items = self.memory_store.list_core_updates(status="open", limit=limit)
+        return {
+            "items": [
+                {
+                    "id": item.id,
+                    "target_section": item.target_section,
+                    "proposed_content": item.proposed_content,
+                    "reason": item.reason,
+                    "source_context": item.source_context,
+                    "fingerprint": item.fingerprint,
+                    "proposal_type": item.proposal_type,
+                    "confidence": item.confidence,
+                    "status": item.status,
+                    "created_at": item.created_at,
+                    "updated_at": item.updated_at,
+                    "reviewed_at": item.reviewed_at,
+                }
+                for item in items
+            ]
+        }
+
+    def _core_section_memory_identity(self, section: str) -> tuple[str, str]:
+        section_slug = re.sub(r"[^a-z0-9]+", "_", section.lower()).strip("_") or "my_profile"
+        return f"core_section::{section_slug}", f"core_profile_{section_slug}"
+
+    def _normalize_merge_entry(self, value: str) -> str:
+        normalized = self._normalize_core_proposal_content(value)
+        normalized = re.sub(r"^[\-•*]\s*", "", normalized).strip()
+        return normalized
+
+    def _entry_similarity(self, left: str, right: str) -> float:
+        left_tokens = {token for token in re.split(r"\W+", left.casefold()) if token}
+        right_tokens = {token for token in re.split(r"\W+", right.casefold()) if token}
+        if not left_tokens or not right_tokens:
+            return 0.0
+        intersection = len(left_tokens & right_tokens)
+        union = len(left_tokens | right_tokens)
+        return float(intersection) / float(union or 1)
+
+    def _is_conflicting_entry(self, existing: str, incoming: str) -> bool:
+        parts_existing = [part.strip() for part in existing.split(":", 1)]
+        parts_incoming = [part.strip() for part in incoming.split(":", 1)]
+        if len(parts_existing) == 2 and len(parts_incoming) == 2 and parts_existing[0].casefold() == parts_incoming[0].casefold():
+            return parts_existing[1].casefold() != parts_incoming[1].casefold()
+        if self._entry_similarity(existing, incoming) >= 0.55:
+            neg_tokens = ["不", "不要", "not", "never", "no"]
+            existing_neg = any(token in existing.casefold() for token in neg_tokens)
+            incoming_neg = any(token in incoming.casefold() for token in neg_tokens)
+            return existing_neg != incoming_neg
+        return False
+
+    def _merge_core_section_entries(
+        self,
+        *,
+        section: str,
+        incoming_entry: str,
+        proposal_type: str,
+        confidence: str,
+    ) -> Dict[str, Any]:
+        memory_id, category = self._core_section_memory_identity(section)
+        existing = self.memory_store.get_memory(memory_id)
+        current_lines = []
+        if existing and existing.content:
+            current_lines = [
+                self._normalize_merge_entry(line)
+                for line in str(existing.content).splitlines()
+                if self._normalize_merge_entry(line)
+            ]
+        incoming = self._normalize_merge_entry(incoming_entry)
+        if not incoming:
+            return {"changed": False, "reason": "empty_incoming", "memory_id": memory_id}
+        for line in current_lines:
+            if line.casefold() == incoming.casefold() or self._entry_similarity(line, incoming) >= 0.85:
+                return {"changed": False, "reason": "duplicate", "memory_id": memory_id}
+            if self._is_conflicting_entry(line, incoming):
+                return {"changed": False, "reason": "conflict", "memory_id": memory_id}
+        if len(current_lines) >= 12:
+            current_lines = current_lines[:11]
+        current_lines.append(incoming)
+        merged_content = "\n".join(f"- {line}" for line in current_lines)
+        key = f"{section} merged ({proposal_type}/{confidence})"
+        self.memory_store.upsert_memory(
+            memory_id=memory_id,
+            key=key,
+            content=merged_content,
+            memory_kind="long_term",
+            category=category,
+            importance=1.0,
+            session_id="core-update-review",
+        )
+        return {"changed": True, "reason": "merged", "memory_id": memory_id}
+
+    def _apply_approved_core_update(self, proposal: Any) -> Dict[str, Any]:
+        section = str(proposal.target_section)
+        merge_result = self._merge_core_section_entries(
+            section=section,
+            incoming_entry=str(proposal.proposed_content),
+            proposal_type=str(getattr(proposal, "proposal_type", "other") or "other"),
+            confidence=str(getattr(proposal, "confidence", "medium") or "medium"),
+        )
+        if merge_result.get("changed"):
+            self._write_text_file(self._core_memory_file(), self._render_core_profile())
+        return merge_result
+
+    def approve_core_update_proposal(self, proposal_id: str) -> Dict[str, Any]:
+        proposal = self.memory_store.get_core_update(proposal_id)
+        if proposal is None:
+            return {"ok": False, "reason": "proposal_not_found"}
+        if proposal.status != "open":
+            return {"ok": False, "reason": "proposal_not_open", "status": proposal.status}
+        merge_result = self._apply_approved_core_update(proposal)
+        updated = self.memory_store.update_core_update_status(proposal_id, "approved")
+        self.record_event(
+            "core_update_review",
+            {
+                "decision": "approved",
+                "proposal_id": proposal_id,
+                "target_section": proposal.target_section,
+                "merge_result": merge_result,
+            },
+        )
+        return {"ok": True, "proposal": {"id": updated.id, "status": updated.status, "reviewed_at": updated.reviewed_at}}
+
+    def reject_core_update_proposal(self, proposal_id: str) -> Dict[str, Any]:
+        proposal = self.memory_store.get_core_update(proposal_id)
+        if proposal is None:
+            return {"ok": False, "reason": "proposal_not_found"}
+        if proposal.status != "open":
+            return {"ok": False, "reason": "proposal_not_open", "status": proposal.status}
+        updated = self.memory_store.update_core_update_status(proposal_id, "rejected")
+        self.record_event(
+            "core_update_review",
+            {"decision": "rejected", "proposal_id": proposal_id, "target_section": proposal.target_section},
+        )
+        return {"ok": True, "proposal": {"id": updated.id, "status": updated.status, "reviewed_at": updated.reviewed_at}}
+
+    def _categorize_core_update_target(self, item: Dict[str, Any]) -> str:
+        category = str(item.get("category", "") or "").strip().lower()
+        key = str(item.get("key", "") or "").strip().lower()
+        if category in {"identity", "boundary"} or any(token in key for token in ["伴侣", "名字", "身份", "气质", "边界"]):
+            return "About Her" if category != "boundary" else "Relationship Core"
+        if category in {"relationship", "promise", "anniversary"}:
+            return "Relationship Core"
+        if category in {"preference", "habit", "event"}:
+            return "My Profile"
+        return ""
+
+    def _classify_proposal_metadata(self, item: Dict[str, Any]) -> tuple[str, str]:
+        category = str(item.get("category", "") or "").strip().lower()
+        importance = float(item.get("importance", 0.5) or 0.5)
+        proposal_type = "other"
+        if category in {"identity", "boundary"}:
+            proposal_type = "identity"
+        elif category in {"relationship", "promise", "anniversary"}:
+            proposal_type = "relationship"
+        elif category in {"preference"}:
+            proposal_type = "preference"
+        elif category in {"habit", "routine"}:
+            proposal_type = "routine"
+        elif category in {"goal", "event"}:
+            proposal_type = "goal"
+        confidence = "high" if importance >= 0.8 else "medium" if importance >= 0.4 else "low"
+        return proposal_type, confidence
+
+    def _sanitize_memory_line(self, value: str, max_chars: int) -> str:
+        compact = " ".join(str(value or "").split())
+        if len(compact) <= max_chars:
+            return compact
+        return compact[: max(0, max_chars - 1)].rstrip() + "…"
+
+    def _render_memory_section(
+        self,
+        title: str,
+        lines: list[str],
+        *,
+        max_items: int,
+        max_chars_per_item: int,
+        fallback: str,
+    ) -> str:
+        section_lines = [f"## {title}"]
+        kept = 0
+        for line in lines:
+            sanitized = self._sanitize_memory_line(line, max_chars_per_item)
+            if not sanitized:
+                continue
+            section_lines.append(f"- {sanitized}")
+            kept += 1
+            if kept >= max_items:
+                break
+        if kept == 0:
+            section_lines.append(f"- {fallback}")
+        return "\n".join(section_lines)
+
     def _render_core_profile(self) -> str:
         persona = self.config_store.config.persona
-        lines = [
+        header_lines = [
             f"更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "格式版本: core_profile.v2",
+        ]
+        about_her = [
             f"伴侣名字: {persona.partner_name}",
             f"伴侣身份: {persona.partner_role}",
-            f"对用户称呼: {persona.call_user}",
             f"核心气质: {persona.core_identity}",
+        ]
+        relationship_core = [
+            f"对用户称呼: {persona.call_user}",
             f"互动边界: {persona.boundaries}",
         ]
         important_categories = {"preference", "promise", "anniversary"}
@@ -1848,15 +2194,60 @@ class GatewayApp:
             item
             for item in self.list_memories_grouped().get("items", [])
             if item.get("category") in important_categories
-        ][:8]
-        if important_memories:
-            lines.append("")
-            lines.append("关键长期记忆:")
-            for item in important_memories:
-                lines.append(
-                    f"- [{item.get('category', 'other')}] {item.get('title', '')}: {item.get('content', '')[:140]}"
-                )
-        return "\n".join(lines).strip() + "\n"
+        ]
+        my_profile = [
+            f"[{item.get('category', 'other')}] {item.get('title', '')}: {item.get('content', '')}"
+            for item in important_memories
+        ]
+        section_category_map = {
+            "About Her": "core_profile_about_her",
+            "Relationship Core": "core_profile_relationship_core",
+            "My Profile": "core_profile_my_profile",
+        }
+        approved_core_snippets = self.memory_store.list_memories(limit=50, memory_kind="long_term")
+        def _collect_section_entries(category: str, limit: int) -> list[str]:
+            entries: list[str] = []
+            for record in approved_core_snippets:
+                if record.category != category:
+                    continue
+                for line in str(record.content or "").splitlines():
+                    normalized = self._normalize_merge_entry(line)
+                    if not normalized:
+                        continue
+                    if normalized.casefold() in {item.casefold() for item in entries}:
+                        continue
+                    entries.append(normalized)
+                    if len(entries) >= limit:
+                        return entries
+            return entries
+
+        about_her.extend(_collect_section_entries(section_category_map["About Her"], limit=3))
+        relationship_core.extend(_collect_section_entries(section_category_map["Relationship Core"], limit=4))
+        my_profile.extend(_collect_section_entries(section_category_map["My Profile"], limit=4))
+        sections = [
+            self._render_memory_section(
+                "About Her",
+                about_her,
+                max_items=4,
+                max_chars_per_item=160,
+                fallback="暂无可用信息。",
+            ),
+            self._render_memory_section(
+                "Relationship Core",
+                relationship_core,
+                max_items=4,
+                max_chars_per_item=180,
+                fallback="暂无可用信息。",
+            ),
+            self._render_memory_section(
+                "My Profile",
+                my_profile,
+                max_items=8,
+                max_chars_per_item=180,
+                fallback="暂无关键长期记忆。",
+            ),
+        ]
+        return "\n\n".join(header_lines + sections).strip() + "\n"
 
     def _render_recent_daily_logs_context(self) -> str:
         target_days = [
@@ -1884,28 +2275,68 @@ class GatewayApp:
         return "\n\n".join(lines).strip()
 
     def _render_active_memory(self) -> str:
-        lines = [f"更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]
+        header_lines = [
+            f"更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "格式版本: active_memory.v2",
+        ]
         preferred_categories = {"preference", "promise", "anniversary", "identity", "relationship"}
         recent_memories = self.memory_store.list_memories(
             limit=20, memory_kind="long_term"
         )
-        recent_memories = [
+        selected_memories = [
             record
             for record in recent_memories
             if record.category != "memory_refresh"
             and record.category in preferred_categories
-        ][:4]
-        if recent_memories:
-            lines.append("")
-            lines.append("当前高价值背景:")
-            for record in recent_memories:
-                lines.append(
-                    f"- [{record.category}] {record.key}: {record.content[:120]}"
-                )
-        else:
-            lines.append("")
-            lines.append("当前高价值背景: 暂无新增，主要依赖核心档案。")
-        return "\n".join(lines).strip() + "\n"
+        ]
+        current_status = [
+            f"高价值记忆数量: {len(selected_memories)}",
+            "若近期上下文不足，请优先参考 core_profile.md。",
+        ]
+        purpose_context = [
+            f"[{record.category}] {record.key}: {record.content}"
+            for record in selected_memories
+        ]
+        on_the_horizon = [
+            f"待跟进线索: {record.key}"
+            for record in selected_memories
+            if record.category in {"promise", "anniversary", "relationship"}
+        ]
+        others = [
+            "本文件用于短期活跃记忆，不替代 SQLite 长期记忆检索。",
+            "渲染时已做条目数与单条长度限制，避免提示词膨胀。",
+        ]
+        sections = [
+            self._render_memory_section(
+                "Current Status",
+                current_status,
+                max_items=4,
+                max_chars_per_item=160,
+                fallback="暂无状态信息。",
+            ),
+            self._render_memory_section(
+                "Purpose Context",
+                purpose_context,
+                max_items=6,
+                max_chars_per_item=180,
+                fallback="暂无新增，主要依赖核心档案。",
+            ),
+            self._render_memory_section(
+                "On the Horizon",
+                on_the_horizon,
+                max_items=4,
+                max_chars_per_item=160,
+                fallback="暂无明确待跟进事项。",
+            ),
+            self._render_memory_section(
+                "Others",
+                others,
+                max_items=4,
+                max_chars_per_item=160,
+                fallback="暂无。",
+            ),
+        ]
+        return "\n\n".join(header_lines + sections).strip() + "\n"
 
     def _dedupe_tool_contexts(
         self, tool_contexts: list[Dict[str, Any]], active_memory: str = ""
@@ -2334,6 +2765,242 @@ class GatewayApp:
             self._refresh_active_memory()
         return {"ok": True, "changed": changed, "memory_id": record.id}
 
+    def _build_nightly_digest_payload(self, end_at: datetime) -> Dict[str, Any]:
+        window_end_utc = end_at.astimezone(ZoneInfo("UTC")) if end_at.tzinfo else end_at
+        window_start_utc = window_end_utc - timedelta(hours=24)
+        messages = self.runtime_store.list_messages_between(
+            start_at=window_start_utc.isoformat(),
+            end_at=window_end_utc.isoformat(),
+            limit=800,
+        )
+        events = [
+            item
+            for item in self.runtime_store.list_events(limit=240)
+            if item.get("event_type") == "tool_execute"
+            and str(item.get("created_at", "")) >= window_start_utc.isoformat()
+        ][:40]
+        active_memory = self._read_text_file(self._active_memory_file())
+        durable_memories = self.memory_store.list_memories(limit=12, memory_kind="long_term")
+        durable_lines = [
+            f"- [{record.category}] {record.key}: {record.content[:160]}"
+            for record in durable_memories
+            if record.category != "memory_refresh"
+        ]
+        return {
+            "window_start": window_start_utc.isoformat(),
+            "window_end": window_end_utc.isoformat(),
+            "messages": messages,
+            "events": events,
+            "active_memory": active_memory,
+            "durable_memory_lines": durable_lines,
+        }
+
+    def _render_nightly_digest_markdown(
+        self,
+        *,
+        local_date: str,
+        payload: Dict[str, Any],
+        summary: str,
+    ) -> str:
+        message_lines = []
+        for item in payload.get("messages", [])[:80]:
+            role = "用户" if item.get("role") == "user" else "Aelios"
+            content = self._sanitize_memory_line(str(item.get("content", "")), 180)
+            if content:
+                message_lines.append(f"- {role}: {content}")
+        event_lines = []
+        for event in payload.get("events", [])[:20]:
+            payload_obj = event.get("payload") or {}
+            tool_name = str(payload_obj.get("tool", "") or "")
+            if tool_name:
+                event_lines.append(f"- tool_execute: {tool_name}")
+        lines = [
+            f"# {local_date} daily digest",
+            "",
+            f"生成时间: {self._now_in_local_timezone().isoformat(timespec='seconds')}",
+            f"回顾窗口(UTC): {payload.get('window_start', '')} -> {payload.get('window_end', '')}",
+            "",
+            "## Summary",
+            summary or "- 无可提炼摘要。",
+            "",
+            "## Recent Messages (24h)",
+            "\n".join(message_lines) if message_lines else "- 无消息。",
+            "",
+            "## Relevant Tool Outputs",
+            "\n".join(event_lines) if event_lines else "- 无工具输出。",
+            "",
+            "## Active Memory Snapshot",
+            payload.get("active_memory", "")[:2000] or "- active_memory 为空。",
+            "",
+            "## Durable Memory Candidates",
+            "\n".join(payload.get("durable_memory_lines", [])[:12]) or "- 无。",
+            "",
+            "TODO: pending_core_updates proposal workflow not included in slice 2.",
+            "TODO: durable-memory archival refinement can be added in a later slice.",
+        ]
+        return "\n".join(lines).strip() + "\n"
+
+    def _generate_nightly_digest_summary(self, payload: Dict[str, Any]) -> str:
+        provider = self._preferred_extraction_provider()
+        if provider is None:
+            return "- 未配置可用提炼模型，跳过自动摘要。"
+        transcript = []
+        for item in payload.get("messages", [])[:80]:
+            role = "用户" if item.get("role") == "user" else "Aelios"
+            content = self._sanitize_memory_line(str(item.get("content", "")), 180)
+            if content:
+                transcript.append(f"{role}: {content}")
+        event_lines = []
+        for event in payload.get("events", [])[:20]:
+            payload_obj = event.get("payload") or {}
+            tool_name = str(payload_obj.get("tool", "") or "")
+            if tool_name:
+                event_lines.append(f"- {tool_name}")
+        prompt = (
+            "你是夜间记忆整理助手。请根据最近 24 小时消息和工具输出，生成 6~10 条中文要点，供次日对话衔接使用。\n"
+            "要求：\n"
+            "1) 输出简洁要点，不要逐句转写。\n"
+            "2) 重点关注状态变化、计划、承诺、待跟进事项。\n"
+            "3) 不要改写核心档案。\n\n"
+            "消息：\n"
+            + "\n".join(transcript or ["- 无"])
+            + "\n\n工具输出：\n"
+            + "\n".join(event_lines or ["- 无"])
+            + "\n\n当前 active_memory：\n"
+            + str(payload.get("active_memory", ""))[:2500]
+        )
+        try:
+            result = request_chat_completion(
+                provider,
+                [
+                    {"role": "system", "content": "你是摘要整理助手，只输出中文要点。"},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=False,
+                temperature=0.2,
+                timeout=30,
+            )
+            summary = extract_text_content(result).strip()
+        except Exception:
+            summary = ""
+        if not summary:
+            return "- 自动摘要失败，已保留原始输入快照。"
+        return summary
+
+    def _upsert_trilium_daily_digest(self, *, local_date: str, content: str) -> Dict[str, Any]:
+        title = f"{local_date} daily digest"
+        path_titles = ["AI Companion Workspace", "Daily Digest"]
+        if not self.trilium_client.enabled:
+            return {
+                "ok": False,
+                "status": "trilium_unavailable",
+                "note_id": "",
+                "reason": "trilium disabled or misconfigured",
+            }
+        return self.trilium_client.upsert_note_by_path(
+            path_titles=path_titles,
+            note_title=title,
+            content=content,
+        )
+
+    def _run_scheduled_nightly_digest(self) -> bool:
+        now_local = self._now_in_local_timezone()
+        local_date = now_local.strftime("%Y-%m-%d")
+        state = self._read_digest_run_state()
+        if state.get("id") == local_date and state.get("status") == "success":
+            self.record_event(
+                "digest_run",
+                {"status": "skipped", "reason": "already_success", "date": local_date},
+            )
+            return True
+        started_at = datetime.utcnow().isoformat()
+        self._write_digest_run_state(
+            {
+                "id": local_date,
+                "run_state": "nightly_digest",
+                "status": "running",
+                "started_at": started_at,
+                "completed_at": "",
+                "error_message": "",
+            }
+        )
+        try:
+            payload = self._build_nightly_digest_payload(now_local)
+            summary = self._generate_nightly_digest_summary(payload)
+            digest_content = self._render_nightly_digest_markdown(
+                local_date=local_date,
+                payload=payload,
+                summary=summary,
+            )
+            self._refresh_active_memory()
+            trilium_result = self._upsert_trilium_daily_digest(
+                local_date=local_date,
+                content=digest_content,
+            )
+            completed_at = datetime.utcnow().isoformat()
+            if not trilium_result.get("ok"):
+                self._write_digest_run_state(
+                    {
+                        "id": local_date,
+                        "run_state": "nightly_digest",
+                        "status": "failed",
+                        "started_at": started_at,
+                        "completed_at": completed_at,
+                        "error_message": str(
+                            trilium_result.get("reason", "trilium unavailable")
+                        ),
+                    }
+                )
+                self.record_event(
+                    "digest_run",
+                    {
+                        "status": "failed",
+                        "reason": "trilium_unavailable",
+                        "date": local_date,
+                    },
+                )
+                return False
+            self._write_digest_run_state(
+                {
+                    "id": local_date,
+                    "run_state": "nightly_digest",
+                    "status": "success",
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "error_message": "",
+                }
+            )
+            self.record_event(
+                "digest_run",
+                {
+                    "status": "success",
+                    "date": local_date,
+                    "note_id": trilium_result.get("note_id", ""),
+                },
+            )
+            return True
+        except Exception as error:
+            self._write_digest_run_state(
+                {
+                    "id": local_date,
+                    "run_state": "nightly_digest",
+                    "status": "failed",
+                    "started_at": started_at,
+                    "completed_at": datetime.utcnow().isoformat(),
+                    "error_message": str(error),
+                }
+            )
+            self.record_event(
+                "digest_run",
+                {
+                    "status": "failed",
+                    "reason": "exception",
+                    "date": local_date,
+                    "error": str(error),
+                },
+            )
+            return False
+
     def _run_memory_digest(self, profile_id: str = "", session_id: str = "") -> None:
         provider = self._preferred_extraction_provider()
         if provider is None:
@@ -2414,6 +3081,18 @@ class GatewayApp:
                 importance = max(0.0, min(1.0, importance))
                 if category == "daily_log":
                     continue
+                target_section = self._categorize_core_update_target(item)
+                if target_section:
+                    proposal_type, confidence = self._classify_proposal_metadata(item)
+                    self._create_core_update_proposal(
+                        target_section=target_section,
+                        proposed_content=content,
+                        reason="nightly_digest_candidate",
+                        source_context=json.dumps(item, ensure_ascii=False),
+                        proposal_type=proposal_type,
+                        confidence=confidence,
+                    )
+                    continue
                 memory_id = (
                     target_id
                     or f"digest_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
@@ -2446,7 +3125,6 @@ class GatewayApp:
                     ),
                 )
         self._refresh_active_memory()
-        self._write_text_file(self._core_memory_file(), self._render_core_profile())
 
     def _read_text_file(self, file_path: Path) -> str:
         if not file_path.exists():

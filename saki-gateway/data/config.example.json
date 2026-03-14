@@ -59,7 +59,8 @@
     "core_memory_path": "./data/core_profile.md",
     "vector_weight": 0.7,
     "keyword_weight": "",
-    "default_limit": 8
+    "default_limit": 8,
+    "digest_run_state_path": "./data/digest_run_state.json"
   },
   "session": {
     "enabled": true,
@@ -75,7 +76,8 @@
     "proactive_cooldown_hours": 24,
     "proactive_max_profiles_per_tick": 2,
     "proactive_day_start_hour": 8,
-    "proactive_day_end_hour": 22
+    "proactive_day_end_hour": 22,
+    "local_timezone": "Asia/Shanghai"
   },
   "notion_sync": {
     "enabled": false,

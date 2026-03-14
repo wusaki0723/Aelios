@@ -47,6 +47,7 @@ class MemoryConfig:
     event_log_path: str = "./data/raw/events.jsonl"
     hot_memory_path: str = "./data/active_memory.md"
     core_memory_path: str = "./data/core_profile.md"
+    digest_run_state_path: str = "./data/digest_run_state.json"
     vector_weight: float = 0.7
     keyword_weight: float = 0.3
     default_limit: int = 8
@@ -63,6 +64,7 @@ class SessionConfig:
 class SchedulerConfig:
     enabled: bool = True
     poll_interval_seconds: int = 15
+    local_timezone: str = ""
     proactive_enabled: bool = False
     proactive_idle_hours: int = 72
     proactive_idle_minutes: int = 0
@@ -292,6 +294,9 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     )
     config.scheduler.poll_interval_seconds = _env_int(
         "SAKI_SCHEDULER_POLL_INTERVAL_SECONDS", config.scheduler.poll_interval_seconds
+    )
+    config.scheduler.local_timezone = os.getenv(
+        "SAKI_LOCAL_TIMEZONE", config.scheduler.local_timezone
     )
     config.scheduler.proactive_enabled = _env_flag(
         "SAKI_PROACTIVE_ENABLED", config.scheduler.proactive_enabled

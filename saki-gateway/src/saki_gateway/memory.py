@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -52,6 +53,22 @@ class MemoryRecord:
     keyword_score: float = 0.0
 
 
+
+
+@dataclass
+class CoreUpdateProposal:
+    id: str
+    target_section: str
+    proposed_content: str
+    reason: str
+    source_context: str
+    fingerprint: str
+    proposal_type: str
+    confidence: str
+    status: str
+    created_at: str
+    updated_at: str
+    reviewed_at: str
 class MemoryStore:
     def __init__(
         self, db_path: Path, vector_weight: float = 0.7, keyword_weight: float = 0.3
@@ -116,6 +133,26 @@ class MemoryStore:
               payload TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS pending_core_updates (
+              id TEXT PRIMARY KEY,
+              target_section TEXT NOT NULL,
+              proposed_content TEXT NOT NULL,
+              reason TEXT NOT NULL,
+              source_context TEXT NOT NULL,
+              fingerprint TEXT NOT NULL,
+              proposal_type TEXT NOT NULL DEFAULT '',
+              confidence TEXT NOT NULL DEFAULT 'medium',
+              status TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              reviewed_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pending_core_updates_status_updated
+              ON pending_core_updates(status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_pending_core_updates_fingerprint_status
+              ON pending_core_updates(fingerprint, status);
                 """
             )
             columns = {
@@ -125,6 +162,18 @@ class MemoryStore:
             if "memory_kind" not in columns:
                 self.conn.execute(
                     "ALTER TABLE memories ADD COLUMN memory_kind TEXT NOT NULL DEFAULT 'long_term'"
+                )
+            proposal_columns = {
+                str(row["name"])
+                for row in self.conn.execute("PRAGMA table_info(pending_core_updates)").fetchall()
+            }
+            if "proposal_type" not in proposal_columns:
+                self.conn.execute(
+                    "ALTER TABLE pending_core_updates ADD COLUMN proposal_type TEXT NOT NULL DEFAULT ''"
+                )
+            if "confidence" not in proposal_columns:
+                self.conn.execute(
+                    "ALTER TABLE pending_core_updates ADD COLUMN confidence TEXT NOT NULL DEFAULT 'medium'"
                 )
             self.conn.commit()
 
@@ -363,6 +412,139 @@ class MemoryStore:
             items.append(record)
         items.sort(key=lambda item: item.final_score, reverse=True)
         return items[:limit]
+
+    def create_or_touch_core_update(
+        self,
+        *,
+        target_section: str,
+        proposed_content: str,
+        reason: str,
+        source_context: str,
+        fingerprint: str,
+        proposal_type: str,
+        confidence: str,
+    ) -> CoreUpdateProposal:
+        now = datetime.utcnow().isoformat()
+        with self._lock:
+            existing = self.conn.execute(
+                """
+                SELECT * FROM pending_core_updates
+                WHERE fingerprint = ? AND status = 'open'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (fingerprint,),
+            ).fetchone()
+            if existing is not None:
+                merged_context = str(existing["source_context"] or "").strip()
+                incoming = str(source_context or "").strip()
+                if incoming and incoming not in merged_context:
+                    merged_context = (merged_context + "\n\n" + incoming).strip() if merged_context else incoming
+                self.conn.execute(
+                    """
+                    UPDATE pending_core_updates
+                    SET source_context = ?, reason = ?, proposal_type = ?, confidence = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (merged_context, reason, proposal_type, confidence, now, str(existing["id"])),
+                )
+                self.conn.commit()
+                row = self.conn.execute(
+                    "SELECT * FROM pending_core_updates WHERE id = ?",
+                    (str(existing["id"]),),
+                ).fetchone()
+                return self._row_to_core_update(row)
+
+            proposal_id = "pcu_" + hashlib.sha1(f"{fingerprint}:{now}".encode("utf-8")).hexdigest()[:16]
+            self.conn.execute(
+                """
+                INSERT INTO pending_core_updates(
+                  id, target_section, proposed_content, reason, source_context,
+                  fingerprint, proposal_type, confidence, status, created_at, updated_at, reviewed_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, '')
+                """,
+                (
+                    proposal_id,
+                    target_section,
+                    proposed_content,
+                    reason,
+                    source_context,
+                    fingerprint,
+                    proposal_type,
+                    confidence,
+                    now,
+                    now,
+                ),
+            )
+            self.conn.commit()
+            row = self.conn.execute(
+                "SELECT * FROM pending_core_updates WHERE id = ?",
+                (proposal_id,),
+            ).fetchone()
+        return self._row_to_core_update(row)
+
+    def list_core_updates(self, *, status: str = "open", limit: int = 50) -> List[CoreUpdateProposal]:
+        normalized_limit = max(1, min(int(limit or 50), 500))
+        with self._lock:
+            if status:
+                rows = self.conn.execute(
+                    "SELECT * FROM pending_core_updates WHERE status = ? ORDER BY updated_at DESC LIMIT ?",
+                    (status, normalized_limit),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    "SELECT * FROM pending_core_updates ORDER BY updated_at DESC LIMIT ?",
+                    (normalized_limit,),
+                ).fetchall()
+        return [self._row_to_core_update(row) for row in rows]
+
+    def get_core_update(self, proposal_id: str) -> Optional[CoreUpdateProposal]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM pending_core_updates WHERE id = ?",
+                (proposal_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_core_update(row)
+
+    def update_core_update_status(self, proposal_id: str, status: str) -> Optional[CoreUpdateProposal]:
+        now = datetime.utcnow().isoformat()
+        reviewed_at = now if status in {"approved", "rejected"} else ""
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE pending_core_updates
+                SET status = ?, updated_at = ?, reviewed_at = ?
+                WHERE id = ?
+                """,
+                (status, now, reviewed_at, proposal_id),
+            )
+            self.conn.commit()
+            row = self.conn.execute(
+                "SELECT * FROM pending_core_updates WHERE id = ?",
+                (proposal_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_core_update(row)
+
+    def _row_to_core_update(self, row: sqlite3.Row) -> CoreUpdateProposal:
+        return CoreUpdateProposal(
+            id=str(row["id"]),
+            target_section=str(row["target_section"]),
+            proposed_content=str(row["proposed_content"]),
+            reason=str(row["reason"]),
+            source_context=str(row["source_context"]),
+            fingerprint=str(row["fingerprint"]),
+            proposal_type=str(row["proposal_type"] or ""),
+            confidence=str(row["confidence"] or "medium"),
+            status=str(row["status"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            reviewed_at=str(row["reviewed_at"]),
+        )
 
     def _row_to_record(self, row: sqlite3.Row) -> MemoryRecord:
         return MemoryRecord(

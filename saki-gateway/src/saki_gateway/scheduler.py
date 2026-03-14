@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 from typing import Callable, Dict, Optional
+from zoneinfo import ZoneInfo
 
 from .config import SchedulerConfig
 from .runtime_store import RuntimeStore
@@ -10,7 +11,7 @@ from .runtime_store import RuntimeStore
 
 ReminderCallback = Callable[[str], None]
 ProactiveCallback = Callable[[str], None]
-DigestCallback = Callable[[], None]
+DigestCallback = Callable[[], bool]
 
 
 class GatewayScheduler:
@@ -31,7 +32,7 @@ class GatewayScheduler:
         self._stop_event = threading.Event()
         self._last_error = ""
         self._tick_count = 0
-        self._last_digest_hour: int = -1
+        self._last_digest_local_date = ""
 
     def start(self) -> None:
         config = self.config_getter()
@@ -65,6 +66,8 @@ class GatewayScheduler:
             "running": bool(self._thread and self._thread.is_alive()),
             "poll_interval_seconds": config.poll_interval_seconds,
             "proactive_enabled": config.proactive_enabled,
+            "local_timezone": self._resolve_timezone_name(config.local_timezone),
+            "last_digest_local_date": self._last_digest_local_date,
             "last_error": self._last_error,
             "tick_count": self._tick_count,
         }
@@ -117,16 +120,39 @@ class GatewayScheduler:
             if profile_id:
                 self.on_proactive_ping(profile_id)
 
+    def _scheduler_now(self, timezone_name: str) -> datetime:
+        try:
+            return datetime.now(ZoneInfo(timezone_name))
+        except Exception:
+            return datetime.now().astimezone()
+
+    def _resolve_timezone_name(self, timezone_name: str) -> str:
+        candidate = str(timezone_name or "").strip()
+        if candidate:
+            try:
+                ZoneInfo(candidate)
+                return candidate
+            except Exception:
+                pass
+        fallback = datetime.now().astimezone().tzinfo
+        key = getattr(fallback, "key", "") or str(fallback or "")
+        return key or "local"
+
     def _run_memory_digest(self) -> None:
         if self.on_memory_digest is None:
             return
-        current_hour = datetime.now().hour
-        if current_hour == self._last_digest_hour:
+        config = self.config_getter()
+        timezone_name = self._resolve_timezone_name(config.local_timezone)
+        now_local = self._scheduler_now(timezone_name)
+        if (now_local.hour, now_local.minute) < (4, 5):
             return
-        if current_hour not in (3, 9, 15, 21):
+        local_date = now_local.strftime("%Y-%m-%d")
+        if local_date == self._last_digest_local_date:
             return
-        self._last_digest_hour = current_hour
+        ran = False
         try:
-            self.on_memory_digest()
+            ran = bool(self.on_memory_digest())
         except Exception:
-            pass
+            ran = False
+        if ran:
+            self._last_digest_local_date = local_date

@@ -104,5 +104,11 @@
     "enabled": true,
     "password": ""
   },
-  "mcp_servers": []
+  "mcp_servers": [],
+  "trilium": {
+    "enabled": false,
+    "url": "",
+    "token": "",
+    "timeout_seconds": 10
+  }
 }

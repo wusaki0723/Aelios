@@ -108,6 +108,14 @@ class NotionSyncConfig:
 
 
 @dataclass
+class TriliumConfig:
+    enabled: bool = False
+    url: str = ""
+    token: str = ""
+    timeout_seconds: int = 10
+
+
+@dataclass
 class McpServerConfig:
     name: str
     command: str = ""
@@ -138,6 +146,7 @@ class AppConfig:
     session: SessionConfig = field(default_factory=SessionConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     notion_sync: NotionSyncConfig = field(default_factory=NotionSyncConfig)
+    trilium: TriliumConfig = field(default_factory=TriliumConfig)
     channels: ChannelConfig = field(default_factory=ChannelConfig)
     dashboard_security: DashboardSecurityConfig = field(
         default_factory=DashboardSecurityConfig
@@ -269,6 +278,14 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     config.notion_sync.sync_frequency_minutes = _env_int(
         "SAKI_NOTION_SYNC_FREQUENCY_MINUTES",
         config.notion_sync.sync_frequency_minutes,
+    )
+    config.trilium.enabled = _env_flag("TRILIUM_ENABLED", config.trilium.enabled)
+    config.trilium.url = os.getenv("TRILIUM_URL", config.trilium.url)
+    config.trilium.token = os.getenv(
+        "TRILIUM_ETAPI_TOKEN", os.getenv("TRILIUM_TOKEN", config.trilium.token)
+    )
+    config.trilium.timeout_seconds = _env_int(
+        "TRILIUM_TIMEOUT_SECONDS", config.trilium.timeout_seconds
     )
     config.scheduler.enabled = _env_flag(
         "SAKI_SCHEDULER_ENABLED", config.scheduler.enabled

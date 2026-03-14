@@ -25,12 +25,16 @@ class SakiPhoneApp {
     this.currentMemoryCategory = '';
     this.expandedLogIds = new Set();
     this.editingMemoryId = null;
+    this.pendingAttachments = [];
+    this.deferredInstallPrompt = null;
+    this.isAuthenticated = false;
     this.init();
   }
 
   async apiFetch(url, options = {}) {
     const opts = {
       cache: 'no-store',
+      credentials: 'same-origin',
       ...options,
       headers: {
         ...(options.headers || {}),
@@ -38,6 +42,7 @@ class SakiPhoneApp {
     };
     const res = await fetch(url, opts);
     if (res.status === 401) {
+      this.showAuthOverlay();
       const error = new Error('AUTH_REQUIRED');
       error.code = 'AUTH_REQUIRED';
       throw error;
@@ -52,8 +57,10 @@ class SakiPhoneApp {
     this.loadLocalData();
     this.applyTheme(localStorage.getItem('saki_theme') || 'pink');
     this.setupEventListeners();
+    this.setupPWA();
     this.setupTouchEvents();
     this.startClock();
+    await this.checkAuthStatus();
     this.showHome();
   }
 
@@ -107,6 +114,100 @@ class SakiPhoneApp {
         chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + 'px';
       });
     }
+
+    const fileInput = document.getElementById('chat-attachment-input');
+    if (fileInput) {
+      fileInput.addEventListener('change', (event) => this.handleAttachmentSelect(event));
+    }
+  }
+
+  async checkAuthStatus() {
+    try {
+      const res = await fetch('/api/auth/status', { cache: 'no-store', credentials: 'same-origin' });
+      const data = await res.json();
+      this.isAuthenticated = !!data.authenticated || !data.required;
+      if (this.isAuthenticated) {
+        this.hideAuthOverlay();
+      } else {
+        this.showAuthOverlay();
+      }
+    } catch (_) {
+      this.showAuthOverlay();
+    }
+  }
+
+  showAuthOverlay(message = '') {
+    const overlay = document.getElementById('auth-overlay');
+    const error = document.getElementById('auth-error');
+    if (overlay) overlay.style.display = 'flex';
+    if (error) error.textContent = message;
+  }
+
+  hideAuthOverlay() {
+    const overlay = document.getElementById('auth-overlay');
+    const error = document.getElementById('auth-error');
+    const input = document.getElementById('auth-password');
+    if (overlay) overlay.style.display = 'none';
+    if (error) error.textContent = '';
+    if (input) input.value = '';
+  }
+
+  async submitDashboardLogin() {
+    const input = document.getElementById('auth-password');
+    const password = input?.value?.trim() || '';
+    if (!password) {
+      this.showAuthOverlay('先把密码填上。');
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || '登录失败');
+      this.isAuthenticated = true;
+      this.hideAuthOverlay();
+      this.showToast('已进入面板', 'success');
+      if (this.currentPage === 'settings') this.renderSettings();
+    } catch (err) {
+      this.showAuthOverlay(err.message || '登录失败');
+    }
+  }
+
+  setupPWA() {
+    window.addEventListener('beforeinstallprompt', (event) => {
+      event.preventDefault();
+      this.deferredInstallPrompt = event;
+      const btn = document.getElementById('install-app-btn');
+      if (btn) btn.style.display = 'inline-flex';
+    });
+
+    window.addEventListener('appinstalled', () => {
+      this.deferredInstallPrompt = null;
+      const btn = document.getElementById('install-app-btn');
+      if (btn) btn.style.display = 'none';
+      this.showToast('已添加到桌面', 'success');
+    });
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch((err) => {
+          console.warn('Service worker register failed:', err);
+        });
+      });
+    }
+  }
+
+  async installPWA() {
+    if (!this.deferredInstallPrompt) {
+      this.showToast('浏览器暂时没有提供安装入口', 'info');
+      return;
+    }
+    this.deferredInstallPrompt.prompt();
+    await this.deferredInstallPrompt.userChoice.catch(() => null);
   }
 
   setupTouchEvents() {
@@ -122,17 +223,7 @@ class SakiPhoneApp {
     }, { passive: true });
   }
 
-  startClock() {
-    const update = () => {
-      const el = document.getElementById('status-time');
-      if (el) {
-        const now = new Date();
-        el.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-      }
-    };
-    update();
-    setInterval(update, 30000);
-  }
+  startClock() {}
 
   // ------------------------------------------
   // Navigation
@@ -230,7 +321,7 @@ class SakiPhoneApp {
     // Reminder count
     let reminderCount = 0;
     try {
-      const rRes = await fetch('/api/reminders');
+      const rRes = await this.apiFetch('/api/reminders');
       
       if (rRes.ok) {
         const rData = await rRes.json();
@@ -290,9 +381,17 @@ class SakiPhoneApp {
       const isUser = msg.role === 'user';
       const avatar = isUser ? svgIcon('user') : svgIcon('heart');
       const time = msg.timestamp ? this.formatTime(new Date(msg.timestamp)) : '';
-      const toolHtml = msg.toolContexts && msg.toolContexts.length > 0
-        ? msg.toolContexts.map(tc => `<div class="tool-context-indicator">${svgIcon('tool', 'icon-sm')} ${this.escapeHtml(tc.type || 'tool')}</div>`).join('')
+      const visibleToolContexts = this.filterVisibleToolContexts(msg.toolContexts || []);
+      const toolHtml = visibleToolContexts.length > 0
+        ? visibleToolContexts.map(tc => `<div class="tool-context-indicator">${svgIcon('tool', 'icon-sm')} ${this.escapeHtml(tc.type || tc.name || 'tool')}</div>`).join('')
         : '';
+      const segments = !isUser ? this.getMessageSegments(msg.content) : [msg.content || ''];
+      const revealCount = !isUser && Number.isFinite(msg.segmentRevealCount)
+        ? Math.max(1, Math.min(msg.segmentRevealCount, segments.length))
+        : segments.length;
+      const bubbleHtml = segments.slice(0, revealCount).map(segment => `
+        <div class="message-bubble-inner${!isUser && segments.length > 1 ? ' segmented' : ''}">${this.renderMarkdown(segment)}</div>
+      `).join('');
 
       return `
         <div class="chat-message ${isUser ? 'user' : 'assistant'}">
@@ -303,7 +402,7 @@ class SakiPhoneApp {
               <span>${time}</span>
             </div>
             ${toolHtml}
-            <div class="message-bubble-inner">${this.renderMarkdown(msg.content)}</div>
+            <div class="message-bubbles">${bubbleHtml}</div>
           </div>
         </div>
       `;
@@ -317,27 +416,61 @@ class SakiPhoneApp {
     return html.replace(/\n/g, '<br>');
   }
 
+  getMessageSegments(text) {
+    const source = String(text || '');
+    const lineParts = source.split(/\n+/).map(part => part.trim()).filter(Boolean);
+    if (lineParts.length > 1) return lineParts;
+
+    const sentenceParts = source
+      .split(/(?<=[。！？!?])/)
+      .map(part => part.trim())
+      .filter(Boolean);
+    if (sentenceParts.length > 1) return sentenceParts;
+
+    return lineParts.length > 0 ? lineParts : [source];
+  }
+
+  filterVisibleToolContexts(toolContexts = []) {
+    return toolContexts.filter(tc => !this.isHiddenToolContext(tc));
+  }
+
+  isHiddenToolContext(toolContext = {}) {
+    const raw = [toolContext.type, toolContext.name, toolContext.id, toolContext.tool, toolContext.tool_name]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    return raw.includes('memory search')
+      || raw.includes('memory_search')
+      || raw.includes('memory-search')
+      || (raw.includes('memory') && raw.includes('search'));
+  }
+
   async sendMessage() {
     const input = document.getElementById('chat-input');
     if (!input) return;
     const text = input.value.trim();
-    if (!text) return;
+    const attachments = [...this.pendingAttachments];
+    if (!text && attachments.length === 0) return;
 
-    // Add user message
-    this.addMessage('user', text);
+    const localContent = text || attachments.map(item => `[附件] ${item.name}`).join('\n');
+
+    this.addMessage('user', localContent, { attachments });
     input.value = '';
     input.style.height = 'auto';
+    this.pendingAttachments = [];
+    this.renderAttachmentPreview();
     this.saveChatHistory();
     this.renderChat();
 
-    // Send to gateway
     this.showTypingIndicator();
     try {
-      const res = await fetch('/api/chat/respond', {
+      const res = await this.apiFetch('/api/chat/respond', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: [{ role: 'user', content: text }]
+          messages: text ? [{ role: 'user', content: text }] : [],
+          attachments
         })
       });
 
@@ -351,9 +484,13 @@ class SakiPhoneApp {
       const toolContexts = data.tool_contexts || [];
 
       this.hideTypingIndicator();
-      this.addMessage('assistant', content, { toolContexts });
+      const assistantMessage = this.addMessage('assistant', content, {
+        toolContexts,
+        segmentRevealCount: 1
+      });
       this.saveChatHistory();
       this.renderChat();
+      await this.animateAssistantSegments(assistantMessage.id);
     } catch (err) {
       this.hideTypingIndicator();
       this.showToast(`请求失败: ${err.message}`, 'error');
@@ -368,13 +505,98 @@ class SakiPhoneApp {
   }
 
   addMessage(role, content, extra = {}) {
-    this.chatHistory.push({
+    const message = {
       id: this.generateId(),
       role,
       content,
       timestamp: new Date().toISOString(),
       ...extra
-    });
+    };
+    this.chatHistory.push(message);
+    return message;
+  }
+
+  async animateAssistantSegments(messageId) {
+    const msg = this.chatHistory.find(item => item.id === messageId && item.role === 'assistant');
+    if (!msg) return;
+
+    const segments = this.getMessageSegments(msg.content);
+    if (segments.length <= 1) {
+      delete msg.segmentRevealCount;
+      this.saveChatHistory();
+      return;
+    }
+
+    for (let i = 2; i <= segments.length; i++) {
+      await this.delay(220);
+      msg.segmentRevealCount = i;
+      this.renderChat();
+    }
+
+    delete msg.segmentRevealCount;
+    this.saveChatHistory();
+    this.renderChat();
+  }
+
+  triggerAttachmentPicker() {
+    const input = document.getElementById('chat-attachment-input');
+    if (input) input.click();
+  }
+
+  async handleAttachmentSelect(event) {
+    const files = Array.from(event?.target?.files || []);
+    if (files.length === 0) return;
+    const mapped = await Promise.all(files.map(file => this.serializeAttachment(file)));
+    this.pendingAttachments = [...this.pendingAttachments, ...mapped.filter(Boolean)];
+    this.renderAttachmentPreview();
+    event.target.value = '';
+  }
+
+  async serializeAttachment(file) {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('read failed'));
+      reader.readAsDataURL(file);
+    }).catch(() => '');
+    if (!dataUrl) return null;
+
+    const mime = file.type || 'application/octet-stream';
+    const isImage = mime.startsWith('image/');
+    const textLike = mime.startsWith('text/')
+      || /json|javascript|xml|csv|markdown|pdf|word|sheet|excel|presentation|officedocument|msword/i.test(mime)
+      || /\.(txt|md|json|csv|js|ts|html|css|xml|log|py|java|go|rs|pdf|doc|docx|xls|xlsx|ppt|pptx)$/i.test(file.name);
+
+    return {
+      type: isImage ? 'image' : 'file',
+      url: dataUrl,
+      name: file.name,
+      mime_type: mime,
+      note: file.name,
+      text_content: !isImage && textLike ? await file.text().catch(() => '') : ''
+    };
+  }
+
+  renderAttachmentPreview() {
+    const container = document.getElementById('chat-attachment-preview');
+    if (!container) return;
+    if (this.pendingAttachments.length === 0) {
+      container.innerHTML = '';
+      container.style.display = 'none';
+      return;
+    }
+    container.style.display = 'flex';
+    container.innerHTML = this.pendingAttachments.map((item, index) => `
+      <div class="attachment-chip">
+        <span>${this.escapeHtml(item.name || '附件')}</span>
+        <button type="button" onclick="app.removePendingAttachment(${index})">×</button>
+      </div>
+    `).join('');
+  }
+
+  removePendingAttachment(index) {
+    this.pendingAttachments.splice(index, 1);
+    this.renderAttachmentPreview();
   }
 
   showTypingIndicator() {
@@ -401,6 +623,10 @@ class SakiPhoneApp {
     this.isTyping = false;
     const el = document.querySelector('.typing-indicator');
     if (el) el.remove();
+  }
+
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   ensureChatInput() {
@@ -451,7 +677,7 @@ class SakiPhoneApp {
 
     try {
       if (this.currentMemoryView === 'logs') {
-        const res = await fetch('/api/logs');
+        const res = await this.apiFetch('/api/logs');
         if (!res.ok) throw new Error('Failed to load logs');
         const data = await res.json();
         const items = data.items || [];
@@ -496,7 +722,7 @@ class SakiPhoneApp {
         return;
       }
 
-      const res = await fetch('/api/memories');
+      const res = await this.apiFetch('/api/memories');
       if (!res.ok) throw new Error('Failed to load memories');
       const data = await res.json();
 
@@ -616,7 +842,7 @@ class SakiPhoneApp {
     }
 
     try {
-      const res = await fetch(`/api/memories/search?q=${encodeURIComponent(query)}`);
+      const res = await this.apiFetch(`/api/memories/search?q=${encodeURIComponent(query)}`);
       if (!res.ok) throw new Error('Search failed');
       const data = await res.json();
       const items = data.items || data.results || [];
@@ -742,7 +968,7 @@ class SakiPhoneApp {
     }
 
     try {
-      const res = await fetch('/api/memories', {
+      const res = await this.apiFetch('/api/memories', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, key: title, content, category, importance })
@@ -786,7 +1012,7 @@ class SakiPhoneApp {
   async deleteMemory(id) {
     if (!confirm('确定删除这条记忆？')) return;
     try {
-      const res = await fetch(`/api/memories/${id}`, { method: 'DELETE' });
+      const res = await this.apiFetch(`/api/memories/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete');
       this.showToast('已删除', 'success');
       this.renderMemories();
@@ -818,7 +1044,7 @@ class SakiPhoneApp {
     container.innerHTML = '<div class="empty-text">加载中...</div>';
 
     try {
-      const res = await fetch('/api/reminders');
+      const res = await this.apiFetch('/api/reminders');
       if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
       const items = data.items || [];
@@ -888,7 +1114,7 @@ class SakiPhoneApp {
     }
 
     try {
-      const res = await fetch('/api/reminders', {
+      const res = await this.apiFetch('/api/reminders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, minutes })
@@ -904,7 +1130,7 @@ class SakiPhoneApp {
 
   async deleteReminder(id) {
     try {
-      const res = await fetch(`/api/reminders/${id}`, { method: 'DELETE' });
+      const res = await this.apiFetch(`/api/reminders/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete');
       this.showToast('已删除', 'success');
       this.renderReminders();
@@ -1408,7 +1634,7 @@ class SakiPhoneApp {
     }
 
     try {
-      const res = await fetch('/api/config', {
+      const res = await this.apiFetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)

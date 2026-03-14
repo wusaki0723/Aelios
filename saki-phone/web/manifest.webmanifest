@@ -1,12 +1,15 @@
 {
   "name": "咲手机",
   "short_name": "咲手机",
-  "id": "./",
+  "id": "/",
   "description": "专为情侣设计的互动聊天小手机",
-  "start_url": "./index.html",
-  "scope": "./",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
   "background_color": "#F3E5E9",
   "theme_color": "#F3E5E9",
   "lang": "zh-CN",
@@ -23,5 +26,7 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "orientation": "portrait",
+  "prefer_related_applications": false
 }

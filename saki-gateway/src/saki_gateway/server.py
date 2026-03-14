@@ -5,6 +5,7 @@ import copy
 import json
 import mimetypes
 import re
+import secrets
 import sys
 import threading
 from dataclasses import asdict
@@ -36,6 +37,7 @@ class GatewayApp:
         self.root = root.resolve()
         self.dashboard_root = self._find_dashboard_root()
         self.config_store = ConfigStore(default_config_path(self.root))
+        self._dashboard_sessions: set[str] = set()
         self._memory_db_path = resolve_data_path(
             self.root, self.config_store.config.memory.database_path, "data/memories.db"
         )
@@ -244,12 +246,7 @@ class GatewayApp:
         }
 
     def start_channels(self) -> None:
-        if self.feishu_channel is not None:
-            self.feishu_channel.start(self.handle_feishu_message)
-        if self.qqbot_channel is not None:
-            self.qqbot_channel.start(self.handle_qqbot_message)
-        if self.napcat_channel is not None:
-            self.napcat_channel.start(self.handle_napcat_message)
+        self._start_channels_best_effort()
         self.scheduler.start()
 
     def shutdown(self) -> None:
@@ -274,14 +271,38 @@ class GatewayApp:
         self.feishu_channel = self._build_feishu_channel()
         self.qqbot_channel = self._build_qqbot_channel()
         self.napcat_channel = self._build_napcat_channel()
-        if self.feishu_channel is not None:
-            self.feishu_channel.start(self.handle_feishu_message)
-        if self.qqbot_channel is not None:
-            self.qqbot_channel.start(self.handle_qqbot_message)
-        if self.napcat_channel is not None:
-            self.napcat_channel.start(self.handle_napcat_message)
+        warnings = self._start_channels_best_effort()
         self.scheduler.start()
-        return {"config": self.public_config_payload()}
+        response = {"config": self.public_config_payload()}
+        if warnings:
+            response["warnings"] = warnings
+        return response
+
+    def _start_channels_best_effort(self) -> list[Dict[str, str]]:
+        warnings: list[Dict[str, str]] = []
+        channels = [
+            ("feishu", self.feishu_channel, self.handle_feishu_message),
+            ("qqbot", self.qqbot_channel, self.handle_qqbot_message),
+            ("qq", self.napcat_channel, self.handle_napcat_message),
+        ]
+        for channel_name, channel, handler in channels:
+            if channel is None:
+                continue
+            try:
+                channel.start(handler)
+            except Exception as error:
+                warnings.append(
+                    {
+                        "channel": channel_name,
+                        "error": str(error),
+                    }
+                )
+                self._record_event(
+                    "channel_start_failed",
+                    {"channel": channel_name, "error": str(error)},
+                    channel=channel_name,
+                )
+        return warnings
 
     def chat_complete(self, body: Dict[str, Any]) -> Dict[str, Any]:
         messages = self._coerce_messages(body)
@@ -694,7 +715,6 @@ class GatewayApp:
             "你输出给系统，不输出给最终用户；工具结果会回流给聊天核。",
             f"当前伴侣名称：{config.persona.partner_name}；伴侣身份：{config.persona.partner_role}。",
         ]
-        tool_contexts = self._dedupe_tool_contexts(tool_contexts)
         if tool_contexts:
             lines = []
             for index, item in enumerate(tool_contexts, start=1):
@@ -858,11 +878,11 @@ class GatewayApp:
             messages=messages,
             profile_id=profile_id,
             session_id=session.session_id,
-            channel="qqbot",
+            channel="qq",
             temperature=0.7,
             event_type="qq_chat_respond",
             event_payload={
-                "channel": "qqbot",
+                "channel": "qq",
                 "user_id": inbound.get("user_id", ""),
                 "group_id": inbound.get("group_id", ""),
                 "message_type": inbound.get("message_type", "private"),
@@ -1012,12 +1032,6 @@ class GatewayApp:
             system_parts.append(
                 "以下是近期活跃记忆，请在相关时自然接住。\n\n" + active_memory
             )
-        recent_daily_logs = self._render_recent_daily_logs_context()
-        if recent_daily_logs:
-            system_parts.append(
-                "以下是最近两天的日志摘要，仅在相关时自然吸收，不要逐句复述。\n\n" + recent_daily_logs
-            )
-        tool_contexts = self._dedupe_tool_contexts(tool_contexts, active_memory + "\n" + recent_daily_logs)
         if tool_contexts:
             context_lines = []
             for index, item in enumerate(tool_contexts, start=1):
@@ -1041,6 +1055,29 @@ class GatewayApp:
             + recent_messages
             + messages
         )
+
+    def _attachment_file_context(self, attachment: Dict[str, Any]) -> Dict[str, Any]:
+        file_name = str(attachment.get("name", "") or "附件").strip() or "附件"
+        mime_type = str(
+            attachment.get("mime_type", "")
+            or attachment.get("mime", "")
+            or "application/octet-stream"
+        ).strip()
+        text_content = str(attachment.get("text_content", "") or "").strip()
+        url = str(attachment.get("url", "") or "").strip()
+        snippet = text_content[:4000] if text_content else ""
+        context = f"文件名：{file_name}\n文件类型：{mime_type or '未知'}"
+        if snippet:
+            context += f"\n文件内容摘录：\n{snippet}"
+        elif url.startswith("data:"):
+            context += "\n文件已上传，但暂不支持直接解析该类型的二进制内容。"
+        return {
+            "type": "file",
+            "name": file_name,
+            "mime_type": mime_type,
+            "url": url,
+            "context": context,
+        }
 
     def _prepare_tool_contexts(
         self,
@@ -1120,27 +1157,7 @@ class GatewayApp:
                 image_url = str(
                     attachment.get("url", "") or attachment.get("image_url", "") or ""
                 ).strip()
-                image_key = str(attachment.get("image_key", "") or "").strip()
                 note = str(attachment.get("note", "") or "").strip()
-                source = str(attachment.get("source", "") or "").strip().lower()
-                message_id = str(attachment.get("message_id", "") or "").strip()
-                if not image_url and image_key and source == "feishu" and message_id and self.feishu_channel:
-                    try:
-                        tmp_dir = self.root / "data" / "tmp" / "feishu"
-                        image_url = self.feishu_channel.download_message_resource(
-                            message_id, "image", image_key, str(tmp_dir)
-                        )
-                    except Exception as error:
-                        tool_contexts.append(
-                            {
-                                "type": "image",
-                                "url": "",
-                                "note": note,
-                                "context": f"飞书图片下载失败：{error}",
-                                "route_used": "failed",
-                                "provider_used": "none",
-                            }
-                        )
                 if image_url:
                     context = prepare_image_context(
                         self.config_store.config, image_url, note, self.root
@@ -1154,6 +1171,17 @@ class GatewayApp:
                             "route_used": context.get("route_used", ""),
                         },
                     )
+            if attachment_type in {"file", "document", "doc"}:
+                context = self._attachment_file_context(attachment)
+                tool_contexts.append(context)
+                self._record_event(
+                    "tool_execute",
+                    {
+                        "tool": "read_file_attachment",
+                        "name": context.get("name", ""),
+                        "mime_type": context.get("mime_type", ""),
+                    },
+                )
             if attachment_type in {"search", "web_search"}:
                 query = str(
                     attachment.get("query", "") or attachment.get("text", "") or ""
@@ -1757,85 +1785,28 @@ class GatewayApp:
                 )
         return "\n".join(lines).strip() + "\n"
 
-    def _render_recent_daily_logs_context(self) -> str:
-        target_days = [
-            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1),
-            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0),
-        ]
-        labels = ["昨天日志", "今天日志"]
-        lines: list[str] = []
-        records = self.memory_store.list_memories(limit=8, memory_kind="daily_log")
-        for label, day in zip(labels, target_days):
-            day_key = day.strftime("%Y-%m-%d")
-            matched = None
-            for record in records:
-                content = str(record.content or "")
-                if day_key in content or day.strftime("%Y%m%d") in str(record.id or "") or day.strftime("%Y-%m-%d") in str(record.key or ""):
-                    matched = record
-                    break
-            if matched is None:
-                continue
-            snippet = str(matched.content or "").strip()
-            if not snippet:
-                continue
-            snippet = snippet[:1200]
-            lines.append(f"{label}：\n{snippet}")
-        return "\n\n".join(lines).strip()
-
     def _render_active_memory(self) -> str:
         lines = [f"更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]
-        preferred_categories = {"preference", "promise", "anniversary", "identity", "relationship"}
         recent_memories = self.memory_store.list_memories(
-            limit=20, memory_kind="long_term"
+            limit=6, memory_kind="long_term"
         )
         recent_memories = [
-            record
-            for record in recent_memories
-            if record.category != "memory_refresh"
-            and record.category in preferred_categories
-        ][:4]
+            record for record in recent_memories if record.category != "memory_refresh"
+        ]
         if recent_memories:
             lines.append("")
-            lines.append("当前高价值背景:")
+            lines.append("长期记忆:")
             for record in recent_memories:
                 lines.append(
-                    f"- [{record.category}] {record.key}: {record.content[:120]}"
+                    f"- [{record.category}] {record.key}: {record.content[:160]}"
                 )
-        else:
+        recent_logs = self.memory_store.list_memories(limit=1, memory_kind="daily_log")
+        if recent_logs:
             lines.append("")
-            lines.append("当前高价值背景: 暂无新增，主要依赖核心档案。")
+            lines.append("今日日志:")
+            for record in recent_logs:
+                lines.append(f"- {record.content[:220]}")
         return "\n".join(lines).strip() + "\n"
-
-    def _dedupe_tool_contexts(
-        self, tool_contexts: list[Dict[str, Any]], active_memory: str = ""
-    ) -> list[Dict[str, Any]]:
-        deduped: list[Dict[str, Any]] = []
-        seen_pairs: set[tuple[str, str]] = set()
-        normalized_active = " ".join((active_memory or "").split())
-        for item in tool_contexts:
-            item_type = str(item.get("type", "") or "")
-            context = str(item.get("context", "") or "").strip()
-            if item_type == "memory_search":
-                kept_lines: list[str] = []
-                for raw_line in context.splitlines():
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    normalized_line = " ".join(line.split())
-                    if normalized_line and normalized_line in normalized_active:
-                        continue
-                    kept_lines.append(line)
-                context = "\n".join(dict.fromkeys(kept_lines)).strip()
-                if not context:
-                    continue
-                item = dict(item)
-                item["context"] = context
-            fingerprint = (item_type, " ".join(context.split()))
-            if fingerprint in seen_pairs:
-                continue
-            seen_pairs.add(fingerprint)
-            deduped.append(item)
-        return deduped
 
     def _refresh_active_memory(self) -> None:
         self._write_text_file(self._active_memory_file(), self._render_active_memory())
@@ -1935,62 +1906,45 @@ class GatewayApp:
         )
         return hits >= 2 and len(normalized.splitlines()) >= 4
 
-    def _extract_daily_log_processed_count(self, content: str) -> int:
-        text = str(content or "")
-        patterns = [
-            r"已整理消息：\s*(\d+)",
-            r"已整理\s*(\d+)\s*条消息",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                return max(0, int(match.group(1)))
-        ends = [int(end) for _, end in re.findall(r"### 第 \d+ 段（\d+-(\d+)）", text)]
-        return max(ends) if ends else 0
+    def _extract_processed_message_count(self, content: str) -> int:
+        if not content:
+            return 0
+        processed = 0
+        header_match = re.search(r"已整理消息：\s*(\d+)", content)
+        if header_match:
+            processed = max(processed, int(header_match.group(1)))
+        for _start_text, end_text in re.findall(r"### 第 \d+ 段（(\d+)-(\d+)）", content):
+            processed = max(processed, int(end_text))
+        goodnight_match = re.search(r"### 晚安前补全摘要（(\d+)-(\d+)）", content)
+        if goodnight_match:
+            processed = max(processed, int(goodnight_match.group(2)))
+        return processed
 
-    def _extract_daily_log_sections(self, content: str) -> list[tuple[str, str]]:
-        text = str(content or "")
-        marker = "今日日志摘要："
-        if marker in text:
-            text = text.split(marker, 1)[1].strip()
-        if not text:
-            return []
-        sections: list[tuple[str, str]] = []
-        current_header = ""
-        buffer: list[str] = []
+    def _merge_daily_log_sections(self, existing_content: str, new_sections: list[str]) -> list[str]:
+        merged: dict[str, str] = {}
+        ordered_headers: list[str] = []
 
-        def flush() -> None:
-            nonlocal current_header, buffer
-            if current_header:
-                body = "\n".join(buffer).strip()
-                sections.append((current_header, body))
-            current_header = ""
-            buffer = []
+        def split_sections(blob: str) -> list[str]:
+            if not blob:
+                return []
+            marker = "今日日志摘要："
+            if marker in blob:
+                blob = blob.split(marker, 1)[1]
+            blob = blob.strip()
+            if not blob:
+                return []
+            parts = re.split(r"(?=^### )", blob, flags=re.M)
+            return [part.strip() for part in parts if part.strip()]
 
-        for line in text.splitlines():
-            if line.startswith("### "):
-                flush()
-                current_header = line.strip()
-                buffer = []
-            elif current_header:
-                buffer.append(line)
-        flush()
-        return sections
-
-    def _merge_daily_log_sections(
-        self, existing_content: str, header: str, summary: str
-    ) -> list[str]:
-        merged: list[tuple[str, str]] = []
-        seen_headers: set[str] = set()
-        for existing_header, body in self._extract_daily_log_sections(existing_content):
-            if existing_header == header:
+        for section in split_sections(existing_content) + [item.strip() for item in new_sections if item.strip()]:
+            lines = section.splitlines()
+            header = lines[0].strip() if lines else section.strip()
+            if not header:
                 continue
-            if existing_header in seen_headers:
-                continue
-            seen_headers.add(existing_header)
-            merged.append((existing_header, body))
-        merged.append((header, summary.strip()))
-        return [f"{h}\n{b}".strip() for h, b in merged if h and b.strip()]
+            if header not in ordered_headers:
+                ordered_headers.append(header)
+            merged[header] = section.strip()
+        return [merged[header] for header in ordered_headers if header in merged]
 
     def _compose_daily_log_content(
         self,
@@ -2008,7 +1962,8 @@ class GatewayApp:
             "",
             "今日日志摘要：",
         ]
-        return title, "\n".join(header + sections).strip()
+        merged_sections = self._merge_daily_log_sections("", sections)
+        return title, "\n".join(header + merged_sections).strip()
 
     def _update_daily_log(self, *, profile_id: str, session_id: str) -> None:
         day_start, day_end = self._local_day_bounds()
@@ -2029,7 +1984,9 @@ class GatewayApp:
         existing = self.memory_store.get_memory(log_id)
         previous_threshold = 0
         if existing is not None:
-            previous_threshold = max(0, self._extract_daily_log_processed_count(existing.content) // 20)
+            previous_threshold = max(
+                0, self._extract_processed_message_count(existing.content or "") // 20
+            )
         if threshold <= previous_threshold:
             return
         if not all_messages:
@@ -2081,8 +2038,10 @@ class GatewayApp:
             chunk_end=capped_count,
         )
         existing_content = existing.content if existing is not None else ""
-        section_header = f"### 第 {threshold} 段（{chunk_start}-{capped_count}）"
-        sections = self._merge_daily_log_sections(existing_content, section_header, summary)
+        sections = self._merge_daily_log_sections(
+            existing_content,
+            [f"### 第 {threshold} 段（{chunk_start}-{capped_count}）\n{summary}"],
+        )
         title, content = self._compose_daily_log_content(
             profile_id=profile_id,
             day=day_start,
@@ -2145,38 +2104,35 @@ class GatewayApp:
             return
         log_id = self._daily_log_memory_id(profile_id, day_start)
         existing = self.memory_store.get_memory(log_id)
-        if existing is None:
-            self._update_daily_log(profile_id=profile_id, session_id=session_id)
+        existing_content = existing.content if existing is not None else ""
+        existing_processed = self._extract_processed_message_count(existing_content)
+        if existing_content:
+            if "### 晚安前补全摘要" in existing_content and existing_processed >= len(user_messages):
+                return
+        if existing_processed >= len(user_messages):
             return
-
-        processed_count = self._extract_daily_log_processed_count(existing.content or "")
-        if len(user_messages) <= processed_count:
+        remaining_user_ids = {
+            item.get("id") for item in user_messages[existing_processed:] if item.get("id") is not None
+        }
+        if not remaining_user_ids:
             return
-
-        remaining_user_messages = user_messages[processed_count:]
-        remaining_ids = [int(item.get("id", 0) or 0) for item in remaining_user_messages]
-        if not remaining_ids:
-            return
-        first_target_id = min(remaining_ids)
-        last_target_id = max(remaining_ids)
+        first_target_id = min(int(i) for i in remaining_user_ids)
         selected = [
-            item
-            for item in all_messages
-            if first_target_id <= int(item.get("id", 0) or 0) <= last_target_id
+            item for item in all_messages if int(item.get("id", 0) or 0) >= first_target_id
         ]
-        if not selected:
-            return
-
         summary = self._summarize_daily_log_chunk(
             profile_id=profile_id,
             day=day_start,
             messages=selected,
-            chunk_start=processed_count + 1,
+            chunk_start=existing_processed + 1,
             chunk_end=len(user_messages),
         )
-        existing_content = existing.content or ""
-        section_header = f"### 晚安前补全摘要（{processed_count + 1}-{len(user_messages)}）"
-        sections = self._merge_daily_log_sections(existing_content, section_header, summary)
+        sections = self._merge_daily_log_sections(
+            existing_content,
+            [
+                f"### 晚安前补全摘要（{existing_processed + 1}-{len(user_messages)}）\n{summary}"
+            ],
+        )
         title, content = self._compose_daily_log_content(
             profile_id=profile_id,
             day=day_start,
@@ -2202,29 +2158,41 @@ class GatewayApp:
         if record is None:
             return {"ok": False, "reason": "daily log not found", "memory_id": log_id}
         content = record.content or ""
-        title, body = (content.split("今日日志摘要：", 1) + [""])[:2]
-        prefix = (title + "今日日志摘要：").strip() if "今日日志摘要：" in content else ""
-        merged: dict[str, str] = {}
-        order: list[str] = []
-        for header, section_body in self._extract_daily_log_sections(content):
-            if header not in merged:
-                order.append(header)
-            merged[header] = section_body.strip()
-        section_lines = [f"{header}\n{merged[header]}".strip() for header in order if merged.get(header)]
-        new_content = (prefix + "\n" + "\n".join(section_lines)).strip() if prefix else "\n".join(section_lines).strip()
+        lines = content.splitlines()
+        prefix_lines: list[str] = []
+        sections_blob: list[str] = []
+        current_header = ""
+        buffer: list[str] = []
+
+        def flush_section() -> None:
+            nonlocal current_header, buffer
+            if current_header:
+                section = current_header
+                body = "\n".join(buffer).strip()
+                if body:
+                    section += "\n" + body
+                sections_blob.append(section.strip())
+            elif buffer:
+                prefix_lines.extend(buffer)
+            current_header = ""
+            buffer = []
+
+        for line in lines:
+            if line.startswith("### "):
+                flush_section()
+                current_header = line
+                buffer = []
+            else:
+                buffer.append(line)
+        flush_section()
+        deduped_sections = self._merge_daily_log_sections("", sections_blob)
+        new_content = "\n".join(prefix_lines + deduped_sections).strip()
         changed = new_content != content.strip()
         if changed:
-            processed_count = self._extract_daily_log_processed_count(new_content)
-            title_text, rebuilt = self._compose_daily_log_content(
-                profile_id=target_profile,
-                day=target_day,
-                processed_count=processed_count,
-                sections=section_lines,
-            )
             self.memory_store.upsert_memory(
                 memory_id=record.id,
-                key=title_text,
-                content=rebuilt,
+                key=record.key,
+                content=new_content,
                 memory_kind=record.memory_kind,
                 category=record.category,
                 importance=record.importance,
@@ -2375,6 +2343,27 @@ class GatewayApp:
         return f"{event_type}: {json.dumps(payload, ensure_ascii=False)[:120]}"
 
 
+    def create_dashboard_session(self) -> str:
+        token = secrets.token_urlsafe(32)
+        self._dashboard_sessions.add(token)
+        return token
+
+    def has_dashboard_session(self, token: str) -> bool:
+        return bool(token and token in self._dashboard_sessions)
+
+    def revoke_dashboard_session(self, token: str) -> None:
+        if token:
+            self._dashboard_sessions.discard(token)
+
+    def verify_dashboard_password(self, password: str) -> bool:
+        expected_password = str(
+            self.config_store.config.dashboard_security.password or ""
+        )
+        if expected_password.startswith("sha256:"):
+            return normalize_dashboard_password(password) == expected_password
+        return password == expected_password
+
+
 class RequestHandler(BaseHTTPRequestHandler):
     app: Optional[GatewayApp] = None
     protocol_version = "HTTP/1.1"
@@ -2387,12 +2376,54 @@ class RequestHandler(BaseHTTPRequestHandler):
     def _auth_required(self) -> bool:
         return bool(self._app().config_store.config.dashboard_security.enabled)
 
+    def _is_public_path(self, path: str) -> bool:
+        if path in {
+            "/",
+            "/index.html",
+            "/app.js",
+            "/manifest.webmanifest",
+            "/sw.js",
+            "/api/auth/login",
+            "/api/auth/status",
+        }:
+            return True
+        if path.startswith(("/assets/", "/styles/", "/utils/")):
+            return True
+        return path.endswith((
+            ".js",
+            ".css",
+            ".mjs",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".webp",
+            ".ico",
+            ".woff",
+            ".woff2",
+            ".ttf",
+        ))
+
+    def _cookie_map(self) -> Dict[str, str]:
+        raw = self.headers.get("Cookie", "")
+        result: Dict[str, str] = {}
+        for part in raw.split(";"):
+            item = part.strip()
+            if not item or "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            result[key.strip()] = value.strip()
+        return result
+
+    def _session_token(self) -> str:
+        return self._cookie_map().get("saki_dashboard_session", "")
+
     def _check_auth(self) -> bool:
         if not self._auth_required():
             return True
-        expected_password = str(
-            self._app().config_store.config.dashboard_security.password or ""
-        )
+        if self._app().has_dashboard_session(self._session_token()):
+            return True
         auth = self.headers.get("Authorization", "")
         if not auth.startswith("Basic "):
             return False
@@ -2402,11 +2433,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception:
             return False
         _, _, password = decoded.partition(":")
-        if expected_password.startswith("sha256:"):
-            return normalize_dashboard_password(password) == expected_password
-        return password == expected_password
+        return self._app().verify_dashboard_password(password)
 
     def _require_auth(self) -> bool:
+        parsed = urlparse(self.path)
+        if self._is_public_path(parsed.path):
+            return True
         if self._check_auth():
             return True
         payload = json.dumps(
@@ -2415,7 +2447,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.UNAUTHORIZED)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
-        self.send_header("WWW-Authenticate", 'Basic realm="Saki Dashboard"')
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         if self.command != "HEAD":
@@ -2441,6 +2472,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             parsed = urlparse(self.path)
             app = self._app()
+            if parsed.path == "/api/auth/status":
+                self._json(HTTPStatus.OK, {"authenticated": self._check_auth(), "required": self._auth_required()})
+                return
             if parsed.path == "/health":
                 self._json(HTTPStatus.OK, {"ok": True, "state": app.state()})
                 return
@@ -2551,6 +2585,22 @@ class RequestHandler(BaseHTTPRequestHandler):
                 app.napcat_channel.handle_event(body)
                 self._json(HTTPStatus.OK, {"ok": True})
                 return
+            if parsed.path == "/api/auth/login":
+                password = str(body.get("password", "") or "")
+                if self._auth_required() and not self._app().verify_dashboard_password(password):
+                    self._json(HTTPStatus.UNAUTHORIZED, {"error": "密码不对"})
+                    return
+                session_token = self._app().create_dashboard_session()
+                self.send_response(HTTPStatus.OK)
+                data = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Set-Cookie", f"saki_dashboard_session={session_token}; Path=/; HttpOnly; SameSite=Lax")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if parsed.path == "/api/memories":
                 self._json(HTTPStatus.CREATED, app.upsert_panel_memory(body))
                 return
@@ -2638,6 +2688,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             parsed = urlparse(self.path)
             app = self._app()
+            if parsed.path == "/api/auth/logout":
+                self._app().revoke_dashboard_session(self._session_token())
+                self.send_response(HTTPStatus.OK)
+                data = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Set-Cookie", "saki_dashboard_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if parsed.path == "/api/memories":
                 self._json(HTTPStatus.OK, app.clear_panel_memories())
                 return

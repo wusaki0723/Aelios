@@ -13,24 +13,8 @@
   <meta name="apple-mobile-web-app-title" content="咲手机">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./assets/icons/app-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
   <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script>
-    (function () {
-      if (!('serviceWorker' in navigator) || !('caches' in window)) return;
-      window.addEventListener('load', function () {
-        navigator.serviceWorker.getRegistrations()
-          .then(function (regs) {
-            return Promise.all(regs.map(function (reg) { return reg.unregister(); }));
-          })
-          .catch(function () {});
-        caches.keys()
-          .then(function (keys) {
-            return Promise.all(keys.map(function (key) { return caches.delete(key); }));
-          })
-          .catch(function () {});
-      });
-    })();
-  </script>
   <style>
 /* ========================================
    CSS Variables - Romantic Glassmorphism
@@ -336,12 +320,20 @@ svg.icon, svg.icon-sm, svg.icon-lg, svg.icon-xl { fill: none; stroke: currentCol
   margin-bottom: 4px; font-size: 11px; color: var(--secondary-text);
 }
 .chat-message.user .message-header { flex-direction: row-reverse; }
+.message-bubbles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .chat-message .message-bubble-inner {
   background: rgba(255,255,255,0.7); padding: 12px 16px;
   border-radius: 18px 18px 18px 4px;
   box-shadow: 0 2px 8px rgba(142,96,109,0.06);
   font-size: 14px; line-height: 1.5; color: var(--primary-text);
   word-break: break-word;
+}
+.chat-message .message-bubble-inner.segmented {
+  animation: bubblePopIn 0.22s ease-out;
 }
 .chat-message.user .message-bubble-inner {
   background: linear-gradient(135deg, var(--petal-pink), var(--accent-light));
@@ -371,6 +363,30 @@ svg.icon, svg.icon-sm, svg.icon-lg, svg.icon-xl { fill: none; stroke: currentCol
 .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
 
 /* Chat input */
+.attachment-preview {
+  display:none;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 12px 8px 12px;
+}
+.attachment-chip {
+  display:inline-flex; align-items:center; gap:8px;
+  background: rgba(255,255,255,0.72); border:1px solid var(--glass-border);
+  border-radius: 999px; padding: 6px 10px; font-size: 12px; color: var(--primary-text);
+  max-width: 100%;
+}
+.attachment-chip span { max-width: 180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.attachment-chip button { border:none; background:none; color: var(--deep-mauve); font-size:16px; line-height:1; cursor:pointer; }
+.chat-plus-btn {
+  width: 40px; height: 40px; border-radius: 50%; border:none;
+  background: rgba(255,255,255,0.7); color: var(--deep-mauve);
+  display:flex; align-items:center; justify-content:center; flex-shrink:0; cursor:pointer;
+  box-shadow: 0 2px 8px rgba(142,96,109,0.08);
+}
+.install-app-btn {
+  display:none; align-items:center; gap:6px; border:none; cursor:pointer;
+  background: rgba(255,255,255,0.55); color: var(--deep-mauve); padding: 8px 12px; border-radius: 999px; font-weight: 600;
+}
 .chat-input-area {
   display: flex; align-items: flex-end; gap: 8px;
   padding: 10px var(--space-sm); padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
@@ -748,9 +764,21 @@ svg.icon, svg.icon-sm, svg.icon-lg, svg.icon-xl { fill: none; stroke: currentCol
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes typing { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+@keyframes bubblePopIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 
 .updated { animation: pulse 0.5s ease; }
+
+.auth-overlay { position: fixed; inset: 0; z-index: 9999; display: none; align-items: center; justify-content: center; background: rgba(243,229,233,0.75); backdrop-filter: blur(16px); }
+.auth-card { width: min(92vw, 360px); background: rgba(255,255,255,0.82); border: 1px solid var(--glass-border); border-radius: 28px; box-shadow: var(--shadow-lg); padding: 24px; }
+.auth-card h2 { margin: 0 0 10px; font-size: 22px; color: var(--primary-text); }
+.auth-card p { margin: 0 0 14px; font-size: 14px; color: var(--secondary-text); }
+.auth-input { width: 100%; border: 1px solid var(--glass-border); background: rgba(255,255,255,0.85); border-radius: 16px; padding: 14px 16px; font-size: 16px; outline: none; margin-bottom: 12px; }
+.auth-submit { width: 100%; border: none; border-radius: 16px; padding: 14px 16px; background: linear-gradient(135deg, var(--petal-pink), var(--accent-light)); color: var(--deep-mauve); font-weight: 700; font-size: 15px; }
+.auth-error { min-height: 20px; margin-top: 10px; color: #b42318; font-size: 13px; }
 
 /* ========================================
    Scrollbar hide global
@@ -842,13 +870,6 @@ svg.icon, svg.icon-sm, svg.icon-lg, svg.icon-xl { fill: none; stroke: currentCol
     <div class="flower-blur f3"></div>
   </div>
 
-  <!-- Status Bar -->
-  <div class="status-bar">
-    <span id="status-time"></span>
-    <span class="status-icons">
-      <svg class="icon-sm"><use href="#i-heart"/></svg>
-    </span>
-  </div>
 
   <!-- Content Area -->
   <div class="content-area">
@@ -936,12 +957,20 @@ svg.icon, svg.icon-sm, svg.icon-lg, svg.icon-xl { fill: none; stroke: currentCol
           <svg class="icon"><use href="#i-back"/></svg>
         </button>
         <span class="page-title" id="chat-partner-name">TA</span>
+        <button class="install-app-btn" id="install-app-btn" onclick="app.installPWA()">
+          <svg class="icon-sm"><use href="#i-plus"/></svg> 添加到桌面
+        </button>
         <button class="chat-tool-btn" onclick="app.showChatMenu()" style="background:none;">
           <svg class="icon"><use href="#i-info"/></svg>
         </button>
       </div>
       <div class="chat-messages" id="chat-messages"></div>
+      <div class="attachment-preview" id="chat-attachment-preview"></div>
       <div class="chat-input-area" id="chat-input-area">
+        <input type="file" id="chat-attachment-input" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.json,.csv" style="display:none;">
+        <button class="chat-plus-btn" type="button" onclick="app.triggerAttachmentPicker()">
+          <svg class="icon"><use href="#i-plus"/></svg>
+        </button>
         <textarea id="chat-input" rows="1" placeholder="说点什么..." onkeydown="app.handleChatKeydown(event)"></textarea>
         <button class="chat-send-btn" onclick="app.sendMessage()">
           <svg class="icon"><use href="#i-send"/></svg>
@@ -1042,5 +1071,14 @@ svg.icon, svg.icon-sm, svg.icon-lg, svg.icon-xl { fill: none; stroke: currentCol
 </div>
 
 <script src="app.js"></script>
+  <div class="auth-overlay" id="auth-overlay">
+    <div class="auth-card">
+      <h2>先输入密码</h2>
+      <p>页面现在改成站内登录，不再弹浏览器那个丑密码框。</p>
+      <input class="auth-input" id="auth-password" type="password" placeholder="输入面板密码" autocomplete="current-password">
+      <button class="auth-submit" type="button" onclick="app.submitDashboardLogin()">进入面板</button>
+      <div class="auth-error" id="auth-error"></div>
+    </div>
+  </div>
 </body>
 </html>

@@ -25,3 +25,18 @@ saki-gateway/src/**/*.egg-info/
 *.sqlite
 *.sqlite3
 *.jsonl
+
+# Additional local runtime/private artifacts
+_backup/
+saki-gateway-oss/
+saki-gateway/venv/
+saki-gateway/.venv/
+saki-gateway/data/**
+!saki-gateway/data/
+!saki-gateway/data/config.example.json
+*.bak
+*.bak-*
+SOUL.md
+IDENTITY.md
+MEMORY.md
+memory/

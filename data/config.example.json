@@ -1,0 +1,108 @@
+{
+  "host": "0.0.0.0",
+  "port": 3457,
+  "debug": true,
+  "persona": {
+    "partner_name": "Aelion",
+    "partner_role": "AI companion",
+    "call_user": "朋友",
+    "core_identity": "温柔、直接、生活化，避免客服腔，像一个长期相处的 AI 伴侣。",
+    "boundaries": "自然交流，不过度说教；涉及敏感场景时以双方自愿、清晰边界和安全感为前提。"
+  },
+  "chat_api": {
+    "enabled": true,
+    "label": "chat",
+    "base_url": "https://api.example.com/v1",
+    "api_key": "YOUR_CHAT_API_KEY",
+    "model": "your-chat-model",
+    "stream": false
+  },
+  "action_api": {
+    "enabled": true,
+    "backend_type": "managed",
+    "base_url": "https://api.example.com/v1",
+    "api_key": "YOUR_ACTION_API_KEY",
+    "model": "your-action-model",
+    "allow_subagents": false,
+    "enable_mcp": true
+  },
+  "search_api": {
+    "enabled": false,
+    "label": "search",
+    "base_url": "https://api.example.com/v1",
+    "api_key": "YOUR_SEARCH_API_KEY",
+    "model": "your-search-model",
+    "stream": false
+  },
+  "tts_api": {
+    "enabled": false,
+    "label": "tts",
+    "base_url": "https://api.example.com/v1",
+    "api_key": "YOUR_TTS_API_KEY",
+    "model": "your-tts-model",
+    "stream": true
+  },
+  "image_api": {
+    "enabled": false,
+    "label": "image",
+    "base_url": "https://api.example.com/v1",
+    "api_key": "YOUR_IMAGE_API_KEY",
+    "model": "your-image-model",
+    "stream": true
+  },
+  "memory": {
+    "enabled": true,
+    "database_path": "data/memories.db",
+    "operational_db_path": "data/gateway.db",
+    "event_log_path": "data/raw/events.jsonl",
+    "hot_memory_path": "data/active_memory.md",
+    "core_memory_path": "data/core_profile.md",
+    "vector_weight": 0.7,
+    "keyword_weight": 0.3,
+    "default_limit": 8
+  },
+  "session": {
+    "enabled": true,
+    "idle_rotation_minutes": 360,
+    "recent_message_limit": 50
+  },
+  "scheduler": {
+    "enabled": true,
+    "poll_interval_seconds": 15,
+    "proactive_enabled": false,
+    "proactive_idle_hours": 24,
+    "proactive_idle_minutes": 0,
+    "proactive_cooldown_hours": 24,
+    "proactive_max_profiles_per_tick": 2,
+    "proactive_day_start_hour": 8,
+    "proactive_day_end_hour": 22
+  },
+  "notion_sync": {
+    "enabled": false,
+    "token": "YOUR_NOTION_TOKEN",
+    "database_id": "YOUR_NOTION_DATABASE_ID",
+    "sync_frequency_minutes": 180
+  },
+  "channels": {
+    "feishu_enabled": false,
+    "napcat_enabled": false,
+    "qqbot_enabled": false,
+    "web_enabled": true,
+    "feishu_app_id": "YOUR_FEISHU_APP_ID",
+    "feishu_app_secret": "YOUR_FEISHU_APP_SECRET",
+    "qqbot_app_id": "YOUR_QQBOT_APP_ID",
+    "qqbot_token": "YOUR_QQBOT_TOKEN",
+    "napcat_base_url": "http://127.0.0.1:3000",
+    "napcat_access_token": "YOUR_NAPCAT_ACCESS_TOKEN",
+    "feishu_auto_reconnect": true,
+    "feishu_debug": false,
+    "feishu_card_title": "AI Companion",
+    "feishu_patch_interval_ms": 450,
+    "feishu_patch_min_chars": 24
+  },
+  "dashboard_security": {
+    "enabled": true,
+    "password": "sha256:CHANGE_ME_TO_YOUR_OWN_HASH"
+  },
+  "mcp_servers": []
+}

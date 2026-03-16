@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Runtime
+.run/
+*.log
+*.pid
+
+# Local config and secrets
+data/config.json
+.env
+.env.*
+
+# Runtime databases
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Runtime logs / imports
+data/notion_import/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

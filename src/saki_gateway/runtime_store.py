@@ -174,6 +174,9 @@ class RuntimeStore:
             def _matches_target(candidate: sqlite3.Row) -> bool:
                 if candidate is None:
                     return False
+                # 跨 channel 共享上下文：对于 local-user，忽略所有 channel 相关参数
+                if profile_id == "local-user":
+                    return True
                 if channel and str(candidate["channel"] or "") != channel:
                     return False
                 if channel_user_id and str(candidate["channel_user_id"] or "") != channel_user_id:
@@ -207,22 +210,24 @@ class RuntimeStore:
             if row is None:
                 clauses = ["profile_id = ?"]
                 params: List[Any] = [profile_id]
-                if channel:
-                    clauses.append("channel = ?")
-                    params.append(channel)
-                if channel_user_id:
-                    clauses.append("channel_user_id = ?")
-                    params.append(channel_user_id)
-                if chat_id:
-                    clauses.append("chat_id = ?")
-                    params.append(chat_id)
-                else:
-                    clauses.append("COALESCE(chat_id, '') = ''")
-                if thread_id:
-                    clauses.append("thread_id = ?")
-                    params.append(thread_id)
-                else:
-                    clauses.append("COALESCE(thread_id, '') = ''")
+                # 跨 channel 共享上下文：对于 local-user，只按 profile_id 查找
+                if profile_id != "local-user":
+                    if channel:
+                        clauses.append("channel = ?")
+                        params.append(channel)
+                    if channel_user_id:
+                        clauses.append("channel_user_id = ?")
+                        params.append(channel_user_id)
+                    if chat_id:
+                        clauses.append("chat_id = ?")
+                        params.append(chat_id)
+                    else:
+                        clauses.append("COALESCE(chat_id, '') = ''")
+                    if thread_id:
+                        clauses.append("thread_id = ?")
+                        params.append(thread_id)
+                    else:
+                        clauses.append("COALESCE(thread_id, '') = ''")
                 candidate = self.conn.execute(
                     f"SELECT * FROM sessions WHERE {' AND '.join(clauses)} ORDER BY last_activity_at DESC LIMIT 1",
                     tuple(params),
@@ -349,11 +354,15 @@ class RuntimeStore:
     ) -> List[Dict[str, str]]:
         with self._lock:
             rows = self.conn.execute(
-                "SELECT role, content FROM session_messages WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+                "SELECT role, content, created_at FROM session_messages WHERE session_id = ? ORDER BY id DESC LIMIT ?",
                 (session_id, limit),
             ).fetchall()
         items = [
-            {"role": str(row["role"]), "content": str(row["content"])}
+            {
+                "role": str(row["role"]),
+                "content": str(row["content"]),
+                "created_at": str(row["created_at"] or ""),
+            }
             for row in reversed(rows)
         ]
         return items

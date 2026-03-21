@@ -317,6 +317,51 @@ class FeishuChannel:
         if getattr(response, "code", -1) != 0:
             raise ValueError(f"feishu send text failed: {getattr(response, 'msg', 'unknown error')}")
 
+
+    def send_audio(self, open_id: str, audio_bytes: bytes, chat_id: str = "", chat_type: str = "p2p") -> None:
+        """发送语音消息到飞书"""
+        import io
+        client = self._require_client()
+        import lark_oapi as lark
+
+        # 1. 上传音频文件
+        file_data = io.BytesIO(audio_bytes)
+        upload_request = (
+            lark.im.v1.CreateFileRequest.builder()
+            .request_body(
+                lark.im.v1.CreateFileRequestBody.builder()
+                .file_type("opus")
+                .file_name("voice.mp3")
+                .file(file_data)
+                .build()
+            )
+            .build()
+        )
+        upload_response = client.im.v1.file.create(upload_request)
+        if getattr(upload_response, "code", -1) != 0:
+            raise ValueError(f"feishu upload audio failed: {getattr(upload_response, 'msg', 'unknown error')}")
+        file_key = str(getattr(getattr(upload_response, "data", None), "file_key", "") or "")
+        if not file_key:
+            raise ValueError("feishu upload audio returned empty file_key")
+
+        # 2. 发送语音消息
+        receive_id_type, receive_id = self._resolve_receive_target(open_id, chat_id, chat_type)
+        request = (
+            lark.im.v1.CreateMessageRequest.builder()
+            .receive_id_type(receive_id_type)
+            .request_body(
+                lark.im.v1.CreateMessageRequestBody.builder()
+                .receive_id(receive_id)
+                .msg_type("audio")
+                .content(json.dumps({"file_key": file_key}, ensure_ascii=False))
+                .uuid(str(uuid.uuid4()))
+                .build()
+            )
+            .build()
+        )
+        response = client.im.v1.message.create(request)
+        if getattr(response, "code", -1) != 0:
+            raise ValueError(f"feishu send audio failed: {getattr(response, 'msg', 'unknown error')}")
     def download_message_resource(self, message_id: str, resource_type: str, file_key: str, out_dir: str) -> str:
         client = self._require_client()
         import lark_oapi as lark

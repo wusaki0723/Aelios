@@ -31,3 +31,16 @@ data/notion_import/
 .DS_Store
 .vscode/
 .idea/
+
+# Runtime debug / dumps
+data/debug_*.json
+data/prompt_dump.txt
+data/active_memory.md.backup
+data/raw/events.jsonl
+
+# Temp files
+*.tmp
+*.py.tmp
+
+# Demo copy
+sullyos-copy/

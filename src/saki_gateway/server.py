@@ -9,7 +9,7 @@ import secrets
 import sys
 import threading
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -91,6 +91,7 @@ class GatewayApp:
             memory_store=self.memory_store,
             runtime_store=self.runtime_store,
             dispatch_message=self.dispatch_proactive_message,
+            dispatch_audio=self.dispatch_audio,
         )
         self._ensure_context_files(refresh=True)
         self.feishu_channel = self._build_feishu_channel()
@@ -317,7 +318,7 @@ class GatewayApp:
             stream=False,
             temperature=float(body.get("temperature", 0.7)),
         )
-        content = extract_text_content(response)
+        content = self._clean_model_output(extract_text_content(response))
         self._append_messages_to_session(
             session.session_id,
             profile_id,
@@ -415,7 +416,7 @@ class GatewayApp:
         )
         if isinstance(response, dict) and response.get("choices"):
             return response
-        content = extract_text_content(response)
+            content = self._clean_model_output(extract_text_content(response))
         return {
             "id": "chatcmpl-saki",
             "object": "chat.completion",
@@ -509,7 +510,7 @@ class GatewayApp:
         max_rounds: int = 6,
     ) -> tuple[str, Dict[str, Any], list[Dict[str, Any]]]:
         base_messages = self._build_main_chat_messages(
-            messages, tool_contexts, session_id
+            messages, tool_contexts, session_id, profile_id
         )
         tool_specs = self._chat_tool_specs(profile_id)
         loop_tool_contexts: list[Dict[str, Any]] = []
@@ -529,7 +530,7 @@ class GatewayApp:
                 tool_choice="auto" if tool_specs else "none",
             )
             last_response = response
-            content = extract_text_content(response).strip()
+            content = self._clean_model_output(extract_text_content(response))
             tool_calls = extract_tool_calls(response)
             finish_reason = extract_finish_reason(response)
             if not tool_calls:
@@ -697,7 +698,7 @@ class GatewayApp:
             stream=False,
             temperature=temperature,
         )
-        content = extract_text_content(response).strip()
+        content = self._clean_model_output(extract_text_content(response))
         return (content or fallback_content), response
 
     def _build_action_runtime_messages(
@@ -732,7 +733,7 @@ class GatewayApp:
         if session_id:
             recent_messages = self.runtime_store.list_recent_messages(
                 session_id,
-                limit=max(50, self.config_store.config.session.recent_message_limit),
+                limit=50,
             )
         if len(messages) > 1:
             recent_messages = []
@@ -1008,6 +1009,155 @@ class GatewayApp:
             raise ValueError("messages or prompt is required")
         return messages
 
+    def _format_prompt_timestamp(self, value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return raw
+        # 统一转换为 UTC+8
+        target_tz = timezone(timedelta(hours=8))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(target_tz)
+        return dt.isoformat(timespec="seconds")
+
+
+    def _clean_model_output(self, text: str) -> str:
+        """清理模型输出中的格式污染"""
+        if not text:
+            return text
+        # 清理末尾的时间戳
+        text = re.sub(r'\n?\[Timestamp:.*?\]', '', text)
+        text = re.sub(r'\n?\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}[^\]]*\]', '', text)
+        # 清理末尾的角色标签（模型错误模仿上下文格式）
+        text = re.sub(r'\n?【(user|assistant)】.*', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\n?\[user\].*', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\n?[▸◂]\s*(user|assistant)?.*$', '', text, flags=re.IGNORECASE)
+        return text.strip()
+
+    def _keyword_tokens(self, *parts: str) -> list[str]:
+        seen: set[str] = set()
+        tokens: list[str] = []
+        for part in parts:
+            text = str(part or "").lower()
+            for token in re.findall(r"[\\w\\u4e00-\\u9fff]+", text):
+                token = token.strip()
+                if len(token) <= 1 and not re.search(r"[\\u4e00-\\u9fff]", token):
+                    continue
+                if token in seen:
+                    continue
+                seen.add(token)
+                tokens.append(token)
+        return tokens
+
+    def _fallback_relevant_memory_pool(
+        self,
+        *,
+        pool_items: list[Dict[str, Any]],
+        latest_user_text: str,
+        recent_messages: list[Dict[str, Any]],
+        limit: int = 8,
+    ) -> str:
+        if not pool_items:
+            return ""
+        context_text = "\n".join(
+            str(item.get("content", "") or "") for item in recent_messages[-12:]
+        )
+        query_tokens = self._keyword_tokens(latest_user_text, context_text)
+        scored: list[tuple[int, int, Dict[str, Any]]] = []
+        for index, item in enumerate(pool_items):
+            haystack = " ".join(
+                [
+                    str(item.get("title", "") or ""),
+                    str(item.get("content", "") or ""),
+                    str(item.get("category", "") or ""),
+                ]
+            ).lower()
+            score = 0
+            for token in query_tokens:
+                if token and token in haystack:
+                    score += max(1, min(6, len(token)))
+            scored.append((score, -index, item))
+        ranked = [item for score, _, item in sorted(scored, reverse=True) if score > 0]
+        selected = ranked[:limit]
+        if not selected:
+            selected = pool_items[: min(limit, len(pool_items))]
+        lines: list[str] = []
+        for index, item in enumerate(selected, start=1):
+            item_type = str(item.get("type", "memory") or "memory")
+            prefix = "昨日日志" if item_type == "yesterday_log" else f"长期记忆/{item.get('category', 'other')}"
+            lines.append(
+                f"{index}. [{prefix}] {str(item.get('title', '') or '').strip()}\n{str(item.get('content', '') or '').strip()}"
+            )
+        return "\n\n".join(lines).strip()
+
+    def _compress_relevant_memory_pool(
+        self,
+        *,
+        pool_items: list[Dict[str, Any]],
+        latest_user_text: str,
+        recent_messages: list[Dict[str, Any]],
+    ) -> str:
+        if not pool_items:
+            return ""
+        fallback = self._fallback_relevant_memory_pool(
+            pool_items=pool_items,
+            latest_user_text=latest_user_text,
+            recent_messages=recent_messages,
+        )
+        provider = self.config_store.config.action_api
+        if not self._provider_ready(provider):
+            return fallback
+        recent_lines: list[str] = []
+        for item in recent_messages[-12:]:
+            role = str(item.get("role", "unknown") or "unknown")
+            content = str(item.get("content", "") or "").strip()
+            if not content:
+                continue
+            timestamp = self._format_prompt_timestamp(item.get("created_at", ""))
+            prefix = f"[{timestamp}] " if timestamp else ""
+            recent_lines.append(f"{prefix}{role}: {content}")
+        pool_lines: list[str] = []
+        for index, item in enumerate(pool_items, start=1):
+            item_type = str(item.get("type", "memory") or "memory")
+            header = "昨日日志" if item_type == "yesterday_log" else f"长期记忆/{item.get('category', 'other')}"
+            created_at = self._format_prompt_timestamp(item.get("created_at", ""))
+            title = str(item.get("title", "") or "").strip()
+            content = str(item.get("content", "") or "").strip()
+            meta = f" [{created_at}]" if created_at else ""
+            pool_lines.append(f"{index}. [{header}]{meta} {title}\n{content}")
+        prompt = (
+            "请根据最新用户消息和最近上下文，从候选记忆池中挑选当前最相关的内容，并压缩成给主聊天模型使用的精简参考。\n"
+            "要求：\n"
+            "1. 只保留与当前对话直接相关的事实、偏好、承诺、关系动态、情绪线索、背景信息。\n"
+            "2. 不要照抄整段原文，不要逐条搬运全部记忆；要提炼、合并、压缩。\n"
+            "3. 不要编造，不要补充候选池之外的信息。\n"
+            "4. 输出简洁中文，优先使用项目符号；控制在 3-8 条。\n"
+            f"最新用户消息：\n{latest_user_text or '（空）'}\n\n"
+            "最近上下文：\n"
+            + ("\n".join(recent_lines) if recent_lines else "（空）")
+            + "\n\n候选记忆池：\n"
+            + "\n\n".join(pool_lines)
+        )
+        try:
+            result = request_chat_completion(
+                provider,
+                [
+                    {"role": "system", "content": "你是记忆压缩助手，只输出压缩结果正文。"},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=False,
+                temperature=0.2,
+                timeout=25,
+            )
+            compressed = extract_text_content(result).strip()
+            return compressed or fallback
+        except Exception:
+            return fallback
+
     def _build_main_chat_messages(
         self,
         messages: list[Dict[str, Any]],
@@ -1017,19 +1167,20 @@ class GatewayApp:
     ) -> list[Dict[str, Any]]:
         config = self.config_store.config
         local_now = datetime.now().astimezone()
-        profile = (profile_id or "local-user").strip() or "local-user"
+        profile = (profile_id or "default").strip() or "default"
         system_parts = [
-            "请严格吸收以下 6 个上下文部分，但不要在回答里暴露这些分段标题或系统注入痕迹。",
-            f"（1）人设 persona：你是用户的 {config.persona.partner_role}，名字是 {config.persona.partner_name}。",
-            f"补充设定：对用户称呼 {config.persona.call_user}。说话风格：{config.persona.core_identity}。边界要求：{config.persona.boundaries}",
-            f"当前服务器本地时间：{local_now.isoformat(timespec='seconds')}。请以这个本地时间判断现在是白天、夜晚、工作日还是周末；用户未注明时区或 UTC 偏移时按本地时间理解。",
+            "请严格吸收以下上下文，但不要在回答里暴露这些分段标题或系统注入痕迹。",
             "你是唯一直接对用户说话的模型。工具层、搜索层、识图层都只能给你补充上下文，不能替你发言。",
             "默认先用工具层/行动层完成搜索、读链接、识图、记忆检索和提醒创建；只有工具失败、未配置，或纯陪伴聊天不需要工具时，才由你直接兜底回答。",
         ]
 
         persona_block = self._read_text_file(self._core_memory_file()).strip()
+        # 过滤掉"更新时间"行，避免频繁变动影响缓存命中
         if persona_block:
-            system_parts.append("\n（1）人设（persona）\n" + persona_block)
+            filtered_lines = [line for line in persona_block.split("\n") if not line.startswith("更新时间")]
+            persona_block = "\n".join(filtered_lines).strip()
+            if persona_block:
+                system_parts.append("\n（1）系统指令 / persona\n" + persona_block)
 
         important_memories = [
             record
@@ -1039,62 +1190,149 @@ class GatewayApp:
         ]
         if important_memories:
             lines = []
-            for index, record in enumerate(important_memories, start=1):
+            for index, record in enumerate(
+                sorted(important_memories, key=lambda item: item.updated_at), start=1
+            ):
                 lines.append(f"{index}. [{record.category}] {record.key}\n{record.content.strip()}")
-            system_parts.append("\n（2）长期记忆重要度为 1 的部分\n" + "\n\n".join(lines))
+            system_parts.append("\n（2）重要度为 1 的记忆\n" + "\n\n".join(lines))
 
-        recent_messages = []
+        recent_messages: list[Dict[str, Any]] = []
         if session_id:
             recent_messages = self.runtime_store.list_recent_messages(
                 session_id,
-                limit=max(50, self.config_store.config.session.recent_message_limit),
+                limit=50,
             )
         if len(messages) > 1:
             recent_messages = []
-        if recent_messages:
+
+        latest_user_text = ""
+        latest_user_timestamp = ""
+        context_messages = list(recent_messages)
+        for item in reversed(messages):
+            if str(item.get("role", "") or "") != "user":
+                continue
+            latest_user_text = str(item.get("content", "") or "").strip()
+            latest_user_timestamp = self._format_prompt_timestamp(item.get("created_at", ""))
+            break
+        if latest_user_text and context_messages:
+            last_context = context_messages[-1]
+            if (
+                str(last_context.get("role", "") or "") == "user"
+                and str(last_context.get("content", "") or "").strip() == latest_user_text
+            ):
+                context_messages = context_messages[:-1]
+
+        if context_messages:
             transcript = []
-            for item in recent_messages[-50:]:
-                transcript.append(
-                    f"{item.get('role', 'unknown')}: {item.get('content', '')}"
-                )
-            system_parts.append("\n（3）最近 50 条上下文\n" + "\n".join(transcript))
+            timestamps = []
+            for item in context_messages[-50:]:
+                msg_content = str(item.get("content", "") or "").strip()
+                if not msg_content:
+                    continue
+                role = str(item.get("role", "unknown") or "unknown")
+                # 清理历史消息中模型错误输出的时间戳和格式
+                cleaned_content = re.sub(r'\n?\[Timestamp:.*?\]\s*$', '', msg_content)
+                cleaned_content = re.sub(r'\n?\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}[^\]]*\]\s*$', '', cleaned_content)
+                # 清理模型错误输出的角色标签（【user】、【assistant】等）
+                cleaned_content = re.sub(r'\n?【(user|assistant)】.*', '', cleaned_content, flags=re.IGNORECASE)
+                cleaned_content = re.sub(r'\n?\[user\].*$', '', cleaned_content, flags=re.IGNORECASE)
+                # 用符号标记角色，避免被模型模仿
+                role_mark = "▸" if role == "user" else "◂"
+                transcript.append(f"{role_mark} {cleaned_content}")
+                ts = self._format_prompt_timestamp(item.get("created_at", ""))
+                if ts:
+                    timestamps.append(ts)
+            if transcript:
+                system_parts.append("\n（3）上下文\n" + "\n".join(transcript))
+            # 时间线作为附加层，只在有意义的时间间隔时显示
+            if len(timestamps) >= 2:
+                timeline_parts = []
+                try:
+                    from datetime import datetime as dt
+                    for i in range(1, len(timestamps)):
+                        try:
+                            t1 = dt.fromisoformat(timestamps[i-1])
+                            t2 = dt.fromisoformat(timestamps[i])
+                            delta_minutes = int((t2 - t1).total_seconds() / 60)
+                            if delta_minutes >= 5:  # 只显示5分钟以上的间隔
+                                timeline_parts.append(f"⏱ {timestamps[i-1][:16]} → {timestamps[i][:16]}（间隔{delta_minutes}分钟）")
+                        except:
+                            pass
+                    if timeline_parts:
+                        system_parts.append("\n【时间线】\n" + "\n".join(timeline_parts[-3:]))  # 最多显示最近3个间隔
+                except:
+                    pass
 
         day_start, _ = self._local_day_bounds()
         daily_log = self.memory_store.get_memory(self._daily_log_memory_id(profile, day_start))
         if daily_log and (daily_log.content or "").strip():
-            system_parts.append("\n（4）今日日志完整推送\n" + daily_log.content.strip())
+            system_parts.append("\n（4）今日日志（全量推送）\n" + daily_log.content.strip())
 
-        if tool_contexts:
-            context_lines = []
-            for index, item in enumerate(tool_contexts, start=1):
-                context_lines.append(
-                    f"[{index}] 类型: {item.get('type', 'unknown')}\n链接: {item.get('url', '')}\n用户备注: {item.get('note', '') or '无'}\n工具整理过后的相关记忆: {item.get('context', '')}"
-                )
-            system_parts.append(
-                "\n（5）tool model 整理过后的相关记忆\n"
-                + "\n\n".join(context_lines)
+        memory_pool: list[Dict[str, Any]] = []
+        low_importance_memories = [
+            record
+            for record in self.memory_store.list_memories(limit=400, memory_kind="long_term")
+            if getattr(record, "category", "") != "memory_refresh"
+            and float(getattr(record, "importance", 0.0) or 0.0) < 1.0
+        ]
+        for record in sorted(low_importance_memories, key=lambda item: item.updated_at, reverse=True):
+            memory_pool.append(
+                {
+                    "type": "memory",
+                    "title": record.key,
+                    "content": record.content,
+                    "category": record.category,
+                    "importance": record.importance,
+                    "created_at": getattr(record, "created_at", ""),
+                }
             )
-
-        latest_reply = ""
-        for item in reversed(messages):
-            if str(item.get("role", "") or "") == "assistant":
-                latest_reply = str(item.get("content", "") or "").strip()
-                if latest_reply:
-                    break
-        if not latest_reply and recent_messages:
-            for item in reversed(recent_messages):
-                if str(item.get("role", "") or "") == "assistant":
-                    latest_reply = str(item.get("content", "") or "").strip()
-                    if latest_reply:
-                        break
-        if latest_reply:
-            system_parts.append("\n（6）最新回复\n" + latest_reply)
-
-        return (
-            [{"role": "system", "content": "\n".join(system_parts)}]
-            + recent_messages
-            + messages
+        yesterday = day_start - timedelta(days=1)
+        yesterday_log = self.memory_store.get_memory(self._daily_log_memory_id(profile, yesterday))
+        if yesterday_log and (yesterday_log.content or "").strip():
+            memory_pool.append(
+                {
+                    "type": "yesterday_log",
+                    "title": f"昨日日志 {yesterday.strftime('%Y-%m-%d')}",
+                    "content": yesterday_log.content.strip(),
+                    "category": "daily_log",
+                    "importance": getattr(yesterday_log, "importance", 0.0),
+                    "created_at": getattr(yesterday_log, "created_at", ""),
+                }
+            )
+        if tool_contexts:
+            for index, item in enumerate(tool_contexts, start=1):
+                context = str(item.get("context", "") or "").strip()
+                if not context:
+                    continue
+                memory_pool.append(
+                    {
+                        "type": "tool_context",
+                        "title": str(item.get("note", "") or item.get("url", "") or f"tool_context_{index}"),
+                        "content": context,
+                        "category": str(item.get("type", "tool") or "tool"),
+                        "importance": 0.0,
+                        "created_at": "",
+                    }
+                )
+        compressed_memory = self._compress_relevant_memory_pool(
+            pool_items=memory_pool,
+            latest_user_text=latest_user_text,
+            recent_messages=context_messages,
         )
+        if compressed_memory:
+            system_parts.append("\n（5）工具 AI 压缩后的记忆\n" + compressed_memory)
+
+        user_line = latest_user_text
+        if latest_user_text:
+            user_line = f"▸ {latest_user_text}"
+        elif messages:
+            last_message = messages[-1]
+            fallback_content = str(last_message.get("content", "") or "").strip()
+            user_line = f"▸ {fallback_content}"
+        if user_line:
+            system_parts.append("\n（6）user 的最新消息\n" + user_line)
+
+        return [{"role": "system", "content": "\n".join(system_parts)}] + messages
 
     def _attachment_file_context(self, attachment: Dict[str, Any]) -> Dict[str, Any]:
         file_name = str(attachment.get("name", "") or "附件").strip() or "附件"
@@ -1469,6 +1707,31 @@ class GatewayApp:
             "channel": channel,
         }
 
+    def dispatch_audio(self, profile_id: str, audio_bytes: bytes, source: str = "tts") -> Dict[str, Any]:
+        """将合成的音频发送到用户所在通道"""
+        profile = self.runtime_store.profile_state(profile_id)
+        channel = str(profile.get("last_channel", "") or "")
+        delivered = False
+        note = ""
+
+        if channel == "feishu" and self.feishu_channel is not None:
+            open_id = str(profile.get("channel_user_id", "") or "")
+            chat_id = str(profile.get("chat_id", "") or "")
+            chat_type = "p2p" if not chat_id else "group"
+            self.feishu_channel.send_audio(
+                open_id, audio_bytes, chat_id=chat_id, chat_type=chat_type
+            )
+            delivered = True
+        else:
+            note = f"audio dispatch not supported on channel: {channel}"
+
+        return {
+            "profile_id": profile_id,
+            "delivered": delivered,
+            "note": note,
+            "channel": channel,
+        }
+
     def _extract_outbound_attachments(self, raw_content: str) -> list[Dict[str, Any]]:
         text = str(raw_content or "")
         attachments: list[Dict[str, Any]] = []
@@ -1525,7 +1788,7 @@ class GatewayApp:
                 stream=False,
                 temperature=0.7,
             )
-            text = extract_text_content(response).strip()
+            text = self._clean_model_output(extract_text_content(response))
             return text or content
         except Exception:
             return content
@@ -1661,12 +1924,12 @@ class GatewayApp:
         }
 
     def get_context_payload(self, profile_id: str = "", session_id: str = "") -> Dict[str, Any]:
-        profile = (profile_id or "local-user").strip() or "local-user"
+        profile = (profile_id or "default").strip() or "default"
         recent_messages = []
         if session_id:
             recent_messages = self.runtime_store.list_recent_messages(
                 session_id,
-                limit=max(50, self.config_store.config.session.recent_message_limit),
+                limit=50,
             )
         day_start, _ = self._local_day_bounds()
         daily_log = self.memory_store.get_memory(self._daily_log_memory_id(profile, day_start))
@@ -1844,7 +2107,8 @@ class GatewayApp:
             return "qqbot:anonymous"
         open_id = str(inbound.get("open_id", "") or "").strip()
         if open_id:
-            return f"feishu:{open_id}"
+            # 飞书私信使用 local-user，与 web 共享上下文
+            return "local-user"
         chat_id = str(inbound.get("chat_id", "") or "").strip()
         if chat_id:
             return f"feishu-chat:{chat_id}"
@@ -1927,19 +2191,7 @@ class GatewayApp:
             f"核心气质: {persona.core_identity}",
             f"互动边界: {persona.boundaries}",
         ]
-        important_categories = {"preference", "promise", "anniversary"}
-        important_memories = [
-            item
-            for item in self.list_memories_grouped().get("items", [])
-            if item.get("category") in important_categories
-        ][:8]
-        if important_memories:
-            lines.append("")
-            lines.append("关键长期记忆:")
-            for item in important_memories:
-                lines.append(
-                    f"- [{item.get('category', 'other')}] {item.get('title', '')}: {item.get('content', '')[:140]}"
-                )
+        # 不再单独拼接"关键长期记忆"，由 _build_main_chat_messages 统一处理 importance>=1 的记忆
         return "\n".join(lines).strip() + "\n"
 
     def _render_active_memory(self) -> str:

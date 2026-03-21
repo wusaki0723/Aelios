@@ -1313,7 +1313,7 @@ class SakiPhoneApp {
       ${this.buildApiSection('search_api', '搜索 API', 'search', searchApi)}
 
       <!-- TTS API -->
-      ${this.buildApiSection('tts_api', 'TTS API', 'mic', ttsApi)}
+      ${this.buildTtsApiSection(ttsApi)}
 
       <!-- Image API -->
       ${this.buildApiSection('image_api', '图像 API', 'star', imageApi)}
@@ -1553,6 +1553,38 @@ class SakiPhoneApp {
     `;
   }
 
+  buildTtsApiSection(api) {
+    return `
+      <div class="settings-section" id="sec-tts_api">
+        <h4>${svgIcon('mic', 'icon-sm')} TTS API</h4>
+        <div class="setting-item toggle">
+          <label>启用</label>
+          <label class="switch">
+            <input type="checkbox" id="cfg-tts_api-enabled" ${api.enabled ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-item">
+          <label>Group ID</label>
+          <input type="text" id="cfg-tts_api-group_id" value="${this.escAttr(api.group_id || '')}" placeholder="MiniMax Group ID">
+        </div>
+        <div class="setting-item">
+          <label>API Key</label>
+          <input type="password" id="cfg-tts_api-api_key" value="${this.escAttr(api.api_key || '')}" placeholder="MiniMax API Key">
+        </div>
+        <div class="setting-item">
+          <label>音色 ID</label>
+          <input type="text" id="cfg-tts_api-voice_id" value="${this.escAttr(api.voice_id || 'Chinese (Mandarin)_Unrestrained_Young_Man')}" placeholder="Chinese (Mandarin)_Unrestrained_Young_Man">
+        </div>
+        <div class="setting-item">
+          <label>模型</label>
+          <input type="text" id="cfg-tts_api-model" value="${this.escAttr(api.model || 'speech-2.8-hd')}" placeholder="speech-2.8-hd">
+        </div>
+        <button class="btn btn-primary btn-block btn-save" onclick="app.saveSection('tts_api')">保存</button>
+      </div>
+    `;
+  }
+
   toggleFeishuFields() {
     const enabled = document.getElementById('cfg-channels-feishu_enabled')?.checked;
     const fields = document.getElementById('feishu-fields');
@@ -1584,7 +1616,6 @@ class SakiPhoneApp {
       case 'chat_api':
       case 'action_api':
       case 'search_api':
-      case 'tts_api':
       case 'image_api':
         if (section === 'action_api') {
           payload[section] = {
@@ -1602,6 +1633,16 @@ class SakiPhoneApp {
             model: this.getVal(`cfg-${section}-model`),
           };
         }
+        break;
+
+      case 'tts_api':
+        payload[section] = {
+          enabled: this.getChecked('cfg-tts_api-enabled'),
+          group_id: this.getVal('cfg-tts_api-group_id'),
+          api_key: this.getVal('cfg-tts_api-api_key'),
+          voice_id: this.getVal('cfg-tts_api-voice_id'),
+          model: this.getVal('cfg-tts_api-model'),
+        };
         break;
 
       case 'memory':

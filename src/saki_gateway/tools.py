@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import AppConfig
+from .tts import minimax_tts
 from .llm import extract_text_content, request_chat_completion
 from .mcp import McpBridge
 
@@ -409,6 +410,7 @@ def build_default_registry(
     memory_store: Any = None,
     runtime_store: Any = None,
     dispatch_message: Optional[Callable[[str, str, str], Dict[str, Any]]] = None,
+    dispatch_audio: Optional[Callable[[str, bytes, str], Dict[str, Any]]] = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     mcp_bridge = McpBridge(config_getter)
@@ -634,6 +636,37 @@ def build_default_registry(
             "note": "This tool output is meant to be injected into the main chat model context, not sent to the user directly.",
         }
 
+    def send_voice(args: Dict[str, Any]) -> Dict[str, Any]:
+        text = str(args.get("text", "") or "").strip()
+        if not text:
+            raise ValueError("text is required")
+        profile_id = str(args.get("profile_id", "") or "").strip()
+
+        config = config_getter()
+        tts_config = config.tts_api
+        if not tts_config.enabled:
+            return {"ok": False, "error": "TTS not enabled"}
+
+        tts_params = {
+            "group_id": tts_config.group_id,
+            "api_key": tts_config.api_key,
+            "voice_id": tts_config.voice_id,
+        }
+        audio_bytes = minimax_tts(text, tts_params)
+        if audio_bytes is None:
+            return {"ok": False, "error": "TTS synthesis failed"}
+
+        if dispatch_audio is not None and profile_id:
+            try:
+                result = dispatch_audio(profile_id, audio_bytes, "send_voice")
+                result["ok"] = True
+                result["audio_size"] = len(audio_bytes)
+                return result
+            except Exception as error:
+                return {"ok": False, "error": str(error), "audio_size": len(audio_bytes)}
+
+        return {"ok": True, "audio_size": len(audio_bytes), "note": "audio synthesized but no dispatch target"}
+
     def call_mcp(args: Dict[str, Any]) -> Dict[str, Any]:
         server = str(args.get("server", "")).strip()
         tool = str(args.get("tool", "")).strip()
@@ -806,6 +839,28 @@ def build_default_registry(
             },
             enabled=True,
             execute=analyze_image,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            tool_id="send_voice",
+            description="将文本合成为语音消息发送给用户。当用户说'发语音'、'念给我听'、'想听你的声音'、'朗读'时使用此工具。参数 text 是要朗读的文本内容。",
+            schema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The text to synthesize into speech",
+                    },
+                    "profile_id": {
+                        "type": "string",
+                        "description": "Target profile ID for delivery",
+                    },
+                },
+                "required": ["text"],
+            },
+            enabled=dispatch_audio is not None and config_getter().tts_api.enabled,
+            execute=send_voice,
         )
     )
     registry.register(

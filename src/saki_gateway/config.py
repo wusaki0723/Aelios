@@ -116,6 +116,15 @@ class McpServerConfig:
 
 
 @dataclass
+class TtsApiConfig:
+    enabled: bool = False
+    api_key: str = ''
+    group_id: str = ''
+    voice_id: str = 'Chinese (Mandarin)_Unrestrained_Young_Man'
+    base_url: str = ''
+
+
+@dataclass
 class AppConfig:
     host: str = "0.0.0.0"
     port: int = 3457
@@ -128,8 +137,8 @@ class AppConfig:
     search_api: ApiProviderConfig = field(
         default_factory=lambda: ApiProviderConfig(enabled=False, label="search")
     )
-    tts_api: ApiProviderConfig = field(
-        default_factory=lambda: ApiProviderConfig(enabled=False, label="tts")
+    tts_api: TtsApiConfig = field(
+        default_factory=lambda: TtsApiConfig(enabled=False)
     )
     image_api: ApiProviderConfig = field(
         default_factory=lambda: ApiProviderConfig(enabled=False, label="image")

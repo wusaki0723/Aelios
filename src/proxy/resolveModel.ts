@@ -2,11 +2,11 @@ import type { Env, KeyProfile } from "../types";
 
 export function resolveTargetModel(requestModel: string, profile: KeyProfile, env: Env): string {
   const publicModel = env.PUBLIC_MODEL_NAME || "companion";
-  const defaultModel = env.DEFAULT_UPSTREAM_MODEL;
+  const defaultModel = env.CHAT_MODEL || env.DEFAULT_UPSTREAM_MODEL;
   const globalPassthrough = env.ALLOW_MODEL_PASSTHROUGH === "true";
 
   if (!defaultModel) {
-    throw new Error("Missing DEFAULT_UPSTREAM_MODEL");
+    throw new Error("Missing CHAT_MODEL");
   }
 
   if (!requestModel || requestModel === publicModel) {

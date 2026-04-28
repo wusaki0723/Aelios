@@ -59,7 +59,7 @@ async function searchWithVectorize(
   env: Env,
   input: { namespace: string; query: string; types?: string[]; topK: number }
 ): Promise<Array<MemoryRecord & { score: number }> | null> {
-  if (!env.VECTORIZE || !env.EMBEDDING_MODEL || !input.query.trim()) return null;
+  if (!env.VECTORIZE || !input.query.trim()) return null;
 
   const vector = await createEmbedding(env, input.query);
   if (!vector) return null;

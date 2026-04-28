@@ -1,6 +1,8 @@
 import type { Env, MemoryRecord } from "../types";
 import { callOpenAICompatEmbeddings } from "../proxy/openaiAdapter";
 
+const DEFAULT_EMBEDDING_MODEL = "@cf/google/embeddinggemma-300m";
+
 function readEmbedding(result: unknown): number[] | null {
   if (!result || typeof result !== "object") return null;
   const value = result as {
@@ -30,9 +32,9 @@ function readEmbedding(result: unknown): number[] | null {
 }
 
 export async function createEmbedding(env: Env, text: string): Promise<number[] | null> {
-  if (!env.EMBEDDING_MODEL) return null;
+  const model = env.EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
   const response = await callOpenAICompatEmbeddings(env, {
-    model: env.EMBEDDING_MODEL,
+    model,
     input: text
   });
 

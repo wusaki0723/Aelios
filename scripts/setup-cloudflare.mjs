@@ -18,7 +18,15 @@ const vectorizeBinding =
 const vectorizeDimensions = process.env.CMP_VECTORIZE_DIMENSIONS || "768";
 const vectorizeMetric = process.env.CMP_VECTORIZE_METRIC || "cosine";
 const queueName = process.env.CMP_QUEUE_NAME || "companion-memory";
-const aiGatewayBaseUrl = process.env.AI_GATEWAY_BASE_URL || process.env.CMP_AI_GATEWAY_BASE_URL;
+const visibleVarNames = [
+  "AI_GATEWAY_BASE_URL",
+  "CHATBOX_API_KEY",
+  "CF_AIG_TOKEN",
+  "CHAT_MODEL",
+  "MEMORY_FILTER_MODEL",
+  "MEMORY_MODEL",
+  "VISION_MODEL"
+];
 
 function run(args, options = {}) {
   const result = spawnSync("npx", ["wrangler", ...args], {
@@ -183,26 +191,46 @@ function ensureQueue() {
   run(["queues", "create", queueName], { allowFailure: true });
 }
 
-function ensureAiGatewayBaseUrl() {
-  if (!aiGatewayBaseUrl) {
-    console.log("\nAI_GATEWAY_BASE_URL is not set; leaving wrangler.toml value unchanged.");
-    return;
-  }
+function escapeTomlString(value) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
 
-  const escaped = aiGatewayBaseUrl.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+function ensureVarsHeader(toml) {
+  if (toml.includes("[vars]")) return toml;
+  return `${toml.trimEnd()}\n\n[vars]\n`;
+}
+
+function upsertVarFromEnvironment(name, value) {
   let toml = readFileSync(wranglerTomlPath, "utf8");
+  const escaped = escapeTomlString(value);
 
-  if (toml.includes("AI_GATEWAY_BASE_URL")) {
-    toml = toml.replace(/AI_GATEWAY_BASE_URL\s*=\s*"[^"]*"/, `AI_GATEWAY_BASE_URL = "${escaped}"`);
+  if (new RegExp(`^${name}\\s*=`, "m").test(toml)) {
+    toml = toml.replace(new RegExp(`^${name}\\s*=\\s*"[^"]*"`, "m"), `${name} = "${escaped}"`);
   } else {
-    toml = `${toml.trimEnd()}\n\n[vars]\nAI_GATEWAY_BASE_URL = "${escaped}"\n`;
+    toml = ensureVarsHeader(toml).replace("[vars]\n", `[vars]\n${name} = "${escaped}"\n`);
   }
 
   writeFileSync(wranglerTomlPath, toml);
-  console.log("AI_GATEWAY_BASE_URL is ready.");
 }
 
-ensureAiGatewayBaseUrl();
+function ensureVisibleVars() {
+  let changed = 0;
+
+  for (const name of visibleVarNames) {
+    const value = process.env[name] || (name === "AI_GATEWAY_BASE_URL" ? process.env.CMP_AI_GATEWAY_BASE_URL : "");
+    if (!value) continue;
+    upsertVarFromEnvironment(name, value);
+    changed += 1;
+  }
+
+  if (changed > 0) {
+    console.log(`\nVisible Worker variables synced from Cloudflare build env: ${changed}`);
+  } else {
+    console.log("\nNo visible Worker variables found in build env; leaving wrangler.toml values unchanged.");
+  }
+}
+
+ensureVisibleVars();
 ensureD1();
 ensureVectorize();
 ensureQueue();

@@ -10,7 +10,7 @@
 - D1 保存用户消息、助手消息和 usage log
 - 流式响应会边返回给前端，边累计助手回复，结束后写入 D1
 - 记忆 API：手动写入、列出、读取、修改、软删除、搜索
-- 聊天请求会按 `INJECTION_MODE` 自动注入长期记忆
+- 聊天请求会自动注入长期记忆
 - 可用 `MEMORY_FILTER_MODEL` 在注入前筛选、压缩候选记忆
 - 自动路由：模型名包含 `anthropic` 或 `claude` 时走 Claude native + 显式 prompt cache，其余走 OpenAI-compatible
 - 聊天结束后通过 Queue 自动抽取长期记忆
@@ -41,26 +41,31 @@ Build command: npm ci
 Deploy command: npm run setup:cloudflare && npx wrangler deploy --keep-vars
 ```
 
-在 Cloudflare 的构建配置里，找到 `Variables and Secrets`。现在你只需要管这 3 个 Text：
+在 Cloudflare 的构建配置里，找到 `Variables and Secrets`。现在你只需要新增这些 Text：
 
 ```text
 AI_GATEWAY_BASE_URL       普通变量，可以填到 gateway id 或 /compat 结尾
 CHATBOX_API_KEY           Text，自己编一个 sk-xxx
 CF_AIG_TOKEN              Text，你的 Cloudflare AI Gateway token
+CHAT_MODEL                主聊天模型，比如 anthropic/claude-sonnet-4-5
+MEMORY_FILTER_MODEL       记忆压缩分拣模型，比如 openai/gpt-4.1-mini
+MEMORY_MODEL              记忆小秘书模型，比如 google-ai-studio/gemini-2.5-flash
+VISION_MODEL              导盲犬视觉模型，比如 openai/gpt-4.1-mini
 ```
 
-如果只看到了 `AI_GATEWAY_BASE_URL`，就点 `Add variable` 新增 `CHATBOX_API_KEY` 和 `CF_AIG_TOKEN`。不用 Secret，直接 Text。
-
-其他模型和开关都已经写在 `wrangler.toml`，不用你填：
+四个模型名分别是：
 
 ```text
-DEFAULT_UPSTREAM_MODEL      主聊天模型
-MEMORY_MODEL                自动抽记忆的小模型
-MEMORY_FILTER_MODEL         记忆筛选压缩小模型
-EMBEDDING_MODEL             向量模型，默认 @cf/google/embeddinggemma-300m
+CHAT_MODEL           平时聊天用的大模型
+MEMORY_FILTER_MODEL  压缩、分拣记忆的小模型
+MEMORY_MODEL         聊天结束后整理长期记忆的小秘书
+VISION_MODEL         以后处理图片/视觉输入的导盲犬
 ```
 
-其他行为自动开启：Claude 自动路由、Claude cache_control、记忆注入、记忆抽取、Cache API。
+如果只看到了 `AI_GATEWAY_BASE_URL`，就点 `Add variable` 自己新增上面这些名字和值。都可以直接 Text。
+
+向量模型不用填，固定默认 `@cf/google/embeddinggemma-300m`，Vectorize 维度按 768。
+其他开关不用填：Claude 自动路由、Claude cache_control、记忆注入、记忆抽取、Cache API 都自动开。
 
 填完后点 Deploy。以后你只要 push GitHub，Cloudflare 会自动部署。
 
@@ -98,14 +103,18 @@ cd files-mentioned-by-the-user-companion && npm install
 cd files-mentioned-by-the-user-companion && npm run setup:cloudflare && npx wrangler deploy --name 你的项目名
 ```
 
-## Secrets
+## 要填的 Text 变量
 
-最简单就填 3 个 Text：
+Cloudflare 里直接填 Text：
 
 ```text
 AI_GATEWAY_BASE_URL
 CHATBOX_API_KEY
 CF_AIG_TOKEN
+CHAT_MODEL
+MEMORY_FILTER_MODEL
+MEMORY_MODEL
+VISION_MODEL
 ```
 
 ## Chatbox 配置
@@ -122,13 +131,13 @@ Model:    companion
 
 ```text
 PUBLIC_MODEL_NAME=companion
-DEFAULT_UPSTREAM_MODEL=anthropic/claude-sonnet-4-5
+CHAT_MODEL=anthropic/claude-sonnet-4-5
 MEMORY_FILTER_MODEL=openai/gpt-4.1-mini
 MEMORY_MODEL=google-ai-studio/gemini-2.5-flash
-EMBEDDING_MODEL=@cf/google/embeddinggemma-300m
+VISION_MODEL=openai/gpt-4.1-mini
 ```
 
-主模型、小模型分拣、embedding 都从 Worker 调 Cloudflare AI Gateway；Worker 不直接调用 OpenAI/Anthropic key，也不直接调用 Workers AI 模型。
+主模型、小模型分拣、记忆小秘书、导盲犬模型都从 Worker 调 Cloudflare AI Gateway；Worker 不直接调用 OpenAI/Anthropic key，也不直接调用 Workers AI 模型。
 
 路由规则：
 
@@ -140,9 +149,7 @@ EMBEDDING_MODEL=@cf/google/embeddinggemma-300m
 Claude 路径会跳过 Cloudflare 整轮 response cache，并使用 Anthropic prompt cache：
 
 ```text
-ANTHROPIC_CACHE_ENABLED=true
-ANTHROPIC_CACHE_TTL=5m
-ANTHROPIC_CACHE_STABLE_SYSTEM=true
+这些不用你填，系统默认开启。
 ```
 
 ## Memory API
@@ -192,31 +199,24 @@ curl -X POST "https://<your-worker>.workers.dev/v1/memories/ingest" \
 
 普通 Chatbox 不需要主动调用 Memory API。只要 `/v1/memories` 里有 active 记忆，`/v1/chat/completions` 会在请求发给上游模型前自动追加一条 system memory patch。
 
-当前支持：
+默认流程：
 
 ```text
-INJECTION_MODE=rag     根据最后一条用户消息搜索相关记忆
-INJECTION_MODE=full    注入 active memories
-INJECTION_MODE=hybrid  pinned memories + RAG 相关记忆
-INJECTION_MODE=none    不注入
+根据最后一条用户消息搜索相关记忆
+  -> 置顶记忆优先
+  -> 相关记忆补充
+  -> 生成一小段 memory patch 给聊天模型
 ```
 
-注入前的小模型筛选/压缩：
-
-```text
-ENABLE_MEMORY_FILTER=true
-MEMORY_FILTER_MODEL=openai/gpt-4.1-mini
-MEMORY_FILTER_MAX_CANDIDATES=16
-MEMORY_FILTER_MAX_OUTPUT=6
-```
-
-流程是：
+注入前会用 `MEMORY_FILTER_MODEL` 做筛选/压缩：
 
 ```text
 Vectorize/D1 召回候选记忆
   -> MEMORY_FILTER_MODEL 判断相关性并压缩
   -> 主模型只收到筛过的 memory patch
 ```
+
+这些筛选开关不用你填，系统有默认值。
 
 ## Cache API
 
@@ -250,13 +250,7 @@ curl -X DELETE "https://<your-worker>.workers.dev/v1/cache/web/example-key" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>"
 ```
 
-相关配置：
-
-```text
-ENABLE_CACHE_API=true
-CACHE_DEFAULT_TTL_SECONDS=86400
-CACHE_MAX_VALUE_BYTES=262144
-```
+Cache API 默认开启，不用填额外开关。
 
 ## Auto Memory
 
@@ -271,11 +265,4 @@ CACHE_MAX_VALUE_BYTES=262144
   -> Vectorize embedding upsert
 ```
 
-相关配置：
-
-```text
-ENABLE_AUTO_MEMORY=true
-MEMORY_MODE=external
-MEMORY_MODEL=google-ai-studio/gemini-2.5-flash
-MEMORY_MIN_IMPORTANCE=0.55
-```
+自动记忆默认开启，不用填额外开关。你只需要填 `MEMORY_MODEL`。

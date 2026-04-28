@@ -3,6 +3,7 @@ export interface Env {
   MEMORY_QUEUE?: Queue<QueueMessage>;
   VECTORIZE?: Vectorize | VectorizeIndex;
   PUBLIC_MODEL_NAME?: string;
+  CHAT_MODEL?: string;
   DEFAULT_UPSTREAM_MODEL?: string;
   ALLOW_MODEL_PASSTHROUGH?: string;
   AI_GATEWAY_BASE_URL?: string;
@@ -15,6 +16,7 @@ export interface Env {
   MEMORY_MODEL?: string;
   ENABLE_MEMORY_FILTER?: string;
   MEMORY_FILTER_MODEL?: string;
+  VISION_MODEL?: string;
   MEMORY_FILTER_MAX_CANDIDATES?: string;
   MEMORY_FILTER_MAX_OUTPUT?: string;
   MEMORY_EXTRACT_EVERY_N_MESSAGES?: string;

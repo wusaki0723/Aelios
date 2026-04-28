@@ -3,12 +3,12 @@ main = "src/index.ts"
 compatibility_date = "2026-04-01"
 
 [vars]
-# 你通常只需要看这一段。全部都可以作为 Cloudflare Text 变量覆盖。
+# 你通常只需要改这一段。全部都可以作为 Cloudflare Text 变量覆盖。
 PUBLIC_MODEL_NAME = "companion"
-DEFAULT_UPSTREAM_MODEL = "anthropic/claude-sonnet-4-5"
-MEMORY_MODEL = "google-ai-studio/gemini-2.5-flash"
+CHAT_MODEL = "anthropic/claude-sonnet-4-5"
 MEMORY_FILTER_MODEL = "openai/gpt-4.1-mini"
-EMBEDDING_MODEL = "@cf/google/embeddinggemma-300m"
+MEMORY_MODEL = "google-ai-studio/gemini-2.5-flash"
+VISION_MODEL = "openai/gpt-4.1-mini"
 AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>"
 CHATBOX_API_KEY = "sk-change-me"
 CF_AIG_TOKEN = "change-me"

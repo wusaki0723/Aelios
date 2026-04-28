@@ -1,6 +1,7 @@
 name = "companion-memory-proxy"
 main = "src/index.ts"
 compatibility_date = "2026-04-01"
+keep_vars = true
 
 [vars]
 # Visible model knobs. These are intentionally in wrangler.toml so they show

@@ -119,7 +119,7 @@ PUBLIC_MODEL_NAME=companion
 DEFAULT_UPSTREAM_MODEL=anthropic/claude-sonnet-4-5
 MEMORY_FILTER_MODEL=openai/gpt-4.1-mini
 MEMORY_MODEL=google-ai-studio/gemini-2.5-flash
-EMBEDDING_MODEL=@cf/baai/bge-m3
+EMBEDDING_MODEL=@cf/google/embeddinggemma-300m
 ```
 
 主模型、小模型分拣、embedding 都从 Worker 调 Cloudflare AI Gateway；Worker 不直接调用 OpenAI/Anthropic key，也不直接调用 Workers AI 模型。

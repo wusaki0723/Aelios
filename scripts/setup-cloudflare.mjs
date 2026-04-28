@@ -15,7 +15,7 @@ const vectorizeName =
   process.env.CMP_VECTORIZE_NAME || readVectorizeValue("index_name") || "companion_memories";
 const vectorizeBinding =
   process.env.CMP_VECTORIZE_BINDING || readVectorizeValue("binding") || "VECTORIZE";
-const vectorizeDimensions = process.env.CMP_VECTORIZE_DIMENSIONS || "1024";
+const vectorizeDimensions = process.env.CMP_VECTORIZE_DIMENSIONS || "768";
 const vectorizeMetric = process.env.CMP_VECTORIZE_METRIC || "cosine";
 const queueName = process.env.CMP_QUEUE_NAME || "companion-memory";
 const aiGatewayBaseUrl = process.env.AI_GATEWAY_BASE_URL || process.env.CMP_AI_GATEWAY_BASE_URL;

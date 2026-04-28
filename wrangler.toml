@@ -2,17 +2,8 @@ name = "companion-memory-proxy"
 main = "src/index.ts"
 compatibility_date = "2026-04-01"
 
-[vars]
-# 你通常只需要改这一段。全部都可以作为 Cloudflare Text 变量覆盖。
-PUBLIC_MODEL_NAME = "companion"
-CHAT_MODEL = "anthropic/claude-sonnet-4-5"
-MEMORY_FILTER_MODEL = "openai/gpt-4.1-mini"
-MEMORY_MODEL = "google-ai-studio/gemini-2.5-flash"
-VISION_MODEL = "openai/gpt-4.1-mini"
-AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>"
-CHATBOX_API_KEY = "sk-change-me"
-CF_AIG_TOKEN = "change-me"
-
+# Text variables live in the Cloudflare Dashboard. Do not put placeholder
+# keys here, or a deploy can overwrite the real dashboard values.
 # D1 binding is auto-filled by `npm run setup:cloudflare`.
 
 [[vectorize]]

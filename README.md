@@ -64,6 +64,8 @@ VISION_MODEL         以后处理图片/视觉输入的导盲犬
 
 如果只看到了 `AI_GATEWAY_BASE_URL`，就点 `Add variable` 自己新增上面这些名字和值。都可以直接 Text。
 
+注意：这些值以 Cloudflare Dashboard 里填的 Text 为准，项目里的 `wrangler.toml` 不再写占位 key，避免部署时把真实值覆盖掉。
+
 向量模型不用填，固定默认 `@cf/google/embeddinggemma-300m`，Vectorize 维度按 768。
 其他开关不用填：Claude 自动路由、Claude cache_control、记忆注入、记忆抽取、Cache API 都自动开。
 

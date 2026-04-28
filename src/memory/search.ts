@@ -88,6 +88,15 @@ function readMetadataBoolean(metadata: MetadataMap, field: string): boolean {
   return value === true || value === "true";
 }
 
+function readMetadataStringArray(metadata: MetadataMap, field: string): string[] {
+  const value = metadata[field];
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  return [];
+}
+
 function toLegacyMemoryRecord(
   match: VectorizeMatch,
   input: { namespace: string }
@@ -111,8 +120,8 @@ function toLegacyMemoryRecord(
     confidence: readMetadataNumber(metadata, "confidence", 0.8),
     status: "active",
     pinned: readMetadataBoolean(metadata, "pinned") ? 1 : 0,
-    tags: JSON.stringify([]),
-    source: readMetadataString(metadata, "source") || "vectorize-legacy",
+    tags: JSON.stringify(readMetadataStringArray(metadata, "tags")),
+    source: readMetadataString(metadata, "source_id") || readMetadataString(metadata, "source") || "vectorize-legacy",
     source_message_ids: JSON.stringify([]),
     vector_id: match.id,
     last_recalled_at: null,

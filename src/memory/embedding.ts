@@ -1,7 +1,7 @@
 import type { Env, MemoryRecord } from "../types";
 import { callOpenAICompatEmbeddings } from "../proxy/openaiAdapter";
 
-const DEFAULT_EMBEDDING_MODEL = "@cf/google/embeddinggemma-300m";
+const DEFAULT_EMBEDDING_MODEL = "workers-ai/@cf/google/embeddinggemma-300m";
 
 function readEmbedding(result: unknown): number[] | null {
   if (!result || typeof result !== "object") return null;

@@ -72,7 +72,7 @@ VISION_MODEL         以后处理图片/视觉输入的导盲犬
 如果模型变量没有出现，点一次重新 Deploy。私有变量不会写在仓库里，所以 `AI_GATEWAY_BASE_URL`、`CHATBOX_API_KEY`、`CF_AIG_TOKEN` 需要你自己加。
 项目已经在 `wrangler.toml` 里设置了 `keep_vars = true`，避免重新部署时清掉你在 Cloudflare Dashboard 手动填的私有变量。
 
-向量模型不用填，固定默认 `@cf/google/embeddinggemma-300m`，Vectorize 维度按 768。
+向量模型不用填，固定默认 `workers-ai/@cf/google/embeddinggemma-300m`，Vectorize 维度按 768。
 其他开关不用填：Claude 自动路由、Claude cache_control、记忆注入、记忆抽取、Cache API 都自动开。
 
 填完后点 Deploy。以后你只要 push GitHub，Cloudflare 会自动部署。

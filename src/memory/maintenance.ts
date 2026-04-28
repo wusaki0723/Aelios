@@ -62,9 +62,10 @@ export async function runMemoryMaintenance(env: Env, message: QueueMessage): Pro
       ids: [message.fromMessageId, message.toMessageId]
     });
 
-    const extraction = await extractMemoriesFromMessages(env, sourceMessages);
-    const memories =
-      extraction.memories.length > 0 ? extraction.memories : buildExplicitMemoryFallback(sourceMessages);
+    const explicitMemories = buildExplicitMemoryFallback(sourceMessages);
+    const extraction =
+      explicitMemories.length > 0 ? { memories: [] } : await extractMemoriesFromMessages(env, sourceMessages);
+    const memories = explicitMemories.length > 0 ? explicitMemories : extraction.memories;
     const minImportance = getMinImportance(env);
 
     for (const memory of memories) {

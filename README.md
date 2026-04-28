@@ -16,55 +16,49 @@
 - 聊天结束后通过 Queue 自动抽取长期记忆
 - Cache API：前端可缓存网页、搜索结果、工具结果、上下文包
 
-## 最简单部署：GitHub 自动部署
+## 最简单部署：Cloudflare Worker 关联 GitHub
 
-你可以不用在本机跑部署命令。把这个项目放到 GitHub 仓库后，只要推送到 `main`，GitHub Actions 会自动：
+Cloudflare Workers 可以直接关联 GitHub 仓库。关联后，只要 push 到 `main`，Cloudflare 会自己拉代码、构建、部署。
 
-```text
-npm ci
-npm run typecheck
-npm run setup:cloudflare
-npx wrangler deploy
-```
-
-你只需要在 GitHub 仓库里填这些 Secrets：
+你按这个点：
 
 ```text
-CLOUDFLARE_API_TOKEN      Cloudflare API token
-CLOUDFLARE_ACCOUNT_ID     Cloudflare account id
-AI_GATEWAY_BASE_URL       https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>
-CHATBOX_API_KEY           你给 Chatbox 用的 sk-xxx
-CF_AIG_TOKEN              Cloudflare AI Gateway token
+Cloudflare Dashboard
+-> Workers & Pages
+-> Create application
+-> Import a repository
+-> 选择 GitHub
+-> 选择 wusaki0723/Aelios
 ```
 
-可选 Secrets：
+项目配置填：
 
 ```text
-IM_API_KEY
-DEBUG_API_KEY
+Project name: companion-memory-proxy
+Production branch: main
+Root directory: /
+Build command: npm ci
+Deploy command: npm run setup:cloudflare && npx wrangler deploy
 ```
 
-可选 Variables：
+在 Cloudflare 这个 Worker 的变量/密钥里填：
 
 ```text
-WORKER_NAME               不填就用 companion-memory-proxy
+AI_GATEWAY_BASE_URL       普通变量
+CHATBOX_API_KEY           Secret
+CF_AIG_TOKEN              Secret
 ```
 
-路径：
+可选：
 
 ```text
-GitHub 仓库 -> Settings -> Secrets and variables -> Actions
+IM_API_KEY                Secret
+DEBUG_API_KEY             Secret
 ```
 
-填完后去：
+填完后点 Deploy。以后你只要 push GitHub，Cloudflare 会自动部署。
 
-```text
-Actions -> Deploy Worker -> Run workflow
-```
-
-以后改代码只要 push 到 `main`，它会自己部署。
-
-## 手动部署命令
+## 备用：手动部署命令
 
 Build command:
 

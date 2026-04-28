@@ -12,7 +12,7 @@ function readVectorizeValue(name) {
   return match?.[1]?.match(new RegExp(`${name}\\\\s*=\\\\s*"([^"]+)"`))?.[1];
 }
 const vectorizeName =
-  process.env.CMP_VECTORIZE_NAME || readVectorizeValue("index_name") || "companion_memories";
+  process.env.CMP_VECTORIZE_NAME || readVectorizeValue("index_name") || "memo-kb";
 const vectorizeBinding =
   process.env.CMP_VECTORIZE_BINDING || readVectorizeValue("binding") || "VECTORIZE";
 const vectorizeDimensions = process.env.CMP_VECTORIZE_DIMENSIONS || "768";

@@ -2,6 +2,8 @@ import { fetchMemoriesByIds, markMemoriesRecalled, searchMemoriesByText } from "
 import type { Env, MemoryApiRecord, MemoryRecord } from "../types";
 import { createEmbedding } from "./embedding";
 
+type MetadataMap = Record<string, unknown>;
+
 function parseJsonArray(value: string | null): string[] {
   if (!value) return [];
   try {
@@ -48,11 +50,108 @@ function getMinScore(env: Env): number {
 }
 
 function getRefId(match: VectorizeMatch): string | null {
-  const metadata = match.metadata || {};
+  const metadata = (match.metadata || {}) as MetadataMap;
   const refId = metadata.ref_id;
   if (typeof refId === "string") return refId;
   if (match.id.startsWith("mem_")) return match.id.slice("mem_".length);
   return null;
+}
+
+function readMetadataText(metadata: MetadataMap): string | null {
+  const fields = ["content", "text", "memory", "summary", "document", "chunk", "value", "title"];
+
+  for (const field of fields) {
+    const value = metadata[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+
+  return null;
+}
+
+function readMetadataString(metadata: MetadataMap, field: string): string | null {
+  const value = metadata[field];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readMetadataNumber(metadata: MetadataMap, field: string, fallback: number): number {
+  const value = metadata[field];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function readMetadataBoolean(metadata: MetadataMap, field: string): boolean {
+  const value = metadata[field];
+  return value === true || value === "true";
+}
+
+function toLegacyMemoryRecord(
+  match: VectorizeMatch,
+  input: { namespace: string }
+): (MemoryRecord & { score: number }) | null {
+  const metadata = (match.metadata || {}) as MetadataMap;
+  const status = readMetadataString(metadata, "status");
+  if (status && status !== "active") return null;
+
+  const content = readMetadataText(metadata);
+  if (!content) return null;
+
+  const now = new Date(0).toISOString();
+  const id = getRefId(match) || match.id;
+  return {
+    id,
+    namespace: readMetadataString(metadata, "namespace") || input.namespace,
+    type: readMetadataString(metadata, "type") || "note",
+    content,
+    summary: readMetadataString(metadata, "summary"),
+    importance: readMetadataNumber(metadata, "importance", 0.5),
+    confidence: readMetadataNumber(metadata, "confidence", 0.8),
+    status: "active",
+    pinned: readMetadataBoolean(metadata, "pinned") ? 1 : 0,
+    tags: JSON.stringify([]),
+    source: readMetadataString(metadata, "source") || "vectorize-legacy",
+    source_message_ids: JSON.stringify([]),
+    vector_id: match.id,
+    last_recalled_at: null,
+    recall_count: 0,
+    created_at: readMetadataString(metadata, "created_at") || now,
+    updated_at: readMetadataString(metadata, "updated_at") || now,
+    expires_at: null,
+    score: match.score
+  };
+}
+
+async function queryVectorize(
+  env: Env,
+  vector: number[],
+  input: { namespace: string; types?: string[]; topK: number },
+  useFilter: boolean
+): Promise<VectorizeMatches> {
+  if (!useFilter) {
+    return env.VECTORIZE!.query(vector, {
+      topK: input.topK,
+      returnMetadata: true
+    });
+  }
+
+  const filter: VectorizeVectorMetadataFilter = {
+    namespace: input.namespace,
+    status: "active"
+  };
+
+  if (input.types && input.types.length > 0) {
+    filter.type = { $in: input.types };
+  }
+
+  return env.VECTORIZE!.query(vector, {
+    topK: input.topK,
+    namespace: input.namespace,
+    returnMetadata: true,
+    filter
+  });
 }
 
 async function searchWithVectorize(
@@ -64,29 +163,21 @@ async function searchWithVectorize(
   const vector = await createEmbedding(env, input.query);
   if (!vector) return null;
 
-  const filter: VectorizeVectorMetadataFilter = {
-    namespace: input.namespace,
-    status: "active"
-  };
-
-  if (input.types && input.types.length > 0) {
-    filter.type = { $in: input.types };
+  let result = await queryVectorize(env, vector, input, true);
+  if (result.matches.length === 0) {
+    result = await queryVectorize(env, vector, input, false);
   }
-
-  const result = await env.VECTORIZE.query(vector, {
-    topK: input.topK,
-    namespace: input.namespace,
-    returnMetadata: true,
-    filter
-  });
 
   const minScore = getMinScore(env);
   const scoredIds = new Map<string, number>();
+  const legacyRecords: Array<MemoryRecord & { score: number }> = [];
 
   for (const match of result.matches) {
     if (match.score < minScore) continue;
     const id = getRefId(match);
     if (id) scoredIds.set(id, match.score);
+    const legacy = toLegacyMemoryRecord(match, input);
+    if (legacy) legacyRecords.push(legacy);
   }
 
   const records = await fetchMemoriesByIds(env.DB, {
@@ -94,9 +185,13 @@ async function searchWithVectorize(
     ids: [...scoredIds.keys()]
   });
 
-  return records
-    .map((record) => ({ ...record, score: scoredIds.get(record.id) ?? 0 }))
-    .sort((a, b) => b.score + b.importance * 0.05 - (a.score + a.importance * 0.05));
+  const foundIds = new Set(records.map((record) => record.id));
+  const d1Records = records.map((record) => ({ ...record, score: scoredIds.get(record.id) ?? 0 }));
+  const legacyOnlyRecords = legacyRecords.filter((record) => !foundIds.has(record.id));
+
+  return [...d1Records, ...legacyOnlyRecords].sort(
+    (a, b) => b.score + b.importance * 0.05 - (a.score + a.importance * 0.05)
+  );
 }
 
 export async function searchMemories(

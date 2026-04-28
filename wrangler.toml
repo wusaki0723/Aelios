@@ -17,7 +17,7 @@ CF_AIG_TOKEN = "change-me"
 
 [[vectorize]]
 binding = "VECTORIZE"
-index_name = "companion_memories"
+index_name = "memo-kb"
 
 [[queues.producers]]
 binding = "MEMORY_QUEUE"

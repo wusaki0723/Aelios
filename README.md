@@ -88,7 +88,7 @@ npm run setup:cloudflare && npx wrangler deploy --name 你的项目名 --keep-va
 - 创建或查找 D1：`companion_memory_proxy`
 - 自动把 D1 的 `database_id` 写进 `wrangler.toml`
 - 执行 D1 migrations 建表
-- 创建或复用 Vectorize：`companion_memories`
+- 创建或复用 Vectorize：`memo-kb`
 - 创建 Vectorize metadata indexes：`namespace`、`status`、`type`、`pinned`
 - 确保 Vectorize binding 存在
 - 创建或复用 Queue：`companion-memory`

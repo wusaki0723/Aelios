@@ -6,8 +6,15 @@ const root = resolve(import.meta.dirname, "..");
 const wranglerTomlPath = resolve(root, "wrangler.toml");
 const dbName = process.env.CMP_D1_NAME || "companion_memory_proxy";
 const dbBinding = process.env.CMP_D1_BINDING || "DB";
-const vectorizeName = process.env.CMP_VECTORIZE_NAME || "companion_memories";
-const vectorizeBinding = process.env.CMP_VECTORIZE_BINDING || "VECTORIZE";
+const wranglerToml = readFileSync(wranglerTomlPath, "utf8");
+function readVectorizeValue(name) {
+  const match = wranglerToml.match(/\[\[vectorize\]\]([\s\S]*?)(?=\n\[|$)/);
+  return match?.[1]?.match(new RegExp(`${name}\\\\s*=\\\\s*"([^"]+)"`))?.[1];
+}
+const vectorizeName =
+  process.env.CMP_VECTORIZE_NAME || readVectorizeValue("index_name") || "companion_memories";
+const vectorizeBinding =
+  process.env.CMP_VECTORIZE_BINDING || readVectorizeValue("binding") || "VECTORIZE";
 const vectorizeDimensions = process.env.CMP_VECTORIZE_DIMENSIONS || "1024";
 const vectorizeMetric = process.env.CMP_VECTORIZE_METRIC || "cosine";
 const queueName = process.env.CMP_QUEUE_NAME || "companion-memory";

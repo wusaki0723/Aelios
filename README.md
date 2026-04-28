@@ -47,9 +47,9 @@ Deploy command: npm run setup:cloudflare && npx wrangler deploy --keep-vars
 
 ```text
 CHAT_MODEL                主聊天模型，默认 deepseek/deepseek-v4-pro
-MEMORY_FILTER_MODEL       记忆压缩分拣模型，默认 openai/gpt-4.1-mini
+MEMORY_FILTER_MODEL       记忆压缩分拣模型，默认 google-ai-studio/gemini-2.5-flash
 MEMORY_MODEL              记忆小秘书模型，默认 deepseek/deepseek-v4-flash
-VISION_MODEL              导盲犬视觉模型，默认 openai/gpt-4.1-mini
+VISION_MODEL              导盲犬视觉模型，默认 google-ai-studio/gemini-3-flash-preview
 ```
 
 你只需要自己新增这 3 个 Text：
@@ -145,9 +145,9 @@ Model:    companion
 ```text
 PUBLIC_MODEL_NAME=companion
 CHAT_MODEL=deepseek/deepseek-v4-pro
-MEMORY_FILTER_MODEL=openai/gpt-4.1-mini
+MEMORY_FILTER_MODEL=google-ai-studio/gemini-2.5-flash
 MEMORY_MODEL=deepseek/deepseek-v4-flash
-VISION_MODEL=openai/gpt-4.1-mini
+VISION_MODEL=google-ai-studio/gemini-3-flash-preview
 ```
 
 主模型、小模型分拣、记忆小秘书、导盲犬模型都从 Worker 调 Cloudflare AI Gateway；Worker 不直接调用 OpenAI/Anthropic key，也不直接调用 Workers AI 模型。

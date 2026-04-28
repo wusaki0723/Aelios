@@ -54,6 +54,19 @@ function parseExtraction(text: string): MemoryExtractionResult {
   return {
     summary_patch: typeof raw.summary_patch === "string" ? raw.summary_patch : undefined,
     memories: memories.flatMap((item): ExtractedMemory[] => {
+      if (typeof item === "string" && item.trim()) {
+        return [
+          {
+            type: "note",
+            content: item.trim(),
+            importance: 0.7,
+            confidence: 0.8,
+            tags: [],
+            source_message_ids: []
+          }
+        ];
+      }
+
       if (!item || typeof item !== "object") return [];
       const record = item as {
         type?: unknown;

@@ -18,7 +18,7 @@
 
 ## 人类版：极简部署
 
-你不用看懂代码。照着做，卡住就把本仓库链接发给你的 AI，让它照下面的“AI 版”部署。
+你不用看懂代码。照着做，卡住就把这个项目链接发给你的 AI，让它照下面的“AI 版”部署。
 
 ### 1. 先准备
 
@@ -27,22 +27,39 @@
 ```text
 一个 Cloudflare 账号
 一个 Cloudflare AI Gateway
-一个 GitHub 仓库
+一个 GitHub 账号
 ```
 
 如果你不想自己操作，就复制这句话给你的 AI：
 
 ```text
-请帮我部署这个 GitHub 仓库到 Cloudflare Workers。README 里有人类版和 AI 版说明，请按 AI 版操作。部署后帮我测试 /health、图片请求、记忆写入和记忆搜索。
+请先把这个 GitHub 项目 fork 到我的 GitHub 账号，再把我的 fork 部署到 Cloudflare Workers。README 里有人类版和 AI 版说明，请按 AI 版操作。部署后帮我测试 /health、图片请求、记忆写入和记忆搜索。
 ```
 
-仓库地址：
+源项目地址：
 
 ```text
 https://github.com/wusaki0723/Aelios
 ```
 
-### 2. 在 Cloudflare 关联 GitHub
+### 2. 先 Fork 到自己的 GitHub
+
+打开源项目地址，点右上角：
+
+```text
+Fork
+-> Create fork
+```
+
+Fork 完以后，你会得到一个自己的仓库，地址大概长这样：
+
+```text
+https://github.com/<你的 GitHub 名字>/Aelios
+```
+
+后面 Cloudflare 要关联的是你自己的 fork，不要直接关联 `wusaki0723/Aelios`。
+
+### 3. 在 Cloudflare 关联自己的 Fork
 
 在 Cloudflare 里点：
 
@@ -51,7 +68,7 @@ Workers & Pages
 -> Create application
 -> Import a repository
 -> 选择 GitHub
--> 选择 wusaki0723/Aelios
+-> 选择 <你的 GitHub 名字>/Aelios
 ```
 
 项目配置填：
@@ -64,7 +81,7 @@ Build command: npm ci
 Deploy command: npm run deploy:cloudflare
 ```
 
-### 3. 填变量
+### 4. 填变量
 
 在 Cloudflare 项目的 `Variables and Secrets` 里填这些。
 
@@ -101,7 +118,7 @@ CLOUDFLARE_API_TOKEN    能部署 Worker、管理 D1、Vectorize、Queues 的 Cl
 CLOUDFLARE_ACCOUNT_ID   你的 Cloudflare account id
 ```
 
-### 4. 点 Deploy
+### 5. 点 Deploy
 
 部署成功后，你的地址大概长这样：
 
@@ -109,7 +126,7 @@ CLOUDFLARE_ACCOUNT_ID   你的 Cloudflare account id
 https://companion-memory-proxy.<你的子域>.workers.dev
 ```
 
-### 5. Chatbox 这样填
+### 6. Chatbox 这样填
 
 ```text
 Base URL: https://<你的 Worker 地址>/v1
@@ -117,7 +134,7 @@ API Key:  CHATBOX_API_KEY 里填的那个
 Model:    companion
 ```
 
-### 6. 怎么知道成功了
+### 7. 怎么知道成功了
 
 打开：
 
@@ -141,7 +158,7 @@ https://<你的 Worker 地址>/health
 
 能答出来，就部署好了。
 
-### 7. 最容易踩的坑
+### 8. 最容易踩的坑
 
 ```text
 看图很贵：确认 VISION_MODEL 是你想用的模型。
@@ -159,6 +176,15 @@ Vectorize 不要乱删：默认用 memo-kb，768 维。
 ### 项目定位
 
 本项目是 Cloudflare Workers 上的 OpenAI-compatible Memory Proxy。
+
+如果你是 AI 助手，正在帮一个新用户部署：
+
+```text
+1. 不要让用户的 Cloudflare 直接关联源项目 wusaki0723/Aelios。
+2. 先指导用户把源项目 fork 到自己的 GitHub 账号。
+3. Cloudflare Workers 只能关联用户自己的 fork。
+4. 后续修改、部署、Secrets、Variables 都在用户自己的 fork 和 Cloudflare 账号里完成。
+```
 
 对外接口：
 

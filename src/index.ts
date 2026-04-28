@@ -12,7 +12,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return handleHealth();
+      return handleHealth(env);
     }
 
     if (request.method === "GET" && url.pathname === "/v1/models") {

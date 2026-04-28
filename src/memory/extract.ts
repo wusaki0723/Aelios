@@ -24,6 +24,13 @@ function normalizeStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
 }
 
+function normalizeMemoryContent(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!text || text.length > 1000) return null;
+  return text;
+}
+
 function extractJsonObject(text: string): unknown | null {
   try {
     return JSON.parse(text) as unknown;
@@ -54,11 +61,12 @@ function parseExtraction(text: string): MemoryExtractionResult {
   return {
     summary_patch: typeof raw.summary_patch === "string" ? raw.summary_patch : undefined,
     memories: memories.flatMap((item): ExtractedMemory[] => {
-      if (typeof item === "string" && item.trim()) {
+      const stringContent = normalizeMemoryContent(item);
+      if (stringContent) {
         return [
           {
             type: "note",
-            content: item.trim(),
+            content: stringContent,
             importance: 0.7,
             confidence: 0.8,
             tags: [],
@@ -77,12 +85,13 @@ function parseExtraction(text: string): MemoryExtractionResult {
         source_message_ids?: unknown;
       };
 
-      if (typeof record.content !== "string" || !record.content.trim()) return [];
+      const content = normalizeMemoryContent(record.content);
+      if (!content) return [];
 
       return [
         {
           type: typeof record.type === "string" && record.type.trim() ? record.type.trim() : "note",
-          content: record.content.trim(),
+          content,
           importance: normalizeNumber(record.importance, 0.5),
           confidence: normalizeNumber(record.confidence, 0.8),
           tags: normalizeStringArray(record.tags),

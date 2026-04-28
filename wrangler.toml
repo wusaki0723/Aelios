@@ -3,40 +3,15 @@ main = "src/index.ts"
 compatibility_date = "2026-04-01"
 
 [vars]
+# 你通常只需要看这一段。全部都可以作为 Cloudflare Text 变量覆盖。
 PUBLIC_MODEL_NAME = "companion"
 DEFAULT_UPSTREAM_MODEL = "anthropic/claude-sonnet-4-5"
-ALLOW_MODEL_PASSTHROUGH = "false"
-
-ENABLE_AUTO_MEMORY = "true"
-MEMORY_MODE = "external"
 MEMORY_MODEL = "google-ai-studio/gemini-2.5-flash"
-INJECTION_MODE = "rag"
-MEMORY_TOP_K = "8"
-MEMORY_MIN_SCORE = "0.35"
-MEMORY_MIN_IMPORTANCE = "0.55"
-MEMORY_MERGE_THRESHOLD = "0.88"
-MEMORY_EXTRACT_EVERY_N_MESSAGES = "2"
-SUMMARY_EVERY_N_MESSAGES = "40"
-EMBEDDING_MODEL = "@cf/google/embeddinggemma-300m"
-ENABLE_MEMORY_FILTER = "true"
 MEMORY_FILTER_MODEL = "openai/gpt-4.1-mini"
-MEMORY_FILTER_MAX_CANDIDATES = "16"
-MEMORY_FILTER_MAX_OUTPUT = "6"
-
-ANTHROPIC_CACHE_ENABLED = "true"
-ANTHROPIC_CACHE_TTL = "5m"
-ANTHROPIC_CACHE_STABLE_SYSTEM = "true"
-ANTHROPIC_CACHE_RECENT_HISTORY = "false"
-FORCE_ANTHROPIC_NATIVE = "false"
-
-ENABLE_CACHE_API = "true"
-CACHE_DEFAULT_TTL_SECONDS = "86400"
-CACHE_MAX_VALUE_BYTES = "262144"
-
-# Fill these after creating Cloudflare resources.
-# All model calls go through this Cloudflare AI Gateway compat endpoint.
-# Configure custom providers in AI Gateway, not in the Worker.
+EMBEDDING_MODEL = "@cf/google/embeddinggemma-300m"
 AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>"
+CHATBOX_API_KEY = "sk-change-me"
+CF_AIG_TOKEN = "change-me"
 
 # D1 binding is auto-filled by `npm run setup:cloudflare`.
 

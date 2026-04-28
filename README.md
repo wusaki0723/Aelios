@@ -41,7 +41,7 @@ Build command: npm ci
 Deploy command: npm run setup:cloudflare && npx wrangler deploy --keep-vars
 ```
 
-在 Cloudflare 的构建配置里，找到 `Variables and Secrets`，点 `Add variable` 自己新增这 3 个，全部选 Text / 普通文本也可以：
+在 Cloudflare 的构建配置里，找到 `Variables and Secrets`。现在你只需要管这 3 个 Text：
 
 ```text
 AI_GATEWAY_BASE_URL       普通变量，可以填到 gateway id 或 /compat 结尾
@@ -49,14 +49,18 @@ CHATBOX_API_KEY           Text，自己编一个 sk-xxx
 CF_AIG_TOKEN              Text，你的 Cloudflare AI Gateway token
 ```
 
-可选：
+如果只看到了 `AI_GATEWAY_BASE_URL`，就点 `Add variable` 新增 `CHATBOX_API_KEY` 和 `CF_AIG_TOKEN`。不用 Secret，直接 Text。
+
+其他模型和开关都已经写在 `wrangler.toml`，不用你填：
 
 ```text
-IM_API_KEY                Text
-DEBUG_API_KEY             Text
+DEFAULT_UPSTREAM_MODEL      主聊天模型
+MEMORY_MODEL                自动抽记忆的小模型
+MEMORY_FILTER_MODEL         记忆筛选压缩小模型
+EMBEDDING_MODEL             向量模型，默认 @cf/google/embeddinggemma-300m
 ```
 
-如果你只看到了 `AI_GATEWAY_BASE_URL`，那是正常的。`CHATBOX_API_KEY` 和 `CF_AIG_TOKEN` 不会自动出现，要点 `Add variable` 手动新增名字和值。
+其他行为自动开启：Claude 自动路由、Claude cache_control、记忆注入、记忆抽取、Cache API。
 
 填完后点 Deploy。以后你只要 push GitHub，Cloudflare 会自动部署。
 
@@ -96,12 +100,12 @@ cd files-mentioned-by-the-user-companion && npm run setup:cloudflare && npx wran
 
 ## Secrets
 
-至少设置一个客户端 key，以及上游所需的 key：
-所有模型调用都走 Cloudflare AI Gateway。自定义 provider 请在 AI Gateway 里配置，Worker 只传模型名。
+最简单就填 3 个 Text：
 
-```bash
-wrangler secret put CHATBOX_API_KEY
-wrangler secret put CF_AIG_TOKEN
+```text
+AI_GATEWAY_BASE_URL
+CHATBOX_API_KEY
+CF_AIG_TOKEN
 ```
 
 ## Chatbox 配置

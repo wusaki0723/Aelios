@@ -1,9 +1,9 @@
 import { finishIdempotentTask, tryStartIdempotentTask } from "../db/idempotency";
-import { createMemory, searchMemoriesByText } from "../db/memories";
+import { searchMemoriesByText } from "../db/memories";
 import { getMessagesByIds } from "../db/messages";
-import { upsertMemoryEmbedding } from "./embedding";
 import { extractMemoriesFromMessages, type ExtractedMemory } from "./extract";
-import type { Env, MessageRecord, QueueMessage } from "../types";
+import { persistMemoryWithMerge } from "./merge";
+import type { Env, MemoryMaintenanceQueueMessage, MessageRecord } from "../types";
 
 function getMinImportance(env: Env): number {
   const value = Number(env.MEMORY_MIN_IMPORTANCE || 0.55);
@@ -49,7 +49,7 @@ function buildExplicitMemoryFallback(messages: MessageRecord[]): ExtractedMemory
   });
 }
 
-export async function runMemoryMaintenance(env: Env, message: QueueMessage): Promise<void> {
+export async function runMemoryMaintenance(env: Env, message: MemoryMaintenanceQueueMessage): Promise<void> {
   const started = await tryStartIdempotentTask(env.DB, {
     key: message.idempotencyKey,
     taskType: message.type
@@ -73,18 +73,14 @@ export async function runMemoryMaintenance(env: Env, message: QueueMessage): Pro
       if (memory.confidence < 0.6) continue;
       if (await isDuplicateMemory(env, { namespace: message.namespace, memory })) continue;
 
-      const created = await createMemory(env.DB, {
+      await persistMemoryWithMerge(env, {
         namespace: message.namespace,
-        type: memory.type,
-        content: memory.content,
-        importance: memory.importance,
-        confidence: memory.confidence,
-        tags: memory.tags,
+        memory,
         source: message.source,
-        sourceMessageIds: memory.source_message_ids.length > 0 ? memory.source_message_ids : sourceMessages.map((item) => item.id)
+        sourceMessageIds: memory.source_message_ids.length > 0
+          ? memory.source_message_ids
+          : sourceMessages.map((item) => item.id)
       });
-
-      await upsertMemoryEmbedding(env, created);
     }
 
     await finishIdempotentTask(env.DB, {

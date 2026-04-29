@@ -8,7 +8,7 @@ import { extractLastUserText, injectMemoryPatchAsSystemMessage, selectMemoriesFo
 import { toMemoryApiRecord } from "../memory/search";
 import { assemble } from "../assembler/assemble";
 import { PERSONA_MEMORY_TYPES } from "../assembler/types";
-import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
+import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../queue/producer";
 import {
   buildAnthropicNativeRequest,
   buildAnthropicRequestFromAssembled,
@@ -275,7 +275,8 @@ export async function handleChatCompletions(
           fromMessageId: latestUserMessageId,
           toMessageId: assistantMessageId,
           source: auth.profile.source
-        })
+        }),
+        enqueueRetentionIfNeeded(env, auth.profile.namespace)
       ])
     );
 
@@ -330,7 +331,8 @@ export async function handleChatCompletions(
         fromMessageId: latestUserMessageId,
         toMessageId: assistantMessageId,
         source: auth.profile.source
-      })
+      }),
+      enqueueRetentionIfNeeded(env, auth.profile.namespace)
     ])
   );
 

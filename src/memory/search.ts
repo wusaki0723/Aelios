@@ -189,14 +189,18 @@ async function searchWithVectorize(
     if (legacy) legacyRecords.push(legacy);
   }
 
-  const records = await fetchMemoriesByIds(env.DB, {
+  const allRecords = await fetchMemoriesByIds(env.DB, {
     namespace: input.namespace,
     ids: [...scoredIds.keys()]
   });
 
-  const foundIds = new Set(records.map((record) => record.id));
-  const d1Records = records.map((record) => ({ ...record, score: scoredIds.get(record.id) ?? 0 }));
-  const legacyOnlyRecords = legacyRecords.filter((record) => !foundIds.has(record.id));
+  // Only return active memories — expired/deleted/superseded must not be injected
+  const activeRecords = allRecords.filter((record) => record.status === "active");
+
+  // Use allRecords (not just active) so inactive D1 records block legacy fallback
+  const foundD1Ids = new Set(allRecords.map((record) => record.id));
+  const d1Records = activeRecords.map((record) => ({ ...record, score: scoredIds.get(record.id) ?? 0 }));
+  const legacyOnlyRecords = legacyRecords.filter((record) => !foundD1Ids.has(record.id));
 
   return [...d1Records, ...legacyOnlyRecords].sort(
     (a, b) => b.score + b.importance * 0.05 - (a.score + a.importance * 0.05)

@@ -1,6 +1,6 @@
 import { saveAssistantMessage } from "../db/messages";
 import { saveUsageLog } from "../db/usageLogs";
-import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
+import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../queue/producer";
 import {
   createThinkingFilterState,
   flushPendingDash,
@@ -143,6 +143,8 @@ async function persistStreamResult(options: StreamOpenAIOptions, state: StreamSt
     toMessageId: messageId,
     source: options.profile.source
   });
+
+  await enqueueRetentionIfNeeded(options.env, options.profile.namespace);
 }
 
 export function streamOpenAIWithTee(upstream: Response, options: StreamOpenAIOptions): Response {

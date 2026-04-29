@@ -33,6 +33,7 @@ export interface UpdateMemoryInput {
   status?: string;
   pinned?: boolean;
   tags?: string[];
+  sourceMessageIds?: string[];
   expiresAt?: string | null;
 }
 
@@ -163,6 +164,7 @@ export async function updateMemory(
   if (input.patch.status !== undefined) set("status", input.patch.status);
   if (input.patch.pinned !== undefined) set("pinned", input.patch.pinned ? 1 : 0);
   if (input.patch.tags !== undefined) set("tags", JSON.stringify(input.patch.tags));
+  if (input.patch.sourceMessageIds !== undefined) set("source_message_ids", JSON.stringify(input.patch.sourceMessageIds));
   if (input.patch.expiresAt !== undefined) set("expires_at", input.patch.expiresAt);
 
   if (assignments.length === 0) {

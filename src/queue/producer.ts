@@ -28,3 +28,15 @@ export async function enqueueMemoryMaintenanceIfNeeded(
 
   await handleQueueMessage(message, env);
 }
+
+export async function enqueueRetentionIfNeeded(
+  env: Env,
+  namespace: string
+): Promise<void> {
+  const message: QueueMessage = {
+    type: "retention",
+    namespace,
+  };
+
+  await handleQueueMessage(message, env);
+}

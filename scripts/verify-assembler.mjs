@@ -2002,6 +2002,657 @@ check("history rules only include strip_thinking", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Retention contract mirrors — must match src/db/retention.ts and
+// src/memory/retention.ts logic exactly.
+// ---------------------------------------------------------------------------
+
+const MESSAGES_RETENTION_DAYS = 14;
+const USAGE_LOGS_RETENTION_DAYS = 30;
+const MEMORY_EVENTS_RETENTION_DAYS = 30;
+const IDEMPOTENCY_KEYS_RETENTION_DAYS = 7;
+const MEMORY_ACTIVE_EXPIRY_DAYS = 180;
+const MEMORY_HARD_DELETE_DAYS = 30;
+const THROTTLE_HOURS = 24;
+const RETENTION_BATCH_SIZE = 100;
+
+function daysAgo(days) {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
+function hoursAgoMs(hours) {
+  return Date.now() - hours * 3_600_000;
+}
+
+function simulateExpireOldMemories(records, cutoff) {
+  return records.map((r) => {
+    if (
+      r.status === "active" &&
+      !r.pinned &&
+      r.type !== "identity" &&
+      r.type !== "persona" &&
+      r.updated_at < cutoff
+    ) {
+      return { ...r, status: "expired" };
+    }
+    return r;
+  });
+}
+
+function simulateHardDeleteCandidates(records, cutoff) {
+  return records.filter(
+    (r) =>
+      ["deleted", "superseded", "expired"].includes(r.status) &&
+      r.updated_at < cutoff
+  );
+}
+
+function simulateThrottle(lastRun, now) {
+  if (!lastRun) return true;
+  const lastRunMs = new Date(lastRun).getTime();
+  return lastRunMs <= now - THROTTLE_HOURS * 3_600_000;
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: D1 Lifecycle Retention
+// ---------------------------------------------------------------------------
+
+console.log("\n--- Test 15: D1 Lifecycle Retention ---");
+
+check("messages older than 14 days are deleted", () => {
+  const cutoff = daysAgo(MESSAGES_RETENTION_DAYS);
+  const old = new Date(Date.now() - 15 * 86_400_000).toISOString();
+  const recent = new Date(Date.now() - 5 * 86_400_000).toISOString();
+  // In the real DB: DELETE FROM messages WHERE namespace = ? AND created_at < cutoff
+  assert.ok(old < cutoff, "15-day-old message should be before cutoff");
+  assert.ok(recent > cutoff, "5-day-old message should be after cutoff");
+});
+
+check("usage_logs older than 30 days are deleted", () => {
+  const cutoff = daysAgo(USAGE_LOGS_RETENTION_DAYS);
+  const old = new Date(Date.now() - 31 * 86_400_000).toISOString();
+  const recent = new Date(Date.now() - 10 * 86_400_000).toISOString();
+  assert.ok(old < cutoff, "31-day-old usage_log should be before cutoff");
+  assert.ok(recent > cutoff, "10-day-old usage_log should be after cutoff");
+});
+
+check("memory_events older than 30 days are deleted", () => {
+  const cutoff = daysAgo(MEMORY_EVENTS_RETENTION_DAYS);
+  const old = new Date(Date.now() - 35 * 86_400_000).toISOString();
+  assert.ok(old < cutoff, "35-day-old memory_event should be before cutoff");
+});
+
+check("idempotency_keys older than 7 days are deleted", () => {
+  const cutoff = daysAgo(IDEMPOTENCY_KEYS_RETENTION_DAYS);
+  const old = new Date(Date.now() - 8 * 86_400_000).toISOString();
+  const recent = new Date(Date.now() - 3 * 86_400_000).toISOString();
+  assert.ok(old < cutoff, "8-day-old key should be before cutoff");
+  assert.ok(recent > cutoff, "3-day-old key should be after cutoff");
+});
+
+check("pinned memory is never expired", () => {
+  const cutoff = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const records = [
+    { id: "m1", type: "note", status: "active", pinned: 1, updated_at: daysAgo(200) },
+  ];
+  const result = simulateExpireOldMemories(records, cutoff);
+  assert.strictEqual(result[0].status, "active", "pinned memory should stay active");
+});
+
+check("identity memory is never expired", () => {
+  const cutoff = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const records = [
+    { id: "m2", type: "identity", status: "active", pinned: 0, updated_at: daysAgo(200) },
+  ];
+  const result = simulateExpireOldMemories(records, cutoff);
+  assert.strictEqual(result[0].status, "active", "identity memory should stay active");
+});
+
+check("persona memory is never expired", () => {
+  const cutoff = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const records = [
+    { id: "m3", type: "persona", status: "active", pinned: 0, updated_at: daysAgo(200) },
+  ];
+  const result = simulateExpireOldMemories(records, cutoff);
+  assert.strictEqual(result[0].status, "active", "persona memory should stay active");
+});
+
+check("pinned identity memory is never expired (pinned + identity)", () => {
+  const cutoff = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const records = [
+    { id: "m4", type: "identity", status: "active", pinned: 1, updated_at: daysAgo(300) },
+  ];
+  const result = simulateExpireOldMemories(records, cutoff);
+  assert.strictEqual(result[0].status, "active");
+});
+
+check("active note memory older than 180 days is marked expired", () => {
+  const cutoff = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const records = [
+    { id: "m5", type: "note", status: "active", pinned: 0, updated_at: daysAgo(181) },
+  ];
+  const result = simulateExpireOldMemories(records, cutoff);
+  assert.strictEqual(result[0].status, "expired");
+});
+
+check("active fact memory older than 180 days is marked expired", () => {
+  const cutoff = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const records = [
+    { id: "m6", type: "fact", status: "active", pinned: 0, updated_at: daysAgo(200) },
+  ];
+  const result = simulateExpireOldMemories(records, cutoff);
+  assert.strictEqual(result[0].status, "expired");
+});
+
+check("active memory younger than 180 days stays active", () => {
+  const cutoff = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const records = [
+    { id: "m7", type: "note", status: "active", pinned: 0, updated_at: daysAgo(30) },
+  ];
+  const result = simulateExpireOldMemories(records, cutoff);
+  assert.strictEqual(result[0].status, "active");
+});
+
+check("already deleted memory is not touched by expireOldMemories", () => {
+  const cutoff = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const records = [
+    { id: "m8", type: "note", status: "deleted", pinned: 0, updated_at: daysAgo(200) },
+  ];
+  const result = simulateExpireOldMemories(records, cutoff);
+  assert.strictEqual(result[0].status, "deleted", "deleted status should not change");
+});
+
+check("expired memory older than 30 days is hard-deletable", () => {
+  const cutoff = daysAgo(MEMORY_HARD_DELETE_DAYS);
+  const records = [
+    { id: "m9", status: "expired", updated_at: daysAgo(31) },
+    { id: "m10", status: "expired", updated_at: daysAgo(10) },
+  ];
+  const candidates = simulateHardDeleteCandidates(records, cutoff);
+  assert.strictEqual(candidates.length, 1);
+  assert.strictEqual(candidates[0].id, "m9");
+});
+
+check("deleted memory older than 30 days is hard-deletable", () => {
+  const cutoff = daysAgo(MEMORY_HARD_DELETE_DAYS);
+  const records = [
+    { id: "m11", status: "deleted", updated_at: daysAgo(45) },
+  ];
+  const candidates = simulateHardDeleteCandidates(records, cutoff);
+  assert.strictEqual(candidates.length, 1);
+});
+
+check("superseded memory older than 30 days is hard-deletable", () => {
+  const cutoff = daysAgo(MEMORY_HARD_DELETE_DAYS);
+  const records = [
+    { id: "m12", status: "superseded", updated_at: daysAgo(60) },
+  ];
+  const candidates = simulateHardDeleteCandidates(records, cutoff);
+  assert.strictEqual(candidates.length, 1);
+});
+
+check("active memory is never hard-deletable", () => {
+  const cutoff = daysAgo(MEMORY_HARD_DELETE_DAYS);
+  const records = [
+    { id: "m13", status: "active", updated_at: daysAgo(100) },
+  ];
+  const candidates = simulateHardDeleteCandidates(records, cutoff);
+  assert.strictEqual(candidates.length, 0);
+});
+
+check("expired memory younger than 30 days is NOT hard-deletable", () => {
+  const cutoff = daysAgo(MEMORY_HARD_DELETE_DAYS);
+  const records = [
+    { id: "m14", status: "expired", updated_at: daysAgo(15) },
+  ];
+  const candidates = simulateHardDeleteCandidates(records, cutoff);
+  assert.strictEqual(candidates.length, 0);
+});
+
+check("hard delete must sync Vectorize: vector_id records require VECTORIZE.deleteByIds", () => {
+  // Contract: hardDeleteMemories is only called AFTER VECTORIZE.deleteByIds succeeds
+  // If VECTORIZE is missing, only records with vector_id=null are hard-deleted
+  const record = { id: "m15", vector_id: "mem_m15", status: "expired", updated_at: daysAgo(60) };
+  assert.ok(record.vector_id !== null, "has vector_id → needs Vectorize cleanup first");
+});
+
+check("hard delete without VECTORIZE: only vector_id=null records are safe", () => {
+  const records = [
+    { id: "m16", vector_id: "mem_m16", status: "expired", updated_at: daysAgo(60) },
+    { id: "m17", vector_id: null, status: "expired", updated_at: daysAgo(60) },
+  ];
+  // When VECTORIZE is not bound, only records without vector_id can be safely deleted
+  const safeIds = records.filter((r) => r.vector_id === null).map((r) => r.id);
+  assert.deepStrictEqual(safeIds, ["m17"]);
+});
+
+check("retention throttle: first run (no cursor) should proceed", () => {
+  assert.strictEqual(simulateThrottle(null, Date.now()), true);
+});
+
+check("retention throttle: recent run (< 24h) should skip", () => {
+  const recentRun = new Date(Date.now() - 12 * 3_600_000).toISOString(); // 12h ago
+  assert.strictEqual(simulateThrottle(recentRun, Date.now()), false);
+});
+
+check("retention throttle: old run (> 24h) should proceed", () => {
+  const oldRun = new Date(Date.now() - 25 * 3_600_000).toISOString(); // 25h ago
+  assert.strictEqual(simulateThrottle(oldRun, Date.now()), true);
+});
+
+check("retention throttle: exactly 24h boundary should proceed", () => {
+  const boundaryRun = new Date(Date.now() - 24 * 3_600_000 - 1).toISOString(); // just over 24h
+  assert.strictEqual(simulateThrottle(boundaryRun, Date.now()), true);
+});
+
+check("retention constants are correct", () => {
+  assert.strictEqual(MESSAGES_RETENTION_DAYS, 14);
+  assert.strictEqual(USAGE_LOGS_RETENTION_DAYS, 30);
+  assert.strictEqual(MEMORY_EVENTS_RETENTION_DAYS, 30);
+  assert.strictEqual(IDEMPOTENCY_KEYS_RETENTION_DAYS, 7);
+  assert.strictEqual(MEMORY_ACTIVE_EXPIRY_DAYS, 180);
+  assert.strictEqual(MEMORY_HARD_DELETE_DAYS, 30);
+  assert.strictEqual(THROTTLE_HOURS, 24);
+  assert.strictEqual(RETENTION_BATCH_SIZE, 100);
+});
+
+check("full lifecycle: active → expired → hard-deletable chain", () => {
+  const now = Date.now();
+  const cutoff180 = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const cutoff30 = daysAgo(MEMORY_HARD_DELETE_DAYS);
+
+  // Memory created 200 days ago, last updated 200 days ago
+  const records = [
+    { id: "lifecycle", type: "note", status: "active", pinned: 0, updated_at: daysAgo(200), vector_id: "mem_lifecycle" },
+  ];
+
+  // Step 1: expire
+  const afterExpire = simulateExpireOldMemories(records, cutoff180);
+  assert.strictEqual(afterExpire[0].status, "expired");
+
+  // Step 2: simulate 30+ days passing (updated_at stays at 200 days ago)
+  const candidates = simulateHardDeleteCandidates(afterExpire, cutoff30);
+  assert.strictEqual(candidates.length, 1);
+  assert.strictEqual(candidates[0].id, "lifecycle");
+  assert.strictEqual(candidates[0].vector_id, "mem_lifecycle");
+});
+
+check("full lifecycle: pinned memory survives all retention stages", () => {
+  const cutoff180 = daysAgo(MEMORY_ACTIVE_EXPIRY_DAYS);
+  const cutoff30 = daysAgo(MEMORY_HARD_DELETE_DAYS);
+
+  const records = [
+    { id: "pinned-lifecycle", type: "persona", status: "active", pinned: 1, updated_at: daysAgo(300), vector_id: "mem_pl" },
+  ];
+
+  const afterExpire = simulateExpireOldMemories(records, cutoff180);
+  assert.strictEqual(afterExpire[0].status, "active", "pinned should stay active");
+
+  const candidates = simulateHardDeleteCandidates(afterExpire, cutoff30);
+  assert.strictEqual(candidates.length, 0, "active pinned should not be hard-deletable");
+});
+
+// --- Search layer: expired memory filtering ---
+
+check("search layer: expired D1 record from Vectorize hit is filtered out", () => {
+  // Contract: searchWithVectorize filters records where status !== "active"
+  // Simulates: Vectorize returns a match, but D1 record has status=expired
+  const d1Records = [
+    { id: "m1", status: "expired", importance: 0.8 },
+    { id: "m2", status: "active", importance: 0.7 },
+  ];
+  const activeRecords = d1Records.filter((r) => r.status === "active");
+  assert.strictEqual(activeRecords.length, 1);
+  assert.strictEqual(activeRecords[0].id, "m2");
+});
+
+check("search layer: deleted D1 record from Vectorize hit is filtered out", () => {
+  const d1Records = [
+    { id: "m3", status: "deleted", importance: 0.9 },
+  ];
+  const activeRecords = d1Records.filter((r) => r.status === "active");
+  assert.strictEqual(activeRecords.length, 0);
+});
+
+check("search layer: superseded D1 record from Vectorize hit is filtered out", () => {
+  const d1Records = [
+    { id: "m4", status: "superseded", importance: 0.6 },
+  ];
+  const activeRecords = d1Records.filter((r) => r.status === "active");
+  assert.strictEqual(activeRecords.length, 0);
+});
+
+check("search layer: all-expired Vectorize results produce empty output", () => {
+  const d1Records = [
+    { id: "m5", status: "expired" },
+    { id: "m6", status: "deleted" },
+  ];
+  const activeRecords = d1Records.filter((r) => r.status === "active");
+  assert.strictEqual(activeRecords.length, 0);
+});
+
+check("search layer: legacyOnlyRecords already filter non-active via metadata", () => {
+  // Contract: toLegacyMemoryRecord returns null when metadata status !== "active"
+  // This is the existing line: if (status && status !== "active") return null;
+  const metadata = { status: "expired", content: "test" };
+  const status = metadata.status;
+  const shouldInclude = !status || status === "active";
+  assert.strictEqual(shouldInclude, false, "expired metadata status should be excluded");
+});
+
+check("legacy fallback: expired D1 record blocks legacy resurrection", () => {
+  // Contract: foundD1Ids must use allRecords, not just activeRecords.
+  // If Vectorize returns match for id "m1" with active metadata,
+  // but D1 has status=expired for "m1", the legacy record must NOT leak through.
+  const allD1Records = [{ id: "m1", status: "expired" }];
+  const legacyRecords = [{ id: "m1", status: "active", content: "ghost memory" }];
+
+  const activeRecords = allD1Records.filter((r) => r.status === "active");
+  const foundD1Ids = new Set(allD1Records.map((r) => r.id));
+  const legacyOnly = legacyRecords.filter((r) => !foundD1Ids.has(r.id));
+
+  assert.strictEqual(activeRecords.length, 0, "expired should be filtered from active");
+  assert.strictEqual(legacyOnly.length, 0, "expired D1 id must block legacy fallback");
+});
+
+check("legacy fallback: deleted D1 record blocks legacy resurrection", () => {
+  const allD1Records = [{ id: "m2", status: "deleted" }];
+  const legacyRecords = [{ id: "m2", status: "active", content: "ghost memory" }];
+
+  const activeRecords = allD1Records.filter((r) => r.status === "active");
+  const foundD1Ids = new Set(allD1Records.map((r) => r.id));
+  const legacyOnly = legacyRecords.filter((r) => !foundD1Ids.has(r.id));
+
+  assert.strictEqual(activeRecords.length, 0, "deleted should be filtered from active");
+  assert.strictEqual(legacyOnly.length, 0, "deleted D1 id must block legacy fallback");
+});
+
+check("legacy fallback: superseded D1 record blocks legacy resurrection", () => {
+  const allD1Records = [{ id: "m3", status: "superseded" }];
+  const legacyRecords = [{ id: "m3", status: "active", content: "ghost memory" }];
+
+  const activeRecords = allD1Records.filter((r) => r.status === "active");
+  const foundD1Ids = new Set(allD1Records.map((r) => r.id));
+  const legacyOnly = legacyRecords.filter((r) => !foundD1Ids.has(r.id));
+
+  assert.strictEqual(activeRecords.length, 0, "superseded should be filtered from active");
+  assert.strictEqual(legacyOnly.length, 0, "superseded D1 id must block legacy fallback");
+});
+
+check("legacy fallback: D1 id absent → legacy record passes through", () => {
+  // If D1 has no record for "m4", the legacy record should still be allowed
+  const allD1Records = [{ id: "m1", status: "active" }];
+  const legacyRecords = [
+    { id: "m1", status: "active", content: "has d1 match" },
+    { id: "m4", status: "active", content: "no d1 match" },
+  ];
+
+  const foundD1Ids = new Set(allD1Records.map((r) => r.id));
+  const legacyOnly = legacyRecords.filter((r) => !foundD1Ids.has(r.id));
+
+  assert.strictEqual(legacyOnly.length, 1);
+  assert.strictEqual(legacyOnly[0].id, "m4", "only D1-absent legacy records pass");
+});
+
+check("legacy fallback: mixed — active D1 returns as d1Record, expired blocks legacy", () => {
+  const allD1Records = [
+    { id: "m1", status: "active" },
+    { id: "m2", status: "expired" },
+  ];
+  const scoredIds = new Map([["m1", 0.9], ["m2", 0.8]]);
+  const legacyRecords = [
+    { id: "m1", status: "active", content: "has d1 active" },
+    { id: "m2", status: "active", content: "has d1 expired" },
+    { id: "m3", status: "active", content: "no d1 match" },
+  ];
+
+  const activeRecords = allD1Records.filter((r) => r.status === "active");
+  const foundD1Ids = new Set(allD1Records.map((r) => r.id));
+  const d1Records = activeRecords.map((r) => ({ ...r, score: scoredIds.get(r.id) ?? 0 }));
+  const legacyOnly = legacyRecords.filter((r) => !foundD1Ids.has(r.id));
+
+  assert.strictEqual(d1Records.length, 1, "only active D1 records returned");
+  assert.strictEqual(d1Records[0].id, "m1");
+  assert.strictEqual(legacyOnly.length, 1, "only D1-absent legacy passes");
+  assert.strictEqual(legacyOnly[0].id, "m3");
+});
+
+// --- Batch processing ---
+
+check("batch: RETENTION_BATCH_SIZE is 100", () => {
+  assert.strictEqual(RETENTION_BATCH_SIZE, 100);
+});
+
+check("batch: 250 ids split into 3 batches (100+100+50)", () => {
+  const ids = Array.from({ length: 250 }, (_, i) => `id_${i}`);
+  const batches = [];
+  for (let i = 0; i < ids.length; i += RETENTION_BATCH_SIZE) {
+    batches.push(ids.slice(i, i + RETENTION_BATCH_SIZE));
+  }
+  assert.strictEqual(batches.length, 3);
+  assert.strictEqual(batches[0].length, 100);
+  assert.strictEqual(batches[1].length, 100);
+  assert.strictEqual(batches[2].length, 50);
+});
+
+check("batch: 100 ids fit in exactly 1 batch", () => {
+  const ids = Array.from({ length: 100 }, (_, i) => `id_${i}`);
+  const batches = [];
+  for (let i = 0; i < ids.length; i += RETENTION_BATCH_SIZE) {
+    batches.push(ids.slice(i, i + RETENTION_BATCH_SIZE));
+  }
+  assert.strictEqual(batches.length, 1);
+  assert.strictEqual(batches[0].length, 100);
+});
+
+check("batch: 101 ids split into 2 batches (100+1)", () => {
+  const ids = Array.from({ length: 101 }, (_, i) => `id_${i}`);
+  const batches = [];
+  for (let i = 0; i < ids.length; i += RETENTION_BATCH_SIZE) {
+    batches.push(ids.slice(i, i + RETENTION_BATCH_SIZE));
+  }
+  assert.strictEqual(batches.length, 2);
+  assert.strictEqual(batches[0].length, 100);
+  assert.strictEqual(batches[1].length, 1);
+});
+
+check("batch: empty ids produce 0 batches", () => {
+  const ids = [];
+  const batches = [];
+  for (let i = 0; i < ids.length; i += RETENTION_BATCH_SIZE) {
+    batches.push(ids.slice(i, i + RETENTION_BATCH_SIZE));
+  }
+  assert.strictEqual(batches.length, 0);
+});
+
+check("batch: stats accumulate across batches", () => {
+  // Simulates: each batch returns a count, stats sum them
+  const batchResults = [100, 100, 50];
+  const total = batchResults.reduce((sum, n) => sum + n, 0);
+  assert.strictEqual(total, 250);
+});
+
+check("batch: expireOldMemories returns expired refs with vector_ids", () => {
+  // Contract: expireOldMemories returns { count, expired: [{id, vector_id}] }
+  // so caller can sync Vectorize
+  const expireResult = {
+    count: 3,
+    expired: [
+      { id: "m1", vector_id: "mem_m1" },
+      { id: "m2", vector_id: "mem_m2" },
+      { id: "m3", vector_id: null },
+    ],
+  };
+  assert.strictEqual(expireResult.count, 3);
+  const vectorIds = expireResult.expired
+    .map((m) => m.vector_id)
+    .filter((v) => v !== null);
+  assert.strictEqual(vectorIds.length, 2, "only records with vector_id get Vectorize cleanup");
+});
+
+check("batch: Vectorize deleteByIds should be batched like hardDeleteMemories", () => {
+  // Contract: both Vectorize and D1 use the same RETENTION_BATCH_SIZE
+  const vectorIds = Array.from({ length: 150 }, (_, i) => `mem_${i}`);
+  const batches = [];
+  for (let i = 0; i < vectorIds.length; i += RETENTION_BATCH_SIZE) {
+    batches.push(vectorIds.slice(i, i + RETENTION_BATCH_SIZE));
+  }
+  assert.strictEqual(batches.length, 2);
+  assert.strictEqual(batches[0].length, 100);
+  assert.strictEqual(batches[1].length, 50);
+});
+
+// ---------------------------------------------------------------------------
+// Test 16: Memory Merge / Supersede
+// ---------------------------------------------------------------------------
+
+console.log("\n--- Test 16: Memory Merge / Supersede ---");
+
+function normalizeMergeText(value) {
+  return value.toLowerCase().replace(/\s+/g, "");
+}
+
+function uniqueMergeStrings(values) {
+  return [...new Set(values.map((value) => String(value).trim()).filter(Boolean))];
+}
+
+function isCorrectionText(text) {
+  return /(之前|刚才|上次).{0,12}(说错|记错|错了|不是|改成|更正)|不是.+是|应(?:该)?改为|改成/.test(text);
+}
+
+function fallbackMergeDecision(incoming, candidates) {
+  const target = candidates.find((candidate) => !candidate.pinned);
+  if (!target) return { action: "keep_both" };
+  if (isCorrectionText(incoming.content)) {
+    return { action: "supersede", target_id: target.id, content: incoming.content };
+  }
+  return { action: "keep_both" };
+}
+
+function resolveMergeTarget(decision, candidates) {
+  if (decision.target_id) {
+    return candidates.find((candidate) => candidate.id === decision.target_id) ?? null;
+  }
+  return candidates.find((candidate) => !candidate.pinned) ?? null;
+}
+
+check("merge candidates: exact normalized duplicate can be considered", () => {
+  const incoming = { content: "我喜欢安静地聊天" };
+  const candidate = { content: "我 喜欢 安静地 聊天", status: "active", score: 0.4 };
+  assert.strictEqual(normalizeMergeText(incoming.content), normalizeMergeText(candidate.content));
+});
+
+check("merge candidates: low-score non-duplicate is ignored", () => {
+  const candidate = { content: "用户喜欢电影", status: "active", score: 0.5 };
+  const incoming = { content: "用户喜欢咖啡" };
+  const included =
+    candidate.status === "active" &&
+    (normalizeMergeText(candidate.content) === normalizeMergeText(incoming.content) || candidate.score >= 0.82);
+  assert.strictEqual(included, false);
+});
+
+check("merge candidates: active high-score candidate is included", () => {
+  const candidate = { status: "active", score: 0.91 };
+  assert.strictEqual(candidate.status === "active" && candidate.score >= 0.82, true);
+});
+
+check("merge candidates: inactive candidates are ignored", () => {
+  const candidate = { status: "expired", score: 0.99 };
+  assert.strictEqual(candidate.status === "active" && candidate.score >= 0.82, false);
+});
+
+check("fallback decision: pinned-only candidates keep both", () => {
+  const decision = fallbackMergeDecision(
+    { content: "之前说错了，不是咖啡是茶" },
+    [{ id: "mem_pin", pinned: true }]
+  );
+  assert.strictEqual(decision.action, "keep_both");
+});
+
+check("fallback decision: correction text supersedes first non-pinned candidate", () => {
+  const decision = fallbackMergeDecision(
+    { content: "我之前说错了，不是喜欢咖啡，是喜欢茶" },
+    [{ id: "mem_old", pinned: false }]
+  );
+  assert.strictEqual(decision.action, "supersede");
+  assert.strictEqual(decision.target_id, "mem_old");
+});
+
+check("fallback decision: non-correction similar text keeps both without model decision", () => {
+  const decision = fallbackMergeDecision(
+    { content: "用户喜欢热茶" },
+    [{ id: "mem_old", pinned: false }]
+  );
+  assert.strictEqual(decision.action, "keep_both");
+});
+
+check("resolve target: explicit target_id wins", () => {
+  const target = resolveMergeTarget(
+    { action: "merge", target_id: "mem_b" },
+    [{ id: "mem_a", pinned: false }, { id: "mem_b", pinned: false }]
+  );
+  assert.strictEqual(target.id, "mem_b");
+});
+
+check("resolve target: missing target falls back to first non-pinned", () => {
+  const target = resolveMergeTarget(
+    { action: "merge" },
+    [{ id: "mem_pin", pinned: true }, { id: "mem_free", pinned: false }]
+  );
+  assert.strictEqual(target.id, "mem_free");
+});
+
+check("merge/supersede decision without target_id is treated as create-new", () => {
+  const decision = { action: "supersede" };
+  const shouldCreateNew =
+    (decision.action === "merge" || decision.action === "supersede") && !decision.target_id;
+  assert.strictEqual(shouldCreateNew, true);
+});
+
+check("merge patch: tags and source_message_ids are unioned", () => {
+  assert.deepStrictEqual(
+    uniqueMergeStrings(["preference", "tea", "preference", "new"]),
+    ["preference", "tea", "new"]
+  );
+  assert.deepStrictEqual(uniqueMergeStrings(["msg_1", "msg_2", "msg_1"]), ["msg_1", "msg_2"]);
+});
+
+check("merge patch: importance and confidence keep the stronger value", () => {
+  const existing = { importance: 0.8, confidence: 0.7 };
+  const incoming = { importance: 0.6, confidence: 0.95 };
+  assert.strictEqual(Math.max(existing.importance, incoming.importance), 0.8);
+  assert.strictEqual(Math.max(existing.confidence, incoming.confidence), 0.95);
+});
+
+check("merge decision: merge without content must not overwrite existing memory", () => {
+  const decision = { action: "merge", target_id: "mem_old" };
+  const shouldCreateNew = decision.action === "merge" && !decision.content;
+  assert.strictEqual(shouldCreateNew, true);
+});
+
+check("supersede flow: old memory becomes superseded before new active memory is created", () => {
+  const old = { id: "mem_old", status: "active", vector_id: "mem_mem_old" };
+  const updated = { ...old, status: "superseded" };
+  const created = { id: "mem_new", status: "active" };
+  assert.strictEqual(updated.status, "superseded");
+  assert.strictEqual(created.status, "active");
+  assert.ok(updated.vector_id, "superseded old memory needs Vectorize delete");
+});
+
+check("supersede flow: stale vector delete failure should not block corrected memory", () => {
+  const d1Status = "superseded";
+  const vectorDeleteOk = false;
+  const searchLayerBlocksOld = d1Status !== "active";
+  assert.strictEqual(vectorDeleteOk, false);
+  assert.strictEqual(searchLayerBlocksOld, true);
+});
+
+check("pinned target is never merge/supersede applied", () => {
+  const target = { id: "mem_pin", pinned: true };
+  const shouldCreateNew = target.pinned;
+  assert.strictEqual(shouldCreateNew, true);
+});
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 import { saveAssistantMessage } from "../db/messages";
 import { saveUsageLog } from "../db/usageLogs";
-import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
+import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../queue/producer";
 import { normalizeAnthropicUsage } from "./anthropicAdapter";
 import {
   createThinkingFilterState,
@@ -136,6 +136,8 @@ async function persistStreamResult(options: StreamAnthropicOptions, state: Strea
     toMessageId: messageId,
     source: options.profile.source
   });
+
+  await enqueueRetentionIfNeeded(options.env, options.profile.namespace);
 }
 
 export function streamAnthropicToOpenAI(upstream: Response, options: StreamAnthropicOptions): Response {

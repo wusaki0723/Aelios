@@ -36,7 +36,7 @@ export interface Env {
   CACHE_MAX_VALUE_BYTES?: string;
 }
 
-export interface QueueMessage {
+export interface MemoryMaintenanceQueueMessage {
   type: "memory_maintenance";
   namespace: string;
   conversationId: string;
@@ -45,6 +45,13 @@ export interface QueueMessage {
   source: string;
   idempotencyKey: string;
 }
+
+export interface RetentionQueueMessage {
+  type: "retention";
+  namespace: string;
+}
+
+export type QueueMessage = MemoryMaintenanceQueueMessage | RetentionQueueMessage;
 
 export type Scope =
   | "chat:proxy"

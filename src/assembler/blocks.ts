@@ -133,7 +133,7 @@ const personaPinnedBlock: Block = {
 
 function truncateSummary(content: string, maxChars: number): string {
   if (content.length <= maxChars) return content;
-  return content.slice(0, maxChars) + "...";
+  return content.slice(0, maxChars - 3) + "...";
 }
 
 const longTermSummaryBlock: Block = {

@@ -1210,20 +1210,121 @@ function getThinkingBudget(env) {
   return Number.isFinite(value) ? Math.min(Math.max(Math.floor(value), 1024), 32000) : 1024;
 }
 
-function buildThinkingConfig(env) {
+function clampThinkingBudget(value) {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(numeric)) return null;
+  return Math.min(Math.max(Math.floor(numeric), 1024), 32000);
+}
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseBooleanLike(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["false", "0", "no", "off", "disabled", "none"].includes(normalized)) return false;
+  return null;
+}
+
+function budgetFromReasoningEffort(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (["none", "off", "disabled", "disable"].includes(normalized)) return 0;
+  if (["minimal", "low"].includes(normalized)) return 1024;
+  if (["medium", "auto"].includes(normalized)) return 2048;
+  if (normalized === "high") return 4096;
+  if (["xhigh", "extra_high"].includes(normalized)) return 8192;
+  return null;
+}
+
+function readThinkingDirective(source) {
+  const effortBudget = budgetFromReasoningEffort(source.reasoning_effort);
+  if (effortBudget === 0) return { enabled: false };
+  if (effortBudget && effortBudget > 0) return { enabled: true, budget: effortBudget };
+
+  const enableThinking = parseBooleanLike(source.enable_thinking);
+  if (enableThinking !== null) {
+    return {
+      enabled: enableThinking,
+      budget: clampThinkingBudget(source.thinking_budget ?? source.reasoning_budget ?? source.budget_tokens) ?? undefined,
+    };
+  }
+
+  const thinking = source.thinking;
+  if (parseBooleanLike(thinking) !== null) {
+    const enabled = parseBooleanLike(thinking);
+    return {
+      enabled: enabled ?? undefined,
+      budget: clampThinkingBudget(source.thinking_budget ?? source.reasoning_budget ?? source.budget_tokens) ?? undefined,
+    };
+  }
+
+  if (isRecord(thinking)) {
+    const type = typeof thinking.type === "string" ? thinking.type.trim().toLowerCase() : "";
+    if (["disabled", "off", "none"].includes(type)) return { enabled: false };
+    const budget = clampThinkingBudget(thinking.budget_tokens ?? thinking.budget ?? source.thinking_budget);
+    if (type === "enabled" || budget) return { enabled: true, budget: budget ?? undefined };
+  }
+
+  const reasoning = source.reasoning;
+  if (parseBooleanLike(reasoning) !== null) {
+    const enabled = parseBooleanLike(reasoning);
+    return {
+      enabled: enabled ?? undefined,
+      budget: clampThinkingBudget(source.reasoning_budget ?? source.budget_tokens) ?? undefined,
+    };
+  }
+
+  if (isRecord(reasoning)) {
+    const enabled = parseBooleanLike(reasoning.enabled);
+    if (enabled === false) return { enabled: false };
+    const budget =
+      clampThinkingBudget(reasoning.budget_tokens ?? reasoning.budget ?? source.reasoning_budget) ??
+      budgetFromReasoningEffort(reasoning.effort);
+    if (enabled === true || (budget && budget > 0)) return { enabled: true, budget: budget ?? undefined };
+  }
+
+  const budget = clampThinkingBudget(source.thinking_budget ?? source.reasoning_budget ?? source.budget_tokens);
+  if (budget) return { enabled: true, budget };
+
+  return {};
+}
+
+function getRequestThinkingDirective(req) {
+  for (const source of [req, isRecord(req.extra_body) ? req.extra_body : null, isRecord(req.extraBody) ? req.extraBody : null]) {
+    if (!source) continue;
+    const directive = readThinkingDirective(source);
+    if (directive.enabled !== undefined || directive.budget !== undefined) return directive;
+  }
+  return {};
+}
+
+function buildThinkingConfig(env, req) {
+  const requestDirective = getRequestThinkingDirective(req);
+  if (requestDirective.enabled === false) return undefined;
+  if (requestDirective.enabled === true || requestDirective.budget) {
+    return {
+      type: "enabled",
+      budget_tokens: requestDirective.budget ?? getThinkingBudget(env),
+      display: "summarized",
+    };
+  }
   if (env.ANTHROPIC_THINKING_ENABLED !== "true") return undefined;
   return { type: "enabled", budget_tokens: getThinkingBudget(env), display: "summarized" };
 }
 
 function getAnthropicMaxTokens(req, env) {
   const maxTokens = typeof req.max_tokens === "number" ? Math.max(Math.floor(req.max_tokens), 1) : 1024;
-  const thinking = buildThinkingConfig(env);
+  const thinking = buildThinkingConfig(env, req);
   if (!thinking) return maxTokens;
   return Math.max(maxTokens, thinking.budget_tokens + Math.min(Math.max(maxTokens, 256), 4096));
 }
 
 function buildAnthropicRequestFromAssembled(req, targetModel, assembled, env) {
-  const thinking = buildThinkingConfig(env);
+  const thinking = buildThinkingConfig(env, req);
   const system = assembledToAnthropicSystem(assembled.system_blocks);
   applyCacheOverrides(system, env);
   const messages = assembledToAnthropicMessages(assembled.messages);
@@ -1510,6 +1611,43 @@ check("Anthropic thinking adds summarized thinking and enough max_tokens", () =>
   assert.deepStrictEqual(req.thinking, { type: "enabled", budget_tokens: 1024, display: "summarized" });
   assert.ok(req.max_tokens > req.thinking.budget_tokens);
   assert.strictEqual(req.temperature, undefined);
+});
+
+check("front-end reasoning_effort enables Claude thinking without env flag", () => {
+  const ctx = makeBaseCtx();
+  const assembled = assemble(ctx);
+  const req = buildAnthropicRequestFromAssembled(
+    { model: "companion", messages: [], max_tokens: 256, reasoning_effort: "high" },
+    "anthropic/claude-haiku-4-5",
+    assembled,
+    {}
+  );
+  assert.deepStrictEqual(req.thinking, { type: "enabled", budget_tokens: 4096, display: "summarized" });
+});
+
+check("front-end thinking=false disables env default thinking", () => {
+  const ctx = makeBaseCtx();
+  const assembled = assemble(ctx);
+  const req = buildAnthropicRequestFromAssembled(
+    { model: "companion", messages: [], thinking: false, max_tokens: 256 },
+    "anthropic/claude-haiku-4-5",
+    assembled,
+    { ANTHROPIC_THINKING_ENABLED: "true", ANTHROPIC_THINKING_BUDGET: "1024" }
+  );
+  assert.strictEqual(req.thinking, undefined);
+  assert.strictEqual(req.temperature, undefined);
+});
+
+check("front-end extra_body.thinking budget maps to Claude thinking", () => {
+  const ctx = makeBaseCtx();
+  const assembled = assemble(ctx);
+  const req = buildAnthropicRequestFromAssembled(
+    { model: "companion", messages: [], extra_body: { thinking: { type: "enabled", budget_tokens: 3072 } } },
+    "anthropic/claude-haiku-4-5",
+    assembled,
+    {}
+  );
+  assert.deepStrictEqual(req.thinking, { type: "enabled", budget_tokens: 3072, display: "summarized" });
 });
 
 check("preset_lite no longer hardcodes short paragraphs or hidden-thinking suppression", () => {

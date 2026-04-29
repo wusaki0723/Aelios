@@ -20,19 +20,18 @@ interface StreamAnthropicOptions {
 
 interface StreamState {
   assistantText: string;
+  reasoningText: string;
   finishReason: string | null;
   usage?: TokenUsage;
 }
 
-function openAIChunk(content: string): Uint8Array {
+function openAIChunk(delta: { content?: string; reasoning_content?: string }): Uint8Array {
   return new TextEncoder().encode(
     `data: ${JSON.stringify({
       choices: [
         {
           index: 0,
-          delta: {
-            content
-          },
+          delta,
           finish_reason: null
         }
       ]
@@ -44,13 +43,14 @@ function doneChunk(): Uint8Array {
   return new TextEncoder().encode("data: [DONE]\n\n");
 }
 
-function consumeAnthropicData(data: string, state: StreamState): string | null {
+function consumeAnthropicData(data: string, state: StreamState): { content?: string; reasoning_content?: string } | null {
   try {
     const parsed = JSON.parse(data) as {
       type?: string;
       delta?: {
         type?: string;
         text?: string;
+        thinking?: string;
         stop_reason?: string | null;
       };
       usage?: TokenUsage;
@@ -65,7 +65,12 @@ function consumeAnthropicData(data: string, state: StreamState): string | null {
 
     if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta" && parsed.delta.text) {
       state.assistantText += parsed.delta.text;
-      return parsed.delta.text;
+      return { content: parsed.delta.text };
+    }
+
+    if (parsed.type === "content_block_delta" && parsed.delta?.type === "thinking_delta" && parsed.delta.thinking) {
+      state.reasoningText += parsed.delta.thinking;
+      return { reasoning_content: parsed.delta.thinking };
     }
 
     if (parsed.type === "message_delta") {
@@ -135,6 +140,7 @@ export function streamAnthropicToOpenAI(upstream: Response, options: StreamAnthr
   const decoder = new TextDecoder();
   const state: StreamState = {
     assistantText: "",
+    reasoningText: "",
     finishReason: null
   };
 
@@ -154,8 +160,8 @@ export function streamAnthropicToOpenAI(upstream: Response, options: StreamAnthr
         for (const event of parsed.events) {
           const data = getSseData(event);
           if (!data) continue;
-          const text = consumeAnthropicData(data, state);
-          if (text) await writer.write(openAIChunk(text));
+          const delta = consumeAnthropicData(data, state);
+          if (delta) await writer.write(openAIChunk(delta));
         }
       }
 
@@ -164,8 +170,8 @@ export function streamAnthropicToOpenAI(upstream: Response, options: StreamAnthr
       for (const event of parsed.events) {
         const data = getSseData(event);
         if (!data) continue;
-        const text = consumeAnthropicData(data, state);
-        if (text) await writer.write(openAIChunk(text));
+        const delta = consumeAnthropicData(data, state);
+        if (delta) await writer.write(openAIChunk(delta));
       }
 
       await writer.write(doneChunk());

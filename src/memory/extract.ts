@@ -24,9 +24,23 @@ function normalizeStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
 }
 
+function sanitizeMemoryContent(text: string): string {
+  return text
+    .replace(/debug-test/gi, "")
+    .replace(/记忆系统/g, "")
+    .replace(/自动记忆测试口令/g, "口令")
+    .replace(/测试口令/g, "口令")
+    .replace(/标签为?[^，。；\s]+/g, "")
+    .replace(/标签[:：]?[^，。；\s]+/g, "")
+    .replace(/[，,；;：:]\s*([。.!！?？])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[，,；;：:\s]+|[，,；;：:\s]+$/g, "")
+    .trim();
+}
+
 function normalizeMemoryContent(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const text = value.trim();
+  const text = sanitizeMemoryContent(value);
   if (!text || text.length > 1000) return null;
   return text;
 }
@@ -120,6 +134,7 @@ function buildExtractionPrompt(messages: MessageRecord[]): string {
     "- 重复信息",
     "- 未明确表达的猜测",
     "- 只属于本轮 prompt 风格的临时指令",
+    "- 记忆系统、debug-test、标签、测试口令等调试/后端元信息",
     "",
     "优先保存：",
     "- 用户长期偏好",
@@ -135,7 +150,7 @@ function buildExtractionPrompt(messages: MessageRecord[]): string {
       memories: [
         {
           type: "project",
-          content: "用户正在做一个 Cloudflare Worker 记忆代理。",
+          content: "用户正在做一个 Cloudflare Worker 项目。",
           importance: 0.86,
           confidence: 0.94,
           tags: ["project", "cloudflare"],

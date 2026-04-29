@@ -103,6 +103,8 @@ CHAT_MODEL              主聊天模型
 MEMORY_FILTER_MODEL     记忆筛选压缩模型
 MEMORY_MODEL            记忆小秘书模型
 VISION_MODEL            图片识别模型
+ANTHROPIC_THINKING_ENABLED  Claude thinking 开关，默认 false
+ANTHROPIC_THINKING_BUDGET   Claude thinking 预算，默认 1024
 ```
 
 仓库默认值是：
@@ -112,6 +114,8 @@ CHAT_MODEL=deepseek/deepseek-v4-pro
 MEMORY_FILTER_MODEL=google-ai-studio/gemini-2.5-flash
 MEMORY_MODEL=deepseek/deepseek-v4-flash
 VISION_MODEL=google-ai-studio/gemini-3-flash-preview
+ANTHROPIC_THINKING_ENABLED=false
+ANTHROPIC_THINKING_BUDGET=1024
 ```
 
 如果部署时提示 Wrangler 没权限，再补两个构建变量：
@@ -282,6 +286,8 @@ CHAT_MODEL = "deepseek/deepseek-v4-pro"
 MEMORY_FILTER_MODEL = "google-ai-studio/gemini-2.5-flash"
 MEMORY_MODEL = "deepseek/deepseek-v4-flash"
 VISION_MODEL = "google-ai-studio/gemini-3-flash-preview"
+ANTHROPIC_THINKING_ENABLED = "false"
+ANTHROPIC_THINKING_BUDGET = "1024"
 ```
 
 Cloudflare Dashboard 里还需要填：

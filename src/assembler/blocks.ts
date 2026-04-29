@@ -42,6 +42,20 @@ function contentToText(content: OpenAIChatMessage["content"]): string {
     .join("\n");
 }
 
+function sanitizeMemoryContent(text: string): string {
+  return text
+    .replace(/debug-test/gi, "")
+    .replace(/记忆系统/g, "")
+    .replace(/自动记忆测试口令/g, "口令")
+    .replace(/测试口令/g, "口令")
+    .replace(/标签为?[^，。；\s]+/g, "")
+    .replace(/标签[:：]?[^，。；\s]+/g, "")
+    .replace(/[，,；;：:]\s*([。.!！?？])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[，,；;：:\s]+|[，,；;：:\s]+$/g, "")
+    .trim();
+}
+
 function isNonEmptyContent(content: OpenAIChatMessage["content"]): boolean {
   if (typeof content === "string") return content.trim().length > 0;
   if (content == null) return false;
@@ -61,7 +75,7 @@ function messageToOutput(
 // ---------------------------------------------------------------------------
 
 const PROXY_STATIC_RULES_TEXT = [
-  "你是伴侣角色，自然对话即可。",
+  "遵循前端提供的角色、关系和上下文，自然对话即可。",
   "不要暴露记忆系统、数据库、RAG、代理层或任何后端实现。",
   "不要机械复述设定原文，用自己的话自然表达。",
   "如果记忆与当前对话无关，不要强行提起。",
@@ -83,10 +97,9 @@ const proxyStaticRulesBlock: Block = {
 
 function formatPersonaPinned(memories: MemoryApiRecord[]): string {
   return memories
-    .map(
-      (m) =>
-        `- [${m.type}][importance=${m.importance.toFixed(2)}] ${m.content}`
-    )
+    .map((m) => ({ ...m, content: sanitizeMemoryContent(m.content) }))
+    .filter((m) => m.content)
+    .map((m) => `- [${m.type}][importance=${m.importance.toFixed(2)}] ${m.content}`)
     .join("\n");
 }
 
@@ -145,8 +158,7 @@ const PRESET_LITE_TEXT = [
   "<output_style_lite>",
   "- 自然中文，避免翻译腔和过度名词化",
   "- 多用具体动作和对白承载情绪，少用作者式分析",
-  "- 段落不宜过长，对白可独立成段",
-  "- 不输出隐藏思考，不输出多语言版本附录，不机械复述设定",
+  "- 对白可独立成段，不机械复述设定",
   "- 全角标点，不用破折号，用逗号或句号替代",
   "</output_style_lite>",
 ].join("\n");
@@ -189,10 +201,11 @@ const clientSystemBlock: Block = {
 // ---------------------------------------------------------------------------
 
 function formatRagMemories(memories: MemoryApiRecord[]): string {
-  const lines = memories.map(
-    (m) =>
-      `- [${m.type}][importance=${m.importance.toFixed(2)}] ${m.content}`
-  );
+  const lines = memories
+    .map((m) => ({ ...m, content: sanitizeMemoryContent(m.content) }))
+    .filter((m) => m.content)
+    .map((m) => `- [${m.type}][importance=${m.importance.toFixed(2)}] ${m.content}`);
+  if (lines.length === 0) return "";
 
   return [
     "<memories>",
@@ -208,7 +221,7 @@ const dynamicMemoryPatchBlock: Block = {
   cache_anchor: false,
   content_fn: (ctx: AssemblerContext): string | null => {
     if (ctx.ragMemories.length === 0) return null;
-    return formatRagMemories(ctx.ragMemories);
+    return formatRagMemories(ctx.ragMemories) || null;
   },
 };
 

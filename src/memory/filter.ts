@@ -6,6 +6,20 @@ interface FilteredMemoryItem {
   content: string;
 }
 
+function sanitizeMemoryContent(text: string): string {
+  return text
+    .replace(/debug-test/gi, "")
+    .replace(/记忆系统/g, "")
+    .replace(/自动记忆测试口令/g, "口令")
+    .replace(/测试口令/g, "口令")
+    .replace(/标签为?[^，。；\s]+/g, "")
+    .replace(/标签[:：]?[^，。；\s]+/g, "")
+    .replace(/[，,；;：:]\s*([。.!！?？])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[，,；;：:\s]+|[，,；;：:\s]+$/g, "")
+    .trim();
+}
+
 function isEnabled(env: Env): boolean {
   return env.ENABLE_MEMORY_FILTER !== "false" && Boolean(env.MEMORY_FILTER_MODEL);
 }
@@ -64,7 +78,8 @@ function parseFilteredItems(text: string): FilteredMemoryItem[] | null {
           : null;
 
     if (id && content) {
-      items.push({ id, content: content.trim() });
+      const sanitized = sanitizeMemoryContent(content);
+      if (sanitized) items.push({ id, content: sanitized });
     }
   }
 
@@ -89,6 +104,8 @@ function buildPrompt(input: { query: string; memories: MemoryApiRecord[]; maxOut
     "- 删除寒暄、重复、牵强、明显无关的记忆。",
     "- pinned=true 的记忆除非明显无关，否则优先保留。",
     "- 不要添加候选记忆里没有的新事实。",
+    "- 不要输出记忆系统、debug-test、标签、测试口令等调试/后端元信息。",
+    "- 如果候选里有真实口令，只保留口令本身，不要保留“测试”“标签”“debug”等包装词。",
     "- 每条 content 控制在 60 个中文字以内。",
     `- 最多输出 ${input.maxOutput} 条。`,
     "",

@@ -1,510 +1,492 @@
-# Companion Memory Proxy
+# Companion Memory Proxy (Aelios)
 
-这是一个部署在 Cloudflare Workers 上的 OpenAI-compatible 记忆网关。
+部署在 Cloudflare Workers 上的 OpenAI-compatible 记忆网关。
 
-它让 Chatbox、Cherry Studio、网页前端、IM bot 这类支持 OpenAI API 的客户端，直接获得：
+Chatbox、Cherry Studio、网页前端、IM bot 等支持 OpenAI API 的客户端，接上就能用：
 
-- 普通 `/v1/chat/completions` 聊天接口
-- 自动长期记忆注入
-- 自动写入长期记忆
-- 手动 Memory API
+- `/v1/chat/completions` 聊天
+- 自动长期记忆注入 + 自动写入
+- 长期对话摘要
 - Vectorize 语义搜索
-- Cloudflare AI Gateway 统一模型调用
-- Claude 自动路由和显式 prompt cache
-- 图片请求自动走视觉模型
-- Cache API
+- Cloudflare AI Gateway 统一代理
+- Claude 自动路由 + prompt cache
+- 图片自动走视觉模型
+- D1 自动清理过期数据
 
 ---
 
-## 人类版：极简部署
+## 人类版：照着点就行
 
-你不用看懂代码。照着做，卡住就把这个项目链接发给你的 AI，让它照下面的“AI 版”部署。
+你不用看代码。卡住了就把这个项目的链接发给你的 AI，让它照下面的"AI 版"帮你操作。
 
-### 1. 先准备
+### 第一步：Fork 项目
 
-你需要：
+打开项目地址，点右上角 `Fork` -> `Create fork`：
 
-```text
-一个 Cloudflare 账号
-一个 Cloudflare AI Gateway
-一个 GitHub 账号
 ```
-
-如果你不想自己操作，就复制这句话给你的 AI：
-
-```text
-请先把这个 GitHub 项目 fork 到我的 GitHub 账号，再把我的 fork 部署到 Cloudflare Workers。README 里有人类版和 AI 版说明，请按 AI 版操作。部署后帮我测试 /health、图片请求、记忆写入和记忆搜索。
-```
-
-源项目地址：
-
-```text
 https://github.com/wusaki0723/Aelios
 ```
 
-### 2. 先 Fork 到自己的 GitHub
+Fork 完你会得到自己的仓库：
 
-打开源项目地址，点右上角：
-
-```text
-Fork
--> Create fork
+```
+https://github.com/<你的名字>/Aelios
 ```
 
-Fork 完以后，你会得到一个自己的仓库，地址大概长这样：
+### 第二步：Cloudflare 关联你的 Fork
 
-```text
-https://github.com/<你的 GitHub 名字>/Aelios
+```
+Cloudflare Dashboard
+  -> Workers & Pages
+  -> Create application
+  -> Import a repository
+  -> 选 GitHub
+  -> 选 <你的名字>/Aelios
 ```
 
-后面 Cloudflare 要关联的是你自己的 fork，不要直接关联 `wusaki0723/Aelios`。
+配置这样填：
 
-### 3. 在 Cloudflare 关联自己的 Fork
-
-在 Cloudflare 里点：
-
-```text
-Workers & Pages
--> Create application
--> Import a repository
--> 选择 GitHub
--> 选择 <你的 GitHub 名字>/Aelios
+```
+Project name:       companion-memory-proxy
+Production branch:  main
+Root directory:     /
+Build command:      npm ci
+Deploy command:     npm run deploy:cloudflare
 ```
 
-项目配置填：
+**Deploy command 不要改！** 必须是 `npm run deploy:cloudflare`。它会自动建 D1、Vectorize、Queue、跑数据库升级、再部署。
 
-```text
-Project name: companion-memory-proxy
-Production branch: main
-Root directory: /
-Build command: npm ci
-Deploy command: npm run deploy:cloudflare
+### 第三步：填三个必填变量
+
+在 Cloudflare 项目 -> `Variables and Secrets` 里添加：
+
+| 变量名 | 在哪里找 | 说明 |
+|--------|---------|------|
+| `AI_GATEWAY_BASE_URL` | Cloudflare AI Gateway 页面 | 你的网关地址，长这样：`https://gateway.ai.cloudflare.com/v1/xxx/yyy` |
+| `CF_AIG_TOKEN` | Cloudflare Dashboard | AI Gateway 调用用的 token |
+| `CHATBOX_API_KEY` | 你自己编一个 | 客户端连接用的密码，例如 `sk-my-key-123` |
+
+填完这 3 个就能跑了。
+
+### 第四步：改模型（可选）
+
+模型已经在代码里配好了默认值，**不改也能用**。想换模型的话：
+
+| 变量名 | 默认值 | 干嘛的 |
+|--------|--------|--------|
+| `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天模型 |
+| `MEMORY_FILTER_MODEL` | `google-ai-studio/gemini-2.5-flash` | 记忆筛选压缩（快且便宜） |
+| `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 + 摘要（快且便宜） |
+| `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
+| `SUMMARY_MODEL` | 不填，用 `MEMORY_MODEL` | 长期摘要生成（可选覆盖） |
+
+想换模型？直接在 Cloudflare Dashboard 的 Variables 里改，不用动代码。
+
+模型名格式是 `provider/model`，比如：
+- `deepseek/deepseek-v4-pro`
+- `google-ai-studio/gemini-2.5-flash`
+- `anthropic/claude-sonnet-4-6`
+- `openai/gpt-4o`
+
+### 第五步：点 Deploy
+
+部署成功后你的地址长这样：
+
 ```
-
-不要把 Deploy command 改成 `npm run deploy` 或 `wrangler deploy`。
-`npm run deploy:cloudflare` 会先准备 D1、Vectorize、Queue，并自动跑数据库升级，再部署 Worker。
-
-### 4. 填变量
-
-在 Cloudflare 项目的 `Variables and Secrets` 里填这些。
-
-必须填的私有信息：
-
-```text
-AI_GATEWAY_BASE_URL     你的 Cloudflare AI Gateway 地址
-CHATBOX_API_KEY         你自己编一个，例如 sk-xxxx
-CF_AIG_TOKEN            你的 Cloudflare AI Gateway token
-```
-
-模型旋钮，也可以直接在 Cloudflare 里改：
-
-```text
-CHAT_MODEL              主聊天模型
-MEMORY_FILTER_MODEL     记忆筛选压缩模型
-MEMORY_MODEL            记忆小秘书模型
-VISION_MODEL            图片识别模型
-ANTHROPIC_THINKING_ENABLED  Claude thinking 开关，默认 false
-ANTHROPIC_THINKING_BUDGET   Claude thinking 预算，默认 1024
-```
-
-仓库默认值是：
-
-```text
-CHAT_MODEL=deepseek/deepseek-v4-pro
-MEMORY_FILTER_MODEL=google-ai-studio/gemini-2.5-flash
-MEMORY_MODEL=deepseek/deepseek-v4-flash
-VISION_MODEL=google-ai-studio/gemini-3-flash-preview
-ANTHROPIC_THINKING_ENABLED=false
-ANTHROPIC_THINKING_BUDGET=1024
-```
-
-如果部署时提示 Wrangler 没权限，再补两个构建变量：
-
-```text
-CLOUDFLARE_API_TOKEN    能部署 Worker、管理 D1、Vectorize、Queues 的 Cloudflare token
-CLOUDFLARE_ACCOUNT_ID   你的 Cloudflare account id
-```
-
-### 5. 点 Deploy
-
-部署成功后，你的地址大概长这样：
-
-```text
 https://companion-memory-proxy.<你的子域>.workers.dev
 ```
 
-### 6. Chatbox 这样填
+### 第六步：客户端这样填
 
-```text
-Base URL: https://<你的 Worker 地址>/v1
-API Key:  CHATBOX_API_KEY 里填的那个
-Model:    companion
+以 Chatbox 为例：
+
+```
+Base URL:   https://<你的 Worker 地址>/v1
+API Key:    你第三步填的 CHATBOX_API_KEY
+Model:      companion
 ```
 
-### 7. 怎么知道成功了
+### 第七步：验证
 
-打开：
+打开浏览器访问：
 
-```text
+```
 https://<你的 Worker 地址>/health
 ```
 
-如果看到 `ok: true`，第一关过了。
+看到 `ok: true` 就成功了。
 
 然后在 Chatbox 里说：
 
-```text
-请记住：我的测试口令是苹果星星-0428。
+```
+请记住：我的常用暗号是苹果星星-0428。
 ```
 
 过十几秒再问：
 
-```text
-我的测试口令是什么？
+```
+我的常用暗号是什么？
 ```
 
-能答出来，就部署好了。
+能答出来就搞定了。
 
-### 8. 最容易踩的坑
+### 所有环境变量速查表
 
-```text
-看图很贵：确认 VISION_MODEL 是你想用的模型。
-主聊天很贵：确认 CHAT_MODEL 是你想用的模型。
-重新部署后变量消失：Deploy command 必须带 npm run deploy:cloudflare，里面已经带 --keep-vars。
-Vectorize 不要乱删：默认用 memo-kb，768 维。
+**必填（3 个）：**
+
+| 变量名 | 必填 | 说明 |
+|--------|------|------|
+| `AI_GATEWAY_BASE_URL` | 是 | Cloudflare AI Gateway 地址 |
+| `CF_AIG_TOKEN` | 是 | AI Gateway 调用用的 token |
+| `CHATBOX_API_KEY` | 是 | 客户端连接密码 |
+
+**模型（都有默认值，可选改）：**
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天 |
+| `MEMORY_FILTER_MODEL` | `google-ai-studio/gemini-2.5-flash` | 记忆筛选 |
+| `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
+| `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
+| `SUMMARY_MODEL` | 空（用 MEMORY_MODEL） | 摘要生成 |
+| `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入 |
+
+**Claude 专属（可选）：**
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `ANTHROPIC_THINKING_ENABLED` | `false` | 开启 Claude 深度思考 |
+| `ANTHROPIC_THINKING_BUDGET` | `1024` | 思考 token 预算（1024-32000） |
+| `ANTHROPIC_CACHE_TTL` | `5m` | Prompt cache 时长（`5m` 或 `1h`） |
+| `ANTHROPIC_CACHE_ENABLED` | `true` | 设 `false` 关闭 cache |
+| `FORCE_ANTHROPIC_NATIVE` | 空 | 设 `true` 强制所有模型走 Anthropic native |
+
+**高级（一般不用动）：**
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `IM_API_KEY` | 空 | 第二把钥匙（IM bot 用） |
+| `DEBUG_API_KEY` | 空 | 调试接口钥匙 |
+| `MEMORY_TOP_K` | `8` | 记忆搜索返回条数 |
+| `MEMORY_MIN_SCORE` | `0.35` | 记忆搜索最低相关度 |
+| `MEMORY_MIN_IMPORTANCE` | `0.55` | 记忆写入最低重要性 |
+| `ENABLE_AUTO_MEMORY` | 空（开启） | 设 `false` 关闭自动记忆 |
+| `PUBLIC_MODEL_NAME` | `companion` | 客户端看到的模型名 |
+
+### 最容易踩的坑
+
+```
+Deploy command 必须是 npm run deploy:cloudflare
+  -> 不是 npm run deploy，不是 wrangler deploy
+  -> 否则变量会被覆盖、数据库不会升级
+
+重新部署变量不会丢
+  -> deploy:cloudflare 带 --keep-vars
+
+Vectorize 不要手动删
+  -> 默认索引 memo-kb，768 维 cosine
+
+看图会切换到 VISION_MODEL
+  -> 确认 VISION_MODEL 是你能接受的价格
 ```
 
 ---
 
 ## AI 版：详细交接说明
 
-这一节是给 Codex、Claude Code、Cursor、ChatGPT、Gemini CLI 等 AI 看的。人类不需要硬啃。
+这一节给 Codex、Claude Code、Cursor、Gemini CLI 等 AI 助手看。
 
 ### 项目定位
 
-本项目是 Cloudflare Workers 上的 OpenAI-compatible Memory Proxy。
+Cloudflare Workers 上的 OpenAI-compatible Memory Proxy。
 
-如果你是 AI 助手，正在帮一个新用户部署：
+如果你在帮新用户部署：
 
-```text
-1. 不要让用户的 Cloudflare 直接关联源项目 wusaki0723/Aelios。
-2. 先指导用户把源项目 fork 到自己的 GitHub 账号。
-3. Cloudflare Workers 只能关联用户自己的 fork。
-4. 后续修改、部署、Secrets、Variables 都在用户自己的 fork 和 Cloudflare 账号里完成。
+```
+1. 指导用户 fork 源项目到自己的 GitHub
+2. Cloudflare 只关联用户自己的 fork
+3. Secrets / Variables 都在用户自己的 Cloudflare 账号
+4. 不要直接关联 wusaki0723/Aelios
 ```
 
-对外接口：
+### 对外接口
 
-```text
-GET  /health
-GET  /v1/models
-POST /v1/chat/completions
-GET  /v1/memories
-POST /v1/memories
-POST /v1/memories/search
-POST /v1/memories/ingest
-PATCH /v1/memories/:id
+```
+GET    /health
+GET    /v1/models
+POST   /v1/chat/completions
+GET    /v1/memories
+POST   /v1/memories
+POST   /v1/memories/search
+POST   /v1/memories/ingest
+PATCH  /v1/memories/:id
 DELETE /v1/memories/:id
 GET/PUT/DELETE /v1/cache/:namespace/:key
+GET    /v1/debug/cache_health
 ```
 
-核心原则：
+### 核心架构
 
-```text
-前端负责角色卡、聊天风格、工具、网页搜索、当前上下文。
-Worker 负责统一 API、记忆注入、记忆写入、Claude cache、Cloudflare AI Gateway 代理。
+```
+前端负责：角色卡、聊天风格、工具、网页搜索、当前上下文
+Worker 负责：统一 API、记忆注入/写入、摘要、Claude cache、AI Gateway 代理
 ```
 
-### 当前资源约定
+**资源约定：**
 
-```text
-Worker name: companion-memory-proxy
-D1 database: companion_memory_proxy
-Vectorize binding: VECTORIZE
-Vectorize index: memo-kb
-Vectorize dimensions: 768
-Vectorize metric: cosine
-Queue name: companion-memory
-Public model alias: companion
 ```
-
-向量模型固定在代码里：
-
-```text
-workers-ai/@cf/google/embeddinggemma-300m
-```
-
-不要把向量模型做成普通用户必填变量。它必须和 Vectorize 维度保持一致。
-
-### 本地命令
-
-```bash
-npm ci
-npm run typecheck
-npm run setup:cloudflare
-npm run deploy:cloudflare
-```
-
-`npm run deploy:cloudflare` 等价于：
-
-```bash
-npm run setup:cloudflare && wrangler deploy --keep-vars
-```
-
-`--keep-vars` 必须保留，避免 Cloudflare Dashboard 里的模型变量和私有变量被重新部署覆盖。
-`setup:cloudflare` 必须先于 `wrangler deploy` 执行，避免新代码上线时 D1 还没升级。
-
-### setup 脚本会做什么
-
-`scripts/setup-cloudflare.mjs` 会尽量自动完成：
-
-```text
-1. 创建或查找 D1：companion_memory_proxy
-2. 把 D1 database_id 写入 wrangler.toml
-3. 执行 D1 migrations
-4. 创建或复用 Vectorize：memo-kb
-5. 创建 Vectorize metadata indexes：namespace、status、type、pinned
-6. 创建或复用 Queue：companion-memory
-7. 从构建环境同步可见变量到 wrangler.toml
-```
-
-如果在 CI 或 Cloudflare 构建环境里失败，优先检查：
-
-```text
-CLOUDFLARE_API_TOKEN 是否存在
-CLOUDFLARE_ACCOUNT_ID 是否存在
-token 是否有 Workers Scripts、D1、Vectorize、Queues 权限
-```
-
-### Worker 变量
-
-仓库里保留可见模型旋钮：
-
-```toml
-PUBLIC_MODEL_NAME = "companion"
-CHAT_MODEL = "deepseek/deepseek-v4-pro"
-MEMORY_FILTER_MODEL = "google-ai-studio/gemini-2.5-flash"
-MEMORY_MODEL = "deepseek/deepseek-v4-flash"
-VISION_MODEL = "google-ai-studio/gemini-3-flash-preview"
-ANTHROPIC_THINKING_ENABLED = "false"
-ANTHROPIC_THINKING_BUDGET = "1024"
-```
-
-Cloudflare Dashboard 里还需要填：
-
-```text
-AI_GATEWAY_BASE_URL
-CHATBOX_API_KEY
-CF_AIG_TOKEN
-```
-
-可选：
-
-```text
-IM_API_KEY
-DEBUG_API_KEY
-MEMORY_TOP_K
-MEMORY_MIN_SCORE
-MEMORY_MIN_IMPORTANCE
-ANTHROPIC_CACHE_TTL
-CACHE_DEFAULT_TTL_SECONDS
-CACHE_MAX_VALUE_BYTES
+Worker:      companion-memory-proxy
+D1:          companion_memory_proxy
+Vectorize:   memo-kb (768 维 cosine)
+Queue:       companion-memory
+Embedding:   workers-ai/@cf/google/embeddinggemma-300m (默认值，不建议普通用户改；如覆盖必须仍是 768 维)
 ```
 
 ### 模型路由
 
-所有模型调用都走 Cloudflare AI Gateway。
+所有模型调用走 Cloudflare AI Gateway，不绕开。
 
-```text
+```
 用户传 model=companion
-  -> CHAT_MODEL
+  -> resolveTargetModel -> CHAT_MODEL
 
-请求里包含 image_url/input_image
+请求含 image_url/input_image
   -> VISION_MODEL
 
-目标模型名包含 anthropic 或 claude
-  -> Anthropic provider-native endpoint
-  -> 显式 cache_control
+目标模型名含 anthropic 或 claude
+  -> Anthropic native: <AI_GATEWAY_BASE_URL>/anthropic/v1/messages
+  -> 显式 cache_control on client_system block
   -> cf-aig-skip-cache: true
 
 其他模型
-  -> /compat/chat/completions
+  -> OpenAI compat: <AI_GATEWAY_BASE_URL>/compat/chat/completions
+
+Embedding
+  -> <AI_GATEWAY_BASE_URL>/compat/embeddings
 ```
 
-OpenAI-compatible 端点：
+非 Claude 模型走 OpenAI-compatible 穿透，不加 Claude-only 参数。非 Claude 会剥离顶层 `thinking` 字段。
 
-```text
-<AI_GATEWAY_BASE_URL>/compat/chat/completions
+### Prompt Assembler (v4)
+
+组装顺序（9 个 block，单一线性）：
+
+```
+system_blocks:
+  1. proxy_static_rules    (stable)  — 不暴露后端的规则
+  2. persona_pinned        (stable)  — identity/persona 记忆
+  3. long_term_summary     (stable)  — 长期对话摘要（≤2000字）
+  4. preset_lite           (stable)  — 输出风格指令
+  5. client_system         (stable)  — 前端 system 消息 [CACHE ANCHOR]
+  6. dynamic_memory_patch  (dynamic) — RAG 命中的记忆
+  7. vision_context        (dynamic) — 视觉描述
+
+messages:
+  8. recent_history        — 历史消息（仅 user/assistant）
+  9. current_user          — 当前用户消息（保留原始 content，图片不丢）
 ```
 
-Anthropic native 端点：
+cache_control 只落在 client_system（block 5），前面的 stable blocks 可被 Claude prompt cache 缓存。
 
-```text
-<AI_GATEWAY_BASE_URL>/anthropic/v1/messages
+tool/tool_calls 请求 fallback 到旧路径，assembler 不处理 tool。
+
+### Regex / 输出过滤
+
+流式和非流式都走同一套规则：
+
+```
+strip_thinking:     去掉 <thinking>...</thinking>
+strip_lang_details: 去掉 English/Japanese <details> block
+strip_solid_square: 去掉 ■
+dash_to_comma:      —、——、– 改成 ，
 ```
 
-Embeddings 端点：
+- `reasoning_content`（CoT）永远不被过滤
+- 历史消息只清理 `strip_thinking`，不动当前用户消息
+- 流式 dash 跨 chunk 折叠已对齐
 
-```text
-<AI_GATEWAY_BASE_URL>/compat/embeddings
-model=workers-ai/@cf/google/embeddinggemma-300m
+### 记忆系统完整流程
+
+**聊天前（注入）：**
+
 ```
-
-### 记忆注入流程
-
-```text
-chat request
-  -> 保存 user messages
-  -> 提取最后一条用户文本
-  -> Vectorize 搜索相关记忆
-  -> 若 Vectorize 老 metadata 无 D1 ref，则使用 legacy metadata fallback
+取最后一条 user 消息文本
+  -> EMBEDDING_MODEL 生成向量
+  -> Vectorize 搜索 memo-kb
+  -> 若 Vectorize 命中但 D1 无 active 记录，不注入
+  -> 若 Vectorize 老 metadata 无 D1 ref，legacy fallback（仅 active metadata）
   -> MEMORY_FILTER_MODEL 分拣压缩
-  -> 注入 system memory patch
-  -> 转发上游模型
-  -> 保存 assistant message 和 usage
-  -> 后台触发记忆维护
+  -> 注入 dynamic_memory_patch
+  -> pinned identity/persona -> persona_pinned block
 ```
 
-图片请求只取文本部分做记忆搜索，不把 data URL 或图片 URL 扔进 embedding。
+**聊天后（维护）：**
 
-### 自动写记忆流程
-
-当前实现为了避免 Cloudflare Queue/`waitUntil` 调慢模型超时，对明确记忆做快速兜底：
-
-```text
-chat/ingest 完成
-  -> 保存 messages
-  -> 后台 runMemoryMaintenance
-  -> 如果用户消息明确包含“记住 / 长期偏好 / 稳定偏好 / 口令是”等
-       直接写入一条 explicit-memory
-     否则
-       调 MEMORY_MODEL 抽取 JSON
-  -> importance/confidence 过滤
-  -> 重复检查
-  -> D1 memories
-  -> Vectorize upsert
+```
+保存 user/assistant messages 到 D1
+  -> 后台 Queue: memory_maintenance
+    -> explicit fallback（"记住/长期偏好/口令是"等关键词）
+    -> 否则 MEMORY_MODEL 抽取记忆 JSON
+    -> importance/confidence 过滤
+    -> 重复检查（归一化文本比较）
+    -> merge/supersede 判断（高相似度时合并或替换）
+    -> D1 memories + Vectorize upsert
+    -> maybeUpdateLongTermSummary（每 50 条新消息触发一次）
+      -> 取最近 120 条消息 + 旧摘要
+      -> SUMMARY_MODEL (fallback MEMORY_MODEL) 生成新摘要
+      -> sanitize 去元信息，截断 ≤2000 字
+      -> upsert summaries 表（每 namespace 一条）
 ```
 
-注意：
+**聊天后（清理）：**
 
-```text
-Queue binding 和 consumer 还保留，但 producer 当前直接调用 handleQueueMessage。
-原因是线上测试时 Queue/waitUntil 组合容易静默或超时。
-后续如果要恢复真正 Queue，需要重新做端到端验证。
+```
+后台 Queue: retention（24h 节流）
+  -> messages: 14 天前删除
+  -> usage_logs: 30 天前删除
+  -> memory_events: 30 天前删除
+  -> idempotency_keys: 7 天前删除
+  -> memories: 非 pinned/identity/persona 180 天标 expired
+    -> 标记后同步删除 Vectorize 向量
+  -> hard delete: deleted/superseded/expired 超 30 天
+    -> 先删 Vectorize 向量（分批 100）
+    -> 成功后再删 D1（分批 100）
+    -> Vectorize 失败不删 D1，避免失配
 ```
 
-### Cache API
+### Claude Thinking / CoT
 
-Cache API 用 D1 存小型 JSON 或文本。适合前端缓存：
+支持多种前端传参方式：
 
-```text
-网页摘要
-搜索结果
-工具结果
-上下文包
+```
+reasoning_effort: "high" | "medium" | "low" | "none"
+thinking: true | false | { type: "enabled", budget_tokens: 2048 }
+enable_thinking: true
+extra_body.reasoning_effort / extra_body.thinking
 ```
 
-不适合缓存：
+环境变量兜底：
 
-```text
-API key
-未脱敏凭证
-特别大的二进制
-完整私密聊天原文
+```
+ANTHROPIC_THINKING_ENABLED=true  -> 默认开启
+ANTHROPIC_THINKING_BUDGET=2048   -> 默认预算
+```
+
+前端传参优先级高于环境变量。`thinking: false` 可以关闭环境变量默认开启。
+
+非 Claude 模型不加 thinking 参数。DeepSeek 等模型的顶层 `thinking` 字段会被剥离。
+
+### Queue 机制
+
+```
+producer:
+  env.MEMORY_QUEUE 存在 -> env.MEMORY_QUEUE.send(message)
+  不存在 -> fallback handleQueueMessage（本地开发）
+
+consumer (src/index.ts queue handler):
+  memory_maintenance -> runMemoryMaintenance + maybeUpdateLongTermSummary
+  retention -> runMemoryRetention
+```
+
+消息类型：
+
+```typescript
+MemoryMaintenanceQueueMessage {
+  type: "memory_maintenance"
+  namespace, conversationId, fromMessageId, toMessageId, source, idempotencyKey
+}
+
+RetentionQueueMessage {
+  type: "retention"
+  namespace
+}
+```
+
+### D1 表结构
+
+```
+users, conversations, messages, memories, memory_events,
+summaries, cache_entries, processing_cursors, idempotency_keys, usage_logs
+```
+
+关键索引：
+
+```
+messages: (namespace, created_at), (conversation_id, created_at)
+memories: (namespace, status), (type), (pinned)
+```
+
+### 本地开发命令
+
+```bash
+npm ci                    # 安装依赖
+npm run typecheck         # TypeScript 类型检查
+npm run dev               # 本地 wrangler dev
+npm run setup:cloudflare  # 创建/升级 D1 + Vectorize + Queue
+npm run deploy:cloudflare # setup + deploy（生产用）
+node scripts/verify-assembler.mjs  # 合约测试（194 项）
+```
+
+### 验证脚本
+
+`scripts/verify-assembler.mjs` 是纯 JS 合约镜像，不依赖 TS runtime：
+
+```
+Test  1: Determinism
+Test  2: Pinned sort stability
+Test  3: Cache anchor position
+Test  4: Image passthrough
+Test  5: Tool filtering
+Test  6: Anthropic conversion
+Test  7: OpenAI conversion
+Test  8: OpenAI path branching
+Test  9: Anthropic path
+Test 10: pinnedPersonaMemories filtering
+Test 11: Adapter helpers
+Test 12: Cache metadata
+Test 13: Thinking + prompt trim
+Test 14: Regex Pipeline
+Test 15: D1 Lifecycle Retention
+Test 16: Memory Merge / Supersede
+Test 17: Long-Term Summary
+Test 18: Queue Send / Fallback
 ```
 
 ### 手工验收命令
 
-健康检查：
-
 ```bash
+# 健康检查
 curl "https://<worker>/health"
-```
 
-模型列表：
-
-```bash
+# 模型列表
 curl "https://<worker>/v1/models" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>"
-```
 
-图片模型测试：
-
-```bash
+# 文本聊天
 curl "https://<worker>/v1/chat/completions" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>" \
   -H "content-type: application/json" \
-  -d '{
-    "model": "companion",
-    "stream": false,
-    "messages": [
-      {
-        "role": "user",
-        "content": [
-          { "type": "text", "text": "这张图里最大的英文单词是什么？只回答那个单词。" },
-          { "type": "image_url", "image_url": { "url": "https://dummyimage.com/160x80/00ff00/000000.png&text=GREEN" } }
-        ]
-      }
-    ],
-    "max_tokens": 80
-  }'
-```
+  -d '{"model":"companion","stream":false,"messages":[{"role":"user","content":"你好"}],"max_tokens":80}'
 
-自动写记忆测试：
-
-```bash
+# 图片模型测试
 curl "https://<worker>/v1/chat/completions" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>" \
   -H "content-type: application/json" \
-  -d '{
-    "model": "companion",
-    "stream": false,
-    "messages": [
-      { "role": "user", "content": "请记住：我的自动记忆测试口令是蓝莓星线-0428。" }
-    ],
-    "max_tokens": 80
-  }'
-```
+  -d '{"model":"companion","stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"这张图里最大的英文单词是什么？只回答那个单词。"},{"type":"image_url","image_url":{"url":"https://dummyimage.com/160x80/00ff00/000000.png&text=GREEN"}}]}],"max_tokens":80}'
 
-搜索记忆：
+# 自动写记忆
+curl "https://<worker>/v1/chat/completions" \
+  -H "Authorization: Bearer <CHATBOX_API_KEY>" \
+  -H "content-type: application/json" \
+  -d '{"model":"companion","stream":false,"messages":[{"role":"user","content":"请记住：我的常用暗号是蓝莓星线-0428。"}],"max_tokens":80}'
 
-```bash
+# 搜索记忆
 curl "https://<worker>/v1/memories/search" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>" \
   -H "content-type: application/json" \
-  -d '{ "query": "蓝莓星线-0428", "top_k": 5 }'
-```
+  -d '{"query":"蓝莓星线-0428","top_k":5}'
 
-Claude cache 健康检查，需要用 `DEBUG_API_KEY`：
-
-```bash
+# Cache 健康（需要 DEBUG_API_KEY）
 curl "https://<worker>/v1/debug/cache_health" \
   -H "Authorization: Bearer <DEBUG_API_KEY>"
-```
-
-### 当前已验证
-
-截至 2026-04-28：
-
-```text
-/health 正常
-/v1/models 正常
-文本聊天正常
-图片请求正常走 VISION_MODEL
-Vectorize 搜索 memo-kb 正常
-手动 Memory API 正常
-/v1/memories/ingest 自动写入正常
-/v1/chat/completions 聊天后自动写入正常
-```
-
-### 已知问题和下一步
-
-```text
-1. MEMORY_MODEL 慢时可能超过 Cloudflare waitUntil 时间，明确记忆已有快速兜底，普通隐式记忆还需要更稳的异步方案。
-2. Queue consumer 保留但当前 producer 绕过 Queue，后续要么恢复 Queue 并验收，要么移除 Queue 配置。
-3. 记忆 merge/supersede 还很轻，可能出现多条相似记忆。
-4. Claude prompt cache 代码已实现，但还需要真实 Claude 连续多轮验证 cache_read_tokens。
-5. 没有管理后台，删除/编辑记忆需要 API。
-6. 目前没有完整单元测试套件，主要靠 typecheck 和线上手工验收。
-7. AI_GATEWAY_BASE_URL、CHATBOX_API_KEY、CF_AIG_TOKEN 当前按用户要求用 Text 变量，方便看见，但生产环境更建议用 Secret。
 ```

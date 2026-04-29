@@ -58,7 +58,7 @@ const SUMMARY_MAX_CHARS = 2000;
 // ---------------------------------------------------------------------------
 
 const PROXY_STATIC_RULES_TEXT = [
-  "你是伴侣角色，自然对话即可。",
+  "遵循前端提供的角色、关系和上下文，自然对话即可。",
   "不要暴露记忆系统、数据库、RAG、代理层或任何后端实现。",
   "不要机械复述设定原文，用自己的话自然表达。",
   "如果记忆与当前对话无关，不要强行提起。",
@@ -68,8 +68,7 @@ const PRESET_LITE_TEXT = [
   "<output_style_lite>",
   "- 自然中文，避免翻译腔和过度名词化",
   "- 多用具体动作和对白承载情绪，少用作者式分析",
-  "- 段落不宜过长，对白可独立成段",
-  "- 不输出隐藏思考，不输出多语言版本附录，不机械复述设定",
+  "- 对白可独立成段，不机械复述设定",
   "- 全角标点，不用破折号，用逗号或句号替代",
   "</output_style_lite>",
 ].join("\n");
@@ -1056,7 +1055,7 @@ check("Anthropic path: full pipeline produces valid system + messages", () => {
   //              preset_lite, client_system, dynamic_memory_patch
   assert.ok(systemBlocks.length >= 3);
   // First block text should contain proxy rules
-  assert.ok(systemBlocks[0].text.includes("伴侣角色"));
+  assert.ok(systemBlocks[0].text.includes("前端提供的角色"));
   // Cache anchor present
   const anchor = systemBlocks.find((b) => b.cache_control);
   assert.ok(anchor);
@@ -1206,15 +1205,34 @@ function buildOpenAIRequestFromAssembled(req, targetModel, assembled) {
   return { ...req, model: targetModel, stream: Boolean(req.stream), messages };
 }
 
+function getThinkingBudget(env) {
+  const value = Number(env.ANTHROPIC_THINKING_BUDGET || 1024);
+  return Number.isFinite(value) ? Math.min(Math.max(Math.floor(value), 1024), 32000) : 1024;
+}
+
+function buildThinkingConfig(env) {
+  if (env.ANTHROPIC_THINKING_ENABLED !== "true") return undefined;
+  return { type: "enabled", budget_tokens: getThinkingBudget(env), display: "summarized" };
+}
+
+function getAnthropicMaxTokens(req, env) {
+  const maxTokens = typeof req.max_tokens === "number" ? Math.max(Math.floor(req.max_tokens), 1) : 1024;
+  const thinking = buildThinkingConfig(env);
+  if (!thinking) return maxTokens;
+  return Math.max(maxTokens, thinking.budget_tokens + Math.min(Math.max(maxTokens, 256), 4096));
+}
+
 function buildAnthropicRequestFromAssembled(req, targetModel, assembled, env) {
+  const thinking = buildThinkingConfig(env);
   const system = assembledToAnthropicSystem(assembled.system_blocks);
   applyCacheOverrides(system, env);
   const messages = assembledToAnthropicMessages(assembled.messages);
   return {
     model: targetModel.replace(/^anthropic\//i, ""),
-    max_tokens: typeof req.max_tokens === "number" ? Math.max(Math.floor(req.max_tokens), 1) : 1024,
-    temperature: typeof req.temperature === "number" ? req.temperature : undefined,
+    max_tokens: getAnthropicMaxTokens(req, env),
+    temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
+    thinking,
     system,
     messages,
   };
@@ -1459,6 +1477,44 @@ check("fallback path: both clientSystemHash and cacheAnchorBlock are null", () =
 
   assert.strictEqual(clientSystemHash, null);
   assert.strictEqual(cacheAnchorBlock, null);
+});
+
+// ---------------------------------------------------------------------------
+// Test 13: Thinking + prompt trim
+// ---------------------------------------------------------------------------
+
+console.log("\n--- Test 13: Thinking + prompt trim ---");
+
+check("Anthropic thinking is opt-in and omitted by default", () => {
+  const ctx = makeBaseCtx();
+  const assembled = assemble(ctx);
+  const req = buildAnthropicRequestFromAssembled(
+    { model: "companion", messages: [], max_tokens: 256 },
+    "anthropic/claude-haiku-4-5",
+    assembled,
+    {}
+  );
+  assert.strictEqual(req.thinking, undefined);
+  assert.strictEqual(req.max_tokens, 256);
+});
+
+check("Anthropic thinking adds summarized thinking and enough max_tokens", () => {
+  const ctx = makeBaseCtx();
+  const assembled = assemble(ctx);
+  const req = buildAnthropicRequestFromAssembled(
+    { model: "companion", messages: [], max_tokens: 256, temperature: 0.5 },
+    "anthropic/claude-haiku-4-5",
+    assembled,
+    { ANTHROPIC_THINKING_ENABLED: "true", ANTHROPIC_THINKING_BUDGET: "1024" }
+  );
+  assert.deepStrictEqual(req.thinking, { type: "enabled", budget_tokens: 1024, display: "summarized" });
+  assert.ok(req.max_tokens > req.thinking.budget_tokens);
+  assert.strictEqual(req.temperature, undefined);
+});
+
+check("preset_lite no longer hardcodes short paragraphs or hidden-thinking suppression", () => {
+  assert.ok(!PRESET_LITE_TEXT.includes("段落不宜过长"));
+  assert.ok(!PRESET_LITE_TEXT.includes("不输出隐藏思考"));
 });
 
 // ---------------------------------------------------------------------------

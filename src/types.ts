@@ -28,6 +28,8 @@ export interface Env {
   ANTHROPIC_CACHE_ENABLED?: string;
   ANTHROPIC_CACHE_TTL?: string;
   ANTHROPIC_CACHE_STABLE_SYSTEM?: string;
+  ANTHROPIC_THINKING_ENABLED?: string;
+  ANTHROPIC_THINKING_BUDGET?: string;
   FORCE_ANTHROPIC_NATIVE?: string;
   ENABLE_CACHE_API?: string;
   CACHE_DEFAULT_TTL_SECONDS?: string;
@@ -76,6 +78,7 @@ export interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string | Array<unknown> | null;
   name?: string;
+  reasoning_content?: string;
   tool_call_id?: string;
   tool_calls?: unknown;
 }

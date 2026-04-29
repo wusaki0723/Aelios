@@ -64,6 +64,20 @@ function dedupeMemories(memories: MemoryApiRecord[]): MemoryApiRecord[] {
   return result;
 }
 
+function sanitizeMemoryContent(text: string): string {
+  return text
+    .replace(/debug-test/gi, "")
+    .replace(/记忆系统/g, "")
+    .replace(/自动记忆测试口令/g, "口令")
+    .replace(/测试口令/g, "口令")
+    .replace(/标签为?[^，。；\s]+/g, "")
+    .replace(/标签[:：]?[^，。；\s]+/g, "")
+    .replace(/[，,；;：:]\s*([。.!！?？])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[，,；;：:\s]+|[，,；;：:\s]+$/g, "")
+    .trim();
+}
+
 export async function selectMemoriesForInjection(
   env: Env,
   input: { profile: KeyProfile; query: string }
@@ -117,11 +131,15 @@ export async function selectMemoriesForInjection(
 export function formatMemoryPatch(memories: MemoryApiRecord[]): string {
   if (memories.length === 0) return "";
 
-  const lines = memories.map((memory) => {
+  const lines = memories.flatMap((memory) => {
+    const content = sanitizeMemoryContent(memory.content);
+    if (!content) return [];
     const importance = memory.importance.toFixed(2);
     const pinned = memory.pinned ? "[pinned]" : "";
-    return `- [${memory.type}][importance=${importance}]${pinned} ${memory.content}`;
+    return [`- [${memory.type}][importance=${importance}]${pinned} ${content}`];
   });
+
+  if (lines.length === 0) return "";
 
   return [
     "以下是你自然记得的长期记忆。只有在相关时使用，不要机械复述。",

@@ -24,6 +24,11 @@ interface AnthropicRequest {
   max_tokens: number;
   temperature?: number;
   stream?: boolean;
+  thinking?: {
+    type: "enabled";
+    budget_tokens: number;
+    display?: "summarized" | "omitted";
+  };
   system: AnthropicTextBlock[];
   messages: AnthropicMessage[];
 }
@@ -32,7 +37,7 @@ interface AnthropicResponse {
   id?: string;
   model?: string;
   role?: string;
-  content?: Array<{ type?: string; text?: string }>;
+  content?: Array<{ type?: string; text?: string; thinking?: string }>;
   stop_reason?: string | null;
   usage?: TokenUsage;
 }
@@ -56,6 +61,27 @@ function buildCacheControl(env: Env): AnthropicTextBlock["cache_control"] | unde
 function getMaxTokens(req: OpenAIChatRequest): number {
   const value = typeof req.max_tokens === "number" ? req.max_tokens : 1024;
   return Math.max(Math.floor(value), 1);
+}
+
+function getThinkingBudget(env: Env): number {
+  const value = Number(env.ANTHROPIC_THINKING_BUDGET || 1024);
+  return Number.isFinite(value) ? Math.min(Math.max(Math.floor(value), 1024), 32000) : 1024;
+}
+
+function buildThinkingConfig(env: Env): AnthropicRequest["thinking"] | undefined {
+  if (env.ANTHROPIC_THINKING_ENABLED !== "true") return undefined;
+  return {
+    type: "enabled",
+    budget_tokens: getThinkingBudget(env),
+    display: "summarized"
+  };
+}
+
+function getAnthropicMaxTokens(req: OpenAIChatRequest, env: Env): number {
+  const maxTokens = getMaxTokens(req);
+  const thinking = buildThinkingConfig(env);
+  if (!thinking) return maxTokens;
+  return Math.max(maxTokens, thinking.budget_tokens + Math.min(Math.max(maxTokens, 256), 4096));
 }
 
 function extractSystemBlocks(messages: OpenAIChatMessage[]): AnthropicTextBlock[] {
@@ -116,6 +142,7 @@ export async function buildAnthropicNativeRequest(
   req: OpenAIChatRequest,
   input: { env: Env; targetModel: string; namespace: string; memories: MemoryApiRecord[] }
 ): Promise<AnthropicRequest> {
+  const thinking = buildThinkingConfig(input.env);
   const stableMemoryPack = await buildStableMemoryPack(input.env, input.namespace);
   const stableBlock: AnthropicTextBlock = {
     type: "text",
@@ -149,9 +176,10 @@ export async function buildAnthropicNativeRequest(
 
   return {
     model: stripAnthropicProviderPrefix(input.targetModel),
-    max_tokens: getMaxTokens(req),
-    temperature: typeof req.temperature === "number" ? req.temperature : undefined,
+    max_tokens: getAnthropicMaxTokens(req, input.env),
+    temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
+    thinking,
     system,
     messages: convertMessages(req.messages)
   };
@@ -172,14 +200,16 @@ export function buildAnthropicRequestFromAssembled(
   assembled: AssembledPrompt,
   env: Env
 ): AnthropicRequest {
+  const thinking = buildThinkingConfig(env);
   const system = assembledToAnthropicSystem(assembled.system_blocks);
   applyCacheOverrides(system, env);
 
   return {
     model: stripAnthropicProviderPrefix(targetModel),
-    max_tokens: getMaxTokens(req),
-    temperature: typeof req.temperature === "number" ? req.temperature : undefined,
+    max_tokens: getAnthropicMaxTokens(req, env),
+    temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
+    thinking,
     system,
     messages: assembledToAnthropicMessages(assembled.messages),
   };
@@ -216,6 +246,10 @@ export function parseAnthropicNonStream(response: AnthropicResponse): {
     .filter((block) => block.type === "text" && typeof block.text === "string")
     .map((block) => block.text)
     .join("");
+  const reasoningContent = (response.content ?? [])
+    .filter((block) => block.type === "thinking" && typeof block.thinking === "string")
+    .map((block) => block.thinking)
+    .join("");
 
   const usage = normalizeAnthropicUsage(response.usage);
 
@@ -233,7 +267,8 @@ export function parseAnthropicNonStream(response: AnthropicResponse): {
           index: 0,
           message: {
             role: "assistant",
-            content
+            content,
+            ...(reasoningContent ? { reasoning_content: reasoningContent } : {})
           },
           finish_reason: response.stop_reason ?? null
         }

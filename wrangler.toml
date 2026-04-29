@@ -11,6 +11,8 @@ CHAT_MODEL = "deepseek/deepseek-v4-pro"
 MEMORY_FILTER_MODEL = "google-ai-studio/gemini-2.5-flash"
 MEMORY_MODEL = "deepseek/deepseek-v4-flash"
 VISION_MODEL = "google-ai-studio/gemini-3-flash-preview"
+ANTHROPIC_THINKING_ENABLED = "false"
+ANTHROPIC_THINKING_BUDGET = "1024"
 
 # Private/account-specific variables live in the Cloudflare Dashboard:
 # AI_GATEWAY_BASE_URL, CHATBOX_API_KEY, CF_AIG_TOKEN.

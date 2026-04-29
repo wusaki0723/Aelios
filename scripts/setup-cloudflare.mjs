@@ -25,7 +25,9 @@ const visibleVarNames = [
   "CHAT_MODEL",
   "MEMORY_FILTER_MODEL",
   "MEMORY_MODEL",
-  "VISION_MODEL"
+  "VISION_MODEL",
+  "ANTHROPIC_THINKING_ENABLED",
+  "ANTHROPIC_THINKING_BUDGET"
 ];
 
 function run(args, options = {}) {

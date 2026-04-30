@@ -14,6 +14,10 @@ VISION_MODEL = "google-ai-studio/gemini-3-flash-preview"
 GUIDE_DOG_MODEL = "google-ai-studio/gemini-3-flash-preview"
 ANTHROPIC_THINKING_ENABLED = "false"
 ANTHROPIC_THINKING_BUDGET = "1024"
+# For custom Anthropic-compatible providers whose base_url already ends in /v1,
+# keep this as "messages". If the base_url is only the root domain, use
+# "v1/messages".
+CUSTOM_ANTHROPIC_MESSAGES_PATH = "messages"
 
 # Private/account-specific variables live in the Cloudflare Dashboard:
 # AI_GATEWAY_BASE_URL, CHATBOX_API_KEY, MEMORY_MCP_API_KEY,

@@ -52,6 +52,23 @@ function stripAnthropicProviderPrefix(model: string): string {
   return model.replace(/^anthropic\//i, "");
 }
 
+function parseCustomProviderModel(model: string): { slug: string; model: string } | null {
+  const match = model.match(/^custom-([a-z0-9-]+)\/(.+)$/i);
+  if (!match) return null;
+  return {
+    slug: match[1],
+    model: match[2]
+  };
+}
+
+function stripAnthropicModelPrefix(model: string): string {
+  return parseCustomProviderModel(model)?.model || stripAnthropicProviderPrefix(model);
+}
+
+function getCustomAnthropicMessagesPath(env: Env): string {
+  return (env.CUSTOM_ANTHROPIC_MESSAGES_PATH || "messages").replace(/^\/+/, "");
+}
+
 function buildCacheControl(env: Env): AnthropicTextBlock["cache_control"] | undefined {
   if (env.ANTHROPIC_CACHE_ENABLED === "false") return undefined;
   const ttl = env.ANTHROPIC_CACHE_TTL === "1h" ? "1h" : "5m";
@@ -231,6 +248,12 @@ export function getAnthropicNativeUrl(env: Env): string {
   return `${normalizeAiGatewayBaseUrl(env)}/anthropic/v1/messages`;
 }
 
+export function getAnthropicUrlForModel(env: Env, targetModel: string): string {
+  const customProvider = parseCustomProviderModel(targetModel);
+  if (!customProvider) return getAnthropicNativeUrl(env);
+  return `${normalizeAiGatewayBaseUrl(env)}/custom-${customProvider.slug}/${getCustomAnthropicMessagesPath(env)}`;
+}
+
 export function buildAnthropicHeaders(env: Env): Headers {
   const headers = new Headers({
     "content-type": "application/json",
@@ -282,7 +305,7 @@ export async function buildAnthropicNativeRequest(
   }
 
   return {
-    model: stripAnthropicProviderPrefix(input.targetModel),
+    model: stripAnthropicModelPrefix(input.targetModel),
     max_tokens: getAnthropicMaxTokens(req, input.env, thinking),
     temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
@@ -312,7 +335,7 @@ export function buildAnthropicRequestFromAssembled(
   applyCacheOverrides(system, env);
 
   return {
-    model: stripAnthropicProviderPrefix(targetModel),
+    model: stripAnthropicModelPrefix(targetModel),
     max_tokens: getAnthropicMaxTokens(req, env, thinking),
     temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
@@ -335,8 +358,8 @@ function applyCacheOverrides(systemBlocks: AnthropicTextBlock[], env: Env): void
   anchor.cache_control = { type: "ephemeral", ttl };
 }
 
-export async function callAnthropicNative(env: Env, body: AnthropicRequest): Promise<Response> {
-  return fetch(getAnthropicNativeUrl(env), {
+export async function callAnthropicNative(env: Env, body: AnthropicRequest, targetModel?: string): Promise<Response> {
+  return fetch(getAnthropicUrlForModel(env, targetModel || body.model), {
     method: "POST",
     headers: buildAnthropicHeaders(env),
     body: JSON.stringify(body)

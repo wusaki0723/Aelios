@@ -207,6 +207,7 @@ https://<你的 Worker 地址>/health
 | `ANTHROPIC_CACHE_TTL` | `5m` | Prompt cache 时长（`5m` 或 `1h`） |
 | `ANTHROPIC_CACHE_ENABLED` | `true` | 设 `false` 关闭 cache |
 | `FORCE_ANTHROPIC_NATIVE` | 空 | 设 `true` 强制所有模型走 Anthropic native |
+| `CUSTOM_ANTHROPIC_MESSAGES_PATH` | `messages` | custom Claude 的原生 messages 路径 |
 
 **高级（一般不用动）：**
 
@@ -357,6 +358,12 @@ Embedding:   workers-ai/@cf/google/embeddinggemma-300m (默认值，不建议普
   -> Anthropic native: <AI_GATEWAY_BASE_URL>/anthropic/v1/messages
   -> 显式 cache_control on client_system block
   -> cf-aig-skip-cache: true
+
+目标模型名是 custom-saki/claude-opus-4-7 这类 custom Claude
+  -> Provider-specific native: <AI_GATEWAY_BASE_URL>/custom-saki/messages
+  -> 发给上游的 model 会变成 claude-opus-4-7
+  -> 仍然保留 Anthropic cache_control
+  -> 如果 custom provider 的 base_url 没有 /v1，把 CUSTOM_ANTHROPIC_MESSAGES_PATH 改成 v1/messages
 
 其他模型
   -> OpenAI compat: <AI_GATEWAY_BASE_URL>/compat/chat/completions

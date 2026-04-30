@@ -10,6 +10,8 @@ export interface Env {
   CHATBOX_API_KEY?: string;
   IM_API_KEY?: string;
   DEBUG_API_KEY?: string;
+  MEMORY_MCP_API_KEY?: string;
+  GUIDE_DOG_API_KEY?: string;
   CF_AIG_TOKEN?: string;
   ENABLE_AUTO_MEMORY?: string;
   MEMORY_MODE?: string;
@@ -17,6 +19,7 @@ export interface Env {
   ENABLE_MEMORY_FILTER?: string;
   MEMORY_FILTER_MODEL?: string;
   VISION_MODEL?: string;
+  GUIDE_DOG_MODEL?: string;
   MEMORY_FILTER_MAX_CANDIDATES?: string;
   MEMORY_FILTER_MAX_OUTPUT?: string;
   MEMORY_EXTRACT_EVERY_N_MESSAGES?: string;
@@ -79,7 +82,7 @@ export interface KeyProfile {
 export interface AuthResult {
   ok: true;
   profile: KeyProfile;
-  keyName: "CHATBOX_API_KEY" | "IM_API_KEY" | "DEBUG_API_KEY";
+  keyName: "CHATBOX_API_KEY" | "IM_API_KEY" | "DEBUG_API_KEY" | "MEMORY_MCP_API_KEY" | "GUIDE_DOG_API_KEY";
 }
 
 export interface OpenAIChatMessage {

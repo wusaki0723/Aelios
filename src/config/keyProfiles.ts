@@ -27,5 +27,23 @@ export const KEY_PROFILES = {
     memoryMode: "hybrid",
     allowModelPassthrough: true,
     debug: true
+  },
+  mcp: {
+    source: "mcp",
+    namespace: "default",
+    scopes: ["memory:read", "memory:write"],
+    injectionMode: "none",
+    memoryMode: "builtin",
+    allowModelPassthrough: false,
+    debug: false
+  },
+  guideDog: {
+    source: "guide-dog",
+    namespace: "default",
+    scopes: ["chat:proxy"],
+    injectionMode: "none",
+    memoryMode: "none",
+    allowModelPassthrough: false,
+    debug: false
   }
 } satisfies Record<string, KeyProfile>;

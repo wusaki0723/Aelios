@@ -25,5 +25,13 @@ export async function authenticate(request: Request, env: Env): Promise<AuthResu
     return { ok: true, profile: KEY_PROFILES.debug, keyName: "DEBUG_API_KEY" };
   }
 
+  if (env.MEMORY_MCP_API_KEY && token === env.MEMORY_MCP_API_KEY) {
+    return { ok: true, profile: KEY_PROFILES.mcp, keyName: "MEMORY_MCP_API_KEY" };
+  }
+
+  if (env.GUIDE_DOG_API_KEY && token === env.GUIDE_DOG_API_KEY) {
+    return { ok: true, profile: KEY_PROFILES.guideDog, keyName: "GUIDE_DOG_API_KEY" };
+  }
+
   return { ok: false };
 }

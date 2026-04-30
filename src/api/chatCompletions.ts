@@ -24,6 +24,7 @@ import { CONTENT_RULES } from "../preset/regexRules";
 import { applyRegexRules } from "../preset/regexPipeline";
 import type { Env, MemoryApiRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 import { openAiError } from "../utils/json";
+import { hasImageContent } from "../utils/messages";
 
 function extractAssistantText(response: OpenAIChatResponse): string {
   const message = response.choices?.[0]?.message;
@@ -34,24 +35,10 @@ function extractAssistantText(response: OpenAIChatResponse): string {
   return JSON.stringify(message.content);
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 export function hasToolContent(body: OpenAIChatRequest): boolean {
   return body.messages.some(
     (m) => m.role === "tool" || (m.role === "assistant" && m.tool_calls != null)
   );
-}
-
-function hasImageContent(body: OpenAIChatRequest): boolean {
-  return body.messages.some((message) => {
-    if (!Array.isArray(message.content)) return false;
-    return message.content.some((part) => {
-      if (!isObject(part)) return false;
-      return part.type === "image_url" || part.type === "input_image";
-    });
-  });
 }
 
 /**

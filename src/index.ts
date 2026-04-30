@@ -2,7 +2,9 @@ import { handleHealth } from "./api/health";
 import { handleCache } from "./api/cache";
 import { handleCacheHealth } from "./api/debug";
 import { handleChatCompletions } from "./api/chatCompletions";
+import { handleGuideDogChatCompletions } from "./api/guideDog";
 import { handleMemories } from "./api/memories";
+import { handleMcp } from "./api/mcp";
 import { handleModels } from "./api/models";
 import { handleQueueMessage } from "./queue/consumer";
 import type { Env, QueueMessage } from "./types";
@@ -22,6 +24,17 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
       return handleChatCompletions(request, env, ctx);
+    }
+
+    if (
+      request.method === "POST" &&
+      (url.pathname === "/v1/guide-dog/chat/completions" || url.pathname === "/guide-dog/v1/chat/completions")
+    ) {
+      return handleGuideDogChatCompletions(request, env);
+    }
+
+    if (url.pathname === "/mcp" || url.pathname === "/memory-mcp") {
+      return handleMcp(request, env, ctx);
     }
 
     if (url.pathname.startsWith("/v1/memories")) {

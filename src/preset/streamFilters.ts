@@ -1,19 +1,21 @@
 /**
- * Stream content filters with a small state machine for <thinking> tag stripping
+ * Stream content filters with a small state machine for <thinking>/<think> tag stripping
  * and dash collapsing.
  *
  * Handles:
- * - <thinking>...</thinking> stripped across chunk boundaries
+ * - <thinking>...</thinking> and <think>...</think> stripped across chunk boundaries
+ * - unclosed <thinking>/<think> tags are treated as model formatting mistakes:
+ *   the tag is removed, but the following visible text is flushed at stream end
  * - dash_to_comma: ——|—|– → "，" with consecutive dash collapsing
  *   (——, ———, ——– all produce a single "，", even across chunks)
  * - strip_solid_square: ■ → "" (single-char, immediate)
  *
  * Design:
- * - IDLE state: buffer characters that might be part of <thinking>.
- *   If buffer matches <thinking> prefix, keep buffering.
- *   If buffer is a full <thinking> tag, switch to INSIDE_THINKING.
+ * - IDLE state: buffer characters that might be part of an opening think tag.
+ *   If buffer matches an opening tag prefix, keep buffering.
+ *   If buffer is a full opening tag, switch to INSIDE_THINKING.
  *   Otherwise flush via applySingleCharRules.
- * - INSIDE_THINKING state: consume everything until </thinking> is found.
+ * - INSIDE_THINKING state: consume everything until the matching close tag is found.
  * - Dash collapsing: consecutive dashes are held in a buffer and flushed
  *   as a single "，" when a non-dash arrives. A trailing dash at chunk
  *   boundary is held in `pendingDash` to support cross-chunk collapsing.
@@ -23,20 +25,24 @@
  * reasoning_content around this filter.
  */
 
-const THINKING_OPEN = "<thinking>";
-const THINKING_CLOSE = "</thinking>";
+const THINKING_TAGS = [
+  { open: "<thinking>", close: "</thinking>" },
+  { open: "<think>", close: "</think>" }
+] as const;
 
 type StreamFilterState = "IDLE" | "INSIDE_THINKING";
 
 export interface ThinkingFilterState {
   state: StreamFilterState;
   buffer: string;
+  closeTag: string | null;
+  thinkingContent: string;
   /** true if previous chunk ended with an unresolved dash (pending cross-chunk collapse) */
   pendingDash: boolean;
 }
 
 export function createThinkingFilterState(): ThinkingFilterState {
-  return { state: "IDLE", buffer: "", pendingDash: false };
+  return { state: "IDLE", buffer: "", closeTag: null, thinkingContent: "", pendingDash: false };
 }
 
 function isDash(ch: string): boolean {
@@ -59,6 +65,18 @@ function applySingleCharRules(ch: string): string {
 function flushDashRun(hasDash: boolean, output: string): string {
   if (hasDash) return output + "，";
   return output;
+}
+
+function matchingOpenTag(buffer: string): (typeof THINKING_TAGS)[number] | null {
+  return THINKING_TAGS.find((tag) => tag.open === buffer) ?? null;
+}
+
+function isOpeningTagPrefix(buffer: string): boolean {
+  return THINKING_TAGS.some((tag) => tag.open.startsWith(buffer));
+}
+
+function applyVisibleTextRules(text: string): string {
+  return text.replace(/■/g, "").replace(/[—–]+/g, "，");
 }
 
 /**
@@ -99,25 +117,31 @@ export function processStreamChunk(
         inDashRun = false;
       }
 
-      // --- <thinking> tag detection ---
+      // --- <thinking>/<think> tag detection ---
       state.buffer += ch;
 
-      if (THINKING_OPEN.startsWith(state.buffer)) {
-        if (state.buffer === THINKING_OPEN) {
+      if (isOpeningTagPrefix(state.buffer)) {
+        const tag = matchingOpenTag(state.buffer);
+        if (tag) {
           state.state = "INSIDE_THINKING";
+          state.closeTag = tag.close;
+          state.thinkingContent = "";
           state.buffer = "";
         }
         continue;
       }
 
-      // Buffer is NOT a prefix of <thinking>. Flush characters.
-      while (state.buffer.length > 0 && !THINKING_OPEN.startsWith(state.buffer)) {
+      // Buffer is NOT a prefix of a thinking tag. Flush characters.
+      while (state.buffer.length > 0 && !isOpeningTagPrefix(state.buffer)) {
         output += applySingleCharRules(state.buffer[0]);
         state.buffer = state.buffer.slice(1);
       }
 
-      if (state.buffer === THINKING_OPEN) {
+      const tag = matchingOpenTag(state.buffer);
+      if (tag) {
         state.state = "INSIDE_THINKING";
+        state.closeTag = tag.close;
+        state.thinkingContent = "";
         state.buffer = "";
       }
       continue;
@@ -126,16 +150,23 @@ export function processStreamChunk(
     // INSIDE_THINKING state
     state.buffer += ch;
 
-    if (THINKING_CLOSE.startsWith(state.buffer)) {
-      if (state.buffer === THINKING_CLOSE) {
+    const closeTag = state.closeTag || THINKING_TAGS[0].close;
+    if (closeTag.startsWith(state.buffer)) {
+      if (state.buffer === closeTag) {
         state.state = "IDLE";
+        state.closeTag = null;
+        state.thinkingContent = "";
         state.buffer = "";
       }
       continue;
     }
 
-    // Not a prefix of </thinking>. Discard (we're inside thinking content).
-    state.buffer = "";
+    // Not a prefix of the close tag. Keep it in case this was an unclosed
+    // thinking tag that actually contains visible answer text.
+    while (state.buffer.length > 0 && !closeTag.startsWith(state.buffer)) {
+      state.thinkingContent += state.buffer[0];
+      state.buffer = state.buffer.slice(1);
+    }
   }
 
   // After processing all characters in the chunk, hold any trailing dash run.
@@ -146,8 +177,8 @@ export function processStreamChunk(
     state.pendingDash = true;
   }
 
-  // Flush any remaining buffer that's not a <thinking> prefix.
-  if (state.state === "IDLE" && state.buffer && !THINKING_OPEN.startsWith(state.buffer)) {
+  // Flush any remaining buffer that's not a thinking-tag prefix.
+  if (state.state === "IDLE" && state.buffer && !isOpeningTagPrefix(state.buffer)) {
     for (const bufCh of state.buffer) {
       output += applySingleCharRules(bufCh);
     }
@@ -168,4 +199,28 @@ export function flushPendingDash(state: ThinkingFilterState): string {
     return "，";
   }
   return "";
+}
+
+/**
+ * Flush any visible text held by the stream filter at stream end.
+ *
+ * Complete thinking blocks are removed. If a model emits an opening think tag
+ * and never closes it, treat that as a formatting failure and preserve the text
+ * after the tag instead of deleting the whole answer.
+ */
+export function flushStreamFilter(state: ThinkingFilterState): string {
+  let output = "";
+
+  if (state.state === "INSIDE_THINKING") {
+    output += applyVisibleTextRules(state.thinkingContent + state.buffer);
+    state.state = "IDLE";
+    state.closeTag = null;
+    state.thinkingContent = "";
+    state.buffer = "";
+  } else if (state.buffer) {
+    output += applyVisibleTextRules(state.buffer);
+    state.buffer = "";
+  }
+
+  return output + flushPendingDash(state);
 }

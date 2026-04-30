@@ -4,7 +4,7 @@ import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../q
 import { normalizeAnthropicUsage } from "./anthropicAdapter";
 import {
   createThinkingFilterState,
-  flushPendingDash,
+  flushStreamFilter,
   processStreamChunk,
   type ThinkingFilterState,
 } from "../preset/streamFilters";
@@ -189,8 +189,8 @@ export function streamAnthropicToOpenAI(upstream: Response, options: StreamAnthr
         if (delta) await writer.write(openAIChunk(delta));
       }
 
-      // Flush any trailing dash that was held for cross-chunk collapsing.
-      const trailing = flushPendingDash(state.thinkingFilter);
+      // Flush held trailing dash or unclosed <think> text at stream end.
+      const trailing = flushStreamFilter(state.thinkingFilter);
       if (trailing) {
         state.assistantText += trailing;
         await writer.write(openAIChunk({ content: trailing }));

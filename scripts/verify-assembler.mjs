@@ -1681,7 +1681,7 @@ check("preset_lite no longer hardcodes short paragraphs or hidden-thinking suppr
 
 // --- Regex rules (must match src/preset/regexRules.ts) ---
 
-const STRIP_THINKING = { id: "strip_thinking", find: /<thinking>[\s\S]*?<\/thinking>/g, replace: "", applyTo: ["content", "history"] };
+const STRIP_THINKING = { id: "strip_thinking", find: /<(thinking|think)>[\s\S]*?<\/\1>|<\/?(?:thinking|think)>/g, replace: "", applyTo: ["content", "history"] };
 const STRIP_LANG_DETAILS = { id: "strip_lang_details", find: /<details>\s*<summary>(英文版|日本語版|English|Japanese)<\/summary>[\s\S]*?<\/details>/g, replace: "", applyTo: ["content"] };
 const STRIP_SOLID_SQUARE = { id: "strip_solid_square", find: /■/g, replace: "", applyTo: ["content", "stream"] };
 const DASH_TO_COMMA = { id: "dash_to_comma", find: /——|—|–/g, replace: "，", applyTo: ["content", "stream"] };
@@ -1740,11 +1740,13 @@ function preprocessHistory(messages) {
 
 // --- streamFilters contract mirror ---
 
-const THINKING_OPEN = "<thinking>";
-const THINKING_CLOSE = "</thinking>";
+const THINKING_TAGS = [
+  { open: "<thinking>", close: "</thinking>" },
+  { open: "<think>", close: "</think>" }
+];
 
 function createThinkingFilterState() {
-  return { state: "IDLE", buffer: "", pendingDash: false };
+  return { state: "IDLE", buffer: "", closeTag: null, thinkingContent: "", pendingDash: false };
 }
 
 function isDash(ch) {
@@ -1754,6 +1756,18 @@ function isDash(ch) {
 function applySingleCharRules(ch) {
   if (ch === "■") return "";
   return ch;
+}
+
+function matchingOpenTag(buffer) {
+  return THINKING_TAGS.find((tag) => tag.open === buffer) ?? null;
+}
+
+function isOpeningTagPrefix(buffer) {
+  return THINKING_TAGS.some((tag) => tag.open.startsWith(buffer));
+}
+
+function applyVisibleTextRules(text) {
+  return text.replace(/■/g, "").replace(/[—–]+/g, "，");
 }
 
 function processStreamChunk(chunk, state) {
@@ -1775,42 +1789,54 @@ function processStreamChunk(chunk, state) {
         output += "，";
         inDashRun = false;
       }
-      // <thinking> tag detection
+      // <thinking>/<think> tag detection
       state.buffer += ch;
-      if (THINKING_OPEN.startsWith(state.buffer)) {
-        if (state.buffer === THINKING_OPEN) {
+      if (isOpeningTagPrefix(state.buffer)) {
+        const tag = matchingOpenTag(state.buffer);
+        if (tag) {
           state.state = "INSIDE_THINKING";
+          state.closeTag = tag.close;
+          state.thinkingContent = "";
           state.buffer = "";
         }
         continue;
       }
-      while (state.buffer.length > 0 && !THINKING_OPEN.startsWith(state.buffer)) {
+      while (state.buffer.length > 0 && !isOpeningTagPrefix(state.buffer)) {
         output += applySingleCharRules(state.buffer[0]);
         state.buffer = state.buffer.slice(1);
       }
-      if (state.buffer === THINKING_OPEN) {
+      const tag = matchingOpenTag(state.buffer);
+      if (tag) {
         state.state = "INSIDE_THINKING";
+        state.closeTag = tag.close;
+        state.thinkingContent = "";
         state.buffer = "";
       }
       continue;
     }
     // INSIDE_THINKING
     state.buffer += ch;
-    if (THINKING_CLOSE.startsWith(state.buffer)) {
-      if (state.buffer === THINKING_CLOSE) {
+    const closeTag = state.closeTag || THINKING_TAGS[0].close;
+    if (closeTag.startsWith(state.buffer)) {
+      if (state.buffer === closeTag) {
         state.state = "IDLE";
+        state.closeTag = null;
+        state.thinkingContent = "";
         state.buffer = "";
       }
       continue;
     }
-    state.buffer = "";
+    while (state.buffer.length > 0 && !closeTag.startsWith(state.buffer)) {
+      state.thinkingContent += state.buffer[0];
+      state.buffer = state.buffer.slice(1);
+    }
   }
   // Hold trailing dash for cross-chunk collapsing. Even if this chunk already
   // emitted text, the next chunk may start with another dash.
   if (state.state === "IDLE" && inDashRun) {
     state.pendingDash = true;
   }
-  if (state.state === "IDLE" && state.buffer && !THINKING_OPEN.startsWith(state.buffer)) {
+  if (state.state === "IDLE" && state.buffer && !isOpeningTagPrefix(state.buffer)) {
     for (const bufCh of state.buffer) { output += applySingleCharRules(bufCh); }
     state.buffer = "";
   }
@@ -1823,6 +1849,21 @@ function flushPendingDash(state) {
     return "，";
   }
   return "";
+}
+
+function flushStreamFilter(state) {
+  let output = "";
+  if (state.state === "INSIDE_THINKING") {
+    output += applyVisibleTextRules(state.thinkingContent + state.buffer);
+    state.state = "IDLE";
+    state.closeTag = null;
+    state.thinkingContent = "";
+    state.buffer = "";
+  } else if (state.buffer) {
+    output += applyVisibleTextRules(state.buffer);
+    state.buffer = "";
+  }
+  return output + flushPendingDash(state);
 }
 
 // ---------------------------------------------------------------------------
@@ -1852,6 +1893,16 @@ check("strip_lang_details: Japanese details block removed", () => {
 check("strip_thinking: complete <thinking>...</thinking> removed", () => {
   const input = "before<thinking>internal reasoning</thinking>after";
   assert.strictEqual(applyRegexRules(input, CONTENT_RULES), "beforeafter");
+});
+
+check("strip_thinking: complete <think>...</think> removed", () => {
+  const input = "before<think>internal reasoning</think>after";
+  assert.strictEqual(applyRegexRules(input, CONTENT_RULES), "beforeafter");
+});
+
+check("strip_thinking: unclosed <think> keeps visible text", () => {
+  const input = "<think>正文没有闭合";
+  assert.strictEqual(applyRegexRules(input, CONTENT_RULES), "正文没有闭合");
 });
 
 check("strip_thinking: multiline thinking block removed", () => {
@@ -1909,6 +1960,34 @@ check("stream: <thinking> tag split across chunks is stripped", () => {
   assert.strictEqual(r1, "before");
   assert.strictEqual(r2, null);
   assert.strictEqual(r3, "after");
+});
+
+check("stream: <think> tag split across chunks is stripped", () => {
+  const state = createThinkingFilterState();
+  const r1 = processStreamChunk("before<th", state);
+  const r2 = processStreamChunk("ink>hidden</th", state);
+  const r3 = processStreamChunk("ink>after", state);
+  assert.strictEqual(r1, "before");
+  assert.strictEqual(r2, null);
+  assert.strictEqual(r3, "after");
+});
+
+check("stream: unclosed <think> flushes visible text at stream end", () => {
+  const state = createThinkingFilterState();
+  const r1 = processStreamChunk("<think>正文", state);
+  const r2 = processStreamChunk("没有闭合", state);
+  assert.strictEqual(r1, null);
+  assert.strictEqual(r2, null);
+  assert.strictEqual(flushStreamFilter(state), "正文没有闭合");
+});
+
+check("stream: unclosed <thinking> also preserves visible text at stream end", () => {
+  const state = createThinkingFilterState();
+  const r1 = processStreamChunk("开头<thinking>正文", state);
+  const r2 = processStreamChunk("—结束", state);
+  assert.strictEqual(r1, "开头");
+  assert.strictEqual(r2, null);
+  assert.strictEqual(flushStreamFilter(state), "正文，结束");
 });
 
 check("stream: dash replacement works across chunks", () => {

@@ -3,7 +3,7 @@ import { saveUsageLog } from "../db/usageLogs";
 import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../queue/producer";
 import {
   createThinkingFilterState,
-  flushPendingDash,
+  flushStreamFilter,
   processStreamChunk,
   type ThinkingFilterState,
 } from "../preset/streamFilters";
@@ -49,7 +49,7 @@ function filterOpenAISSEData(
   state: StreamState
 ): Uint8Array | null {
   if (data === "[DONE]") {
-    const trailing = flushPendingDash(state.thinkingFilter);
+    const trailing = flushStreamFilter(state.thinkingFilter);
     if (!trailing) return new TextEncoder().encode("data: [DONE]\n\n");
 
     state.assistantText += trailing;
@@ -195,8 +195,8 @@ export function streamOpenAIWithTee(upstream: Response, options: StreamOpenAIOpt
         if (filtered) await writer.write(filtered);
       }
 
-      // Flush any trailing dash that was held for cross-chunk collapsing.
-      const trailing = flushPendingDash(state.thinkingFilter);
+      // Flush held trailing dash or unclosed <think> text at stream end.
+      const trailing = flushStreamFilter(state.thinkingFilter);
       if (trailing) {
         state.assistantText += trailing;
         const trailingChunk = {

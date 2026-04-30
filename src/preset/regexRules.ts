@@ -16,7 +16,7 @@ export interface RegexRule {
 
 const STRIP_THINKING: RegexRule = {
   id: "strip_thinking",
-  find: /<thinking>[\s\S]*?<\/thinking>/g,
+  find: /<(thinking|think)>[\s\S]*?<\/\1>|<\/?(?:thinking|think)>/g,
   replace: "",
   applyTo: ["content", "history"],
 };

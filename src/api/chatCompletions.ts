@@ -136,7 +136,7 @@ export async function handleChatCompletions(
           namespace: auth.profile.namespace,
           memories
         });
-        upstream = await callAnthropicNative(env, anthropicRequest);
+        upstream = await callAnthropicNative(env, anthropicRequest, targetModel);
       } else {
         const assembled = assemble({
           request: body,
@@ -150,7 +150,7 @@ export async function handleChatCompletions(
         // NOTE: Anthropic adapter stringifies structured content (image_url etc.)
         // as a temporary fallback; native Anthropic image support will be added
         // when the vision pipeline is wired in.
-        upstream = await callAnthropicNative(env, buildAnthropicRequestFromAssembled(body, targetModel, assembled, env));
+        upstream = await callAnthropicNative(env, buildAnthropicRequestFromAssembled(body, targetModel, assembled, env), targetModel);
       }
     } else {
       if (hasToolContent(body)) {

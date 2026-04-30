@@ -28,7 +28,8 @@ const visibleVarNames = [
   "VISION_MODEL",
   "GUIDE_DOG_MODEL",
   "ANTHROPIC_THINKING_ENABLED",
-  "ANTHROPIC_THINKING_BUDGET"
+  "ANTHROPIC_THINKING_BUDGET",
+  "CUSTOM_ANTHROPIC_MESSAGES_PATH"
 ];
 
 function run(args, options = {}) {

@@ -41,12 +41,12 @@ export function toMemoryApiRecord(record: MemoryRecord, score?: number): MemoryA
 function getTopK(env: Env, requested?: number): number {
   const fallback = Number(env.MEMORY_TOP_K || 8);
   const value = requested || fallback;
-  return Math.min(Math.max(value, 1), 50);
+  return Math.min(Math.max(value, 1), 200);
 }
 
 function getMinScore(env: Env): number {
-  const value = Number(env.MEMORY_MIN_SCORE || 0.35);
-  return Number.isFinite(value) ? value : 0.35;
+  const value = Number(env.MEMORY_MIN_SCORE || 0.2);
+  return Number.isFinite(value) ? value : 0.2;
 }
 
 function getRefId(match: VectorizeMatch): string | null {
@@ -110,6 +110,15 @@ function toLegacyMemoryRecord(
 
   const now = new Date(0).toISOString();
   const id = getRefId(match) || match.id;
+
+  let tags = "[]";
+  const rawTags = metadata.tags;
+  if (typeof rawTags === "string") {
+    tags = rawTags;
+  } else if (Array.isArray(rawTags)) {
+    tags = JSON.stringify(rawTags);
+  }
+
   return {
     id,
     namespace: readMetadataString(metadata, "namespace") || input.namespace,
@@ -120,8 +129,8 @@ function toLegacyMemoryRecord(
     confidence: readMetadataNumber(metadata, "confidence", 0.8),
     status: "active",
     pinned: readMetadataBoolean(metadata, "pinned") ? 1 : 0,
-    tags: JSON.stringify(readMetadataStringArray(metadata, "tags")),
-    source: readMetadataString(metadata, "source_id") || readMetadataString(metadata, "source") || "vectorize-legacy",
+    tags,
+    source: readMetadataString(metadata, "source_id") || readMetadataString(metadata, "source") || "vectorize",
     source_message_ids: JSON.stringify([]),
     vector_id: match.id,
     last_recalled_at: null,
@@ -224,7 +233,7 @@ export async function searchMemories(
       namespace: input.namespace,
       query: input.query,
       types: input.types,
-      limit: topK
+      limit: Math.max(topK, 50)
     });
   }
 

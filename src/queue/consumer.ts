@@ -6,12 +6,13 @@ import { runMemoryMaintenance } from "../memory/maintenance";
 export async function handleQueueMessage(message: QueueMessage, env: Env): Promise<void> {
   switch (message.type) {
     case "memory_maintenance":
-      await runMemoryMaintenance(env, message);
-      // After memory extraction, try updating long-term summary
-      try {
-        await maybeUpdateLongTermSummary(env, message.namespace);
-      } catch (error) {
-        console.error("summary update failed", error);
+      const result = await runMemoryMaintenance(env, message);
+      if (result.processed) {
+        try {
+          await maybeUpdateLongTermSummary(env, message.namespace);
+        } catch (error) {
+          console.error("summary update failed", error);
+        }
       }
       return;
     case "retention":

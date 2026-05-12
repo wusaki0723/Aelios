@@ -32,7 +32,7 @@ function resolveInjectionMode(profile: KeyProfile, env: Env): InjectionMode {
 
 function getTopK(env: Env): number {
   const value = Number(env.MEMORY_TOP_K || 8);
-  return Number.isFinite(value) ? Math.min(Math.max(value, 1), 50) : 8;
+  return Number.isFinite(value) ? Math.min(Math.max(value, 1), 200) : 8;
 }
 
 async function searchMemoriesForInjection(
@@ -91,7 +91,7 @@ export async function selectMemoriesForInjection(
     const records = await listMemories(env.DB, {
       namespace,
       status: "active",
-      limit: 100
+      limit: 500
     });
 
     return filterAndCompressMemories(env, {
@@ -118,7 +118,7 @@ export async function selectMemoriesForInjection(
   const records = await listMemories(env.DB, {
     namespace,
     status: "active",
-    limit: 100
+    limit: 500
   });
   const pinned = records.filter((record) => record.pinned).map((record) => toMemoryApiRecord(record));
 

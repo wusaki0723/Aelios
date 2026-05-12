@@ -18,7 +18,7 @@ import { json, openAiError } from "../utils/json";
 function normalizeLimit(value: string | null, fallback = 50): number {
   const parsed = Number(value || fallback);
   if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(Math.max(Math.floor(parsed), 1), 100);
+  return Math.min(Math.max(Math.floor(parsed), 1), 500);
 }
 
 function resolveNamespace(profile: KeyProfile, requested: unknown): string {

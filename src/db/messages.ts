@@ -134,6 +134,55 @@ export async function getMessagesByIds(
   return result.results ?? [];
 }
 
+export async function countMessagesAfterTimestamp(
+  db: D1Database,
+  namespace: string,
+  afterCreatedAt: string | null
+): Promise<number> {
+  if (!afterCreatedAt) {
+    const row = await db
+      .prepare(
+        `SELECT COUNT(*) as cnt FROM messages
+         WHERE namespace = ? AND role IN ('user', 'assistant')`
+      )
+      .bind(namespace)
+      .first<{ cnt: number }>();
+    return row?.cnt ?? 0;
+  }
+
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM messages
+       WHERE namespace = ? AND role IN ('user', 'assistant') AND created_at > ?`
+    )
+    .bind(namespace, afterCreatedAt)
+    .first<{ cnt: number }>();
+  return row?.cnt ?? 0;
+}
+
+export async function listMessagesByNamespace(
+  db: D1Database,
+  namespace: string,
+  afterCreatedAt: string | null,
+  limit: number
+): Promise<MessageRecord[]> {
+  let sql = `SELECT id, conversation_id, namespace, role, content, source, created_at
+             FROM messages
+             WHERE namespace = ? AND role IN ('user', 'assistant')`;
+  const binds: unknown[] = [namespace];
+
+  if (afterCreatedAt) {
+    sql += ` AND created_at > ?`;
+    binds.push(afterCreatedAt);
+  }
+
+  sql += ` ORDER BY created_at ASC LIMIT ?`;
+  binds.push(limit);
+
+  const result = await db.prepare(sql).bind(...binds).all<MessageRecord>();
+  return result.results ?? [];
+}
+
 export async function saveIngestMessages(
   db: D1Database,
   input: {

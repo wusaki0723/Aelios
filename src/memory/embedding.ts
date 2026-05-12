@@ -58,9 +58,12 @@ export async function upsertMemoryEmbedding(env: Env, memory: MemoryRecord): Pro
         kind: "memory",
         ref_id: memory.id,
         type: memory.type,
+        content: memory.content,
         importance: memory.importance,
         status: memory.status,
-        pinned: Boolean(memory.pinned)
+        pinned: Boolean(memory.pinned),
+        tags: memory.tags || "[]",
+        created_at: memory.created_at,
       }
     }
   ]);

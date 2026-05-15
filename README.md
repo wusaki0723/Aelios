@@ -92,6 +92,8 @@ Deploy command:     npm run deploy:cloudflare
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天模型 |
 | `MEMORY_FILTER_PROVIDER` | `workers-ai` | 记忆筛选压缩默认走 Cloudflare Workers AI |
 | `MEMORY_FILTER_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选压缩小秘书 |
+| `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 每次最多交给小秘书的候选记忆 |
+| `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最多返回几条记忆 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 + 摘要（快且便宜） |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 不填，用 `MEMORY_MODEL` | 长期摘要生成（可选覆盖） |
@@ -201,6 +203,8 @@ https://<你的 Worker 地址>/health
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天 |
 | `MEMORY_FILTER_PROVIDER` | `workers-ai` | 记忆筛选提供方。设 `openai-compatible` 可改走 AI Gateway |
 | `MEMORY_FILTER_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选 |
+| `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 进入小秘书的候选记忆上限 |
+| `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最终返回记忆上限 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 空（用 MEMORY_MODEL） | 摘要生成 |
@@ -227,6 +231,8 @@ https://<你的 Worker 地址>/health
 | `DEBUG_API_KEY` | 空 | 调试接口钥匙 |
 | `MEMORY_TOP_K` | `8` | 记忆搜索返回条数 |
 | `MEMORY_MIN_SCORE` | `0.35` | 记忆搜索最低相关度 |
+| `MEMORY_FILTER_MIN_SCORE` | `0.35` | 进入小秘书前的最低相关度；不填时跟随 `MEMORY_MIN_SCORE` |
+| `MEMORY_FILTER_MAX_CONTENT_CHARS` | `700` | 交给小秘书前，每条候选最多保留多少字 |
 | `MEMORY_MIN_IMPORTANCE` | `0.55` | 记忆写入最低重要性 |
 | `MEMORY_BACKEND` | `vectorize` | 长期记忆主库。默认 Vectorize；设 `d1` 可回到旧模式 |
 | `VECTORIZE_INDEX_NAME` | `memo-kb` | Vectorize 索引名，给 list-vectors API 使用 |
@@ -489,7 +495,8 @@ dash_to_comma:      —、——、– 改成 ，
   -> EMBEDDING_MODEL 生成向量
   -> Vectorize 搜索 memo-kb（长期记忆主库）
   -> 从 Vectorize metadata 读取 content/type/tags/importance/status
-  -> Workers AI / MEMORY_FILTER_MODEL 分拣压缩
+  -> 分数过滤 + 去重 + 截断候选
+  -> Workers AI / MEMORY_FILTER_MODEL 用 JSON mode 分拣压缩
   -> 注入 dynamic_memory_patch
   -> pinned identity/persona -> persona_pinned block
 ```

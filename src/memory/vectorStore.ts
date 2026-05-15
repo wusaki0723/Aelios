@@ -155,6 +155,11 @@ function getAccountId(env: Env): string | null {
   return env.CLOUDFLARE_ACCOUNT_ID?.trim() || null;
 }
 
+function getMinScore(env: Env): number {
+  const value = Number(env.MEMORY_MIN_SCORE || 0.35);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.35;
+}
+
 async function getVectorsByIdsBatched(
   vectorize: Vectorize | VectorizeIndex,
   ids: string[]
@@ -333,6 +338,7 @@ export async function searchVectorMemories(
   }
 
   return result.matches.flatMap((match): MemoryApiRecord[] => {
+    if (match.score < getMinScore(env)) return [];
     const record = vectorMetadataToMemoryRecord(match, match.score);
     return record ? [record] : [];
   });

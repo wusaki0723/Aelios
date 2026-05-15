@@ -22,7 +22,8 @@ export async function saveUserMessages(
     stream: boolean;
   }
 ): Promise<string[]> {
-  const userMessages = input.messages.filter((message) => message.role === "user");
+  const lastUserMessage = [...input.messages].reverse().find((message) => message.role === "user");
+  const userMessages = lastUserMessage ? [lastUserMessage] : [];
   const ids: string[] = [];
 
   for (const message of userMessages) {

@@ -1,7 +1,11 @@
 export interface Env {
   DB: D1Database;
+  AI?: Ai;
   MEMORY_QUEUE?: Queue<QueueMessage>;
   VECTORIZE?: Vectorize | VectorizeIndex;
+  VECTORIZE_INDEX_NAME?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
   PUBLIC_MODEL_NAME?: string;
   CHAT_MODEL?: string;
   DEFAULT_UPSTREAM_MODEL?: string;
@@ -14,9 +18,19 @@ export interface Env {
   GUIDE_DOG_API_KEY?: string;
   CF_AIG_TOKEN?: string;
   ENABLE_AUTO_MEMORY?: string;
+  ENABLE_INCREMENTAL_MEMORY?: string;
+  ENABLE_DAILY_MEMORY_DIGEST?: string;
+  DAILY_DIGEST_NAMESPACE?: string;
+  DAILY_DIGEST_MAX_MESSAGES?: string;
+  DAILY_DIGEST_MEMORY_CONTEXT_LIMIT?: string;
+  DAILY_DIGEST_EXCERPT_LIMIT?: string;
+  DAILY_DIGEST_TIME_ZONE?: string;
+  EMPTY_MEMORY_MIN_CHARS?: string;
   MEMORY_MODE?: string;
+  MEMORY_BACKEND?: string;
   MEMORY_MODEL?: string;
   ENABLE_MEMORY_FILTER?: string;
+  MEMORY_FILTER_PROVIDER?: string;
   MEMORY_FILTER_MODEL?: string;
   VISION_MODEL?: string;
   GUIDE_DOG_MODEL?: string;
@@ -30,6 +44,8 @@ export interface Env {
   MEMORY_MIN_SCORE?: string;
   ANTHROPIC_CACHE_ENABLED?: string;
   ANTHROPIC_CACHE_TTL?: string;
+  ANTHROPIC_AUTO_CACHE_ENABLED?: string;
+  ANTHROPIC_ROLLING_CACHE_ENABLED?: string;
   ANTHROPIC_CACHE_STABLE_SYSTEM?: string;
   CUSTOM_ANTHROPIC_MESSAGES_PATH?: string;
   ANTHROPIC_THINKING_ENABLED?: string;

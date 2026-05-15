@@ -22,6 +22,10 @@ interface AnthropicMessage {
 interface AnthropicRequest {
   model: string;
   max_tokens: number;
+  cache_control?: {
+    type: "ephemeral";
+    ttl?: "5m" | "1h";
+  };
   temperature?: number;
   stream?: boolean;
   thinking?: {
@@ -73,6 +77,34 @@ function buildCacheControl(env: Env): AnthropicTextBlock["cache_control"] | unde
   if (env.ANTHROPIC_CACHE_ENABLED === "false") return undefined;
   const ttl = env.ANTHROPIC_CACHE_TTL === "1h" ? "1h" : "5m";
   return ttl === "1h" ? { type: "ephemeral", ttl } : { type: "ephemeral" };
+}
+
+function buildAutomaticCacheControl(env: Env): AnthropicRequest["cache_control"] | undefined {
+  if (env.ANTHROPIC_CACHE_ENABLED === "false") return undefined;
+  if (env.ANTHROPIC_AUTO_CACHE_ENABLED === "false") return undefined;
+  return buildCacheControl(env);
+}
+
+export function getAnthropicCacheMode(env: Env): string | null {
+  if (env.ANTHROPIC_CACHE_ENABLED === "false") return null;
+  const parts = ["anthropic"];
+  if (env.ANTHROPIC_AUTO_CACHE_ENABLED !== "false") parts.push("auto");
+  parts.push("explicit");
+  if (env.ANTHROPIC_ROLLING_CACHE_ENABLED !== "false") parts.push("rolling");
+  return parts.join("_");
+}
+
+function applyRollingMessageCache(messages: AnthropicMessage[], env: Env): void {
+  const cacheControl = buildCacheControl(env);
+  if (!cacheControl) return;
+  if (env.ANTHROPIC_ROLLING_CACHE_ENABLED === "false") return;
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "user" || message.content.length === 0) continue;
+    message.content[message.content.length - 1].cache_control = cacheControl;
+    return;
+  }
 }
 
 function getMaxTokens(req: OpenAIChatRequest): number {
@@ -304,14 +336,18 @@ export async function buildAnthropicNativeRequest(
     });
   }
 
+  const messages = convertMessages(req.messages);
+  applyRollingMessageCache(messages, input.env);
+
   return {
     model: stripAnthropicModelPrefix(input.targetModel),
     max_tokens: getAnthropicMaxTokens(req, input.env, thinking),
+    cache_control: buildAutomaticCacheControl(input.env),
     temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
     thinking,
     system,
-    messages: convertMessages(req.messages)
+    messages
   };
 }
 
@@ -321,8 +357,9 @@ export async function buildAnthropicNativeRequest(
  * - System blocks are converted via assembledToAnthropicSystem
  * - Messages via assembledToAnthropicMessages
  *   (structured content like image_url is JSON.stringify'd — temporary fallback)
- * - cache_control is applied only to the client_system anchor block,
- *   respecting ANTHROPIC_CACHE_ENABLED and ANTHROPIC_CACHE_TTL
+ * - cache_control is applied to the client_system anchor block and the
+ *   latest user message, respecting ANTHROPIC_CACHE_ENABLED and
+ *   ANTHROPIC_CACHE_TTL
  */
 export function buildAnthropicRequestFromAssembled(
   req: OpenAIChatRequest,
@@ -332,16 +369,19 @@ export function buildAnthropicRequestFromAssembled(
 ): AnthropicRequest {
   const thinking = buildThinkingConfig(env, req);
   const system = assembledToAnthropicSystem(assembled.system_blocks);
+  const messages = assembledToAnthropicMessages(assembled.messages);
   applyCacheOverrides(system, env);
+  applyRollingMessageCache(messages, env);
 
   return {
     model: stripAnthropicModelPrefix(targetModel),
     max_tokens: getAnthropicMaxTokens(req, env, thinking),
+    cache_control: buildAutomaticCacheControl(env),
     temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
     thinking,
     system,
-    messages: assembledToAnthropicMessages(assembled.messages),
+    messages,
   };
 }
 

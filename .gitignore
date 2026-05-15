@@ -3,4 +3,5 @@ node_modules/
 .dev.vars
 .env
 .wrangler-secrets.json
+backups/
 dist/

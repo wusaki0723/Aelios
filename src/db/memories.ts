@@ -22,6 +22,13 @@ export interface ListMemoryFilters {
   type?: string;
   status?: string;
   limit: number;
+  offset?: number;
+}
+
+export interface ListMemoryPage {
+  records: MemoryRecord[];
+  hasMore: boolean;
+  nextOffset: number | null;
 }
 
 export interface UpdateMemoryInput {
@@ -92,7 +99,7 @@ export async function createMemory(db: D1Database, input: CreateMemoryInput): Pr
   return record;
 }
 
-export async function listMemories(db: D1Database, filters: ListMemoryFilters): Promise<MemoryRecord[]> {
+export async function listMemoriesPage(db: D1Database, filters: ListMemoryFilters): Promise<ListMemoryPage> {
   let sql = "SELECT * FROM memories WHERE namespace = ?";
   const binds: unknown[] = [filters.namespace];
 
@@ -106,15 +113,29 @@ export async function listMemories(db: D1Database, filters: ListMemoryFilters): 
     binds.push(filters.status);
   }
 
-  sql += " ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT ?";
-  binds.push(filters.limit);
+  const offset = Math.max(Math.floor(filters.offset ?? 0), 0);
+  const limit = Math.max(Math.floor(filters.limit), 1);
+  sql += " ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT ? OFFSET ?";
+  binds.push(limit + 1, offset);
 
   const result = await db
     .prepare(sql)
     .bind(...binds)
     .all<MemoryRecord>();
 
-  return result.results ?? [];
+  const rows = result.results ?? [];
+  const records = rows.slice(0, limit);
+
+  return {
+    records,
+    hasMore: rows.length > limit,
+    nextOffset: rows.length > limit ? offset + records.length : null
+  };
+}
+
+export async function listMemories(db: D1Database, filters: ListMemoryFilters): Promise<MemoryRecord[]> {
+  const page = await listMemoriesPage(db, filters);
+  return page.records;
 }
 
 export async function getMemoryById(

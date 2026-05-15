@@ -334,6 +334,16 @@ memory_ingest  写入一段消息，并可触发自动抽取
 
 这个模式使用 D1、Vectorize、Queue，但不使用 `/v1/chat/completions`。
 
+如果不想走 MCP，也可以直接走 REST 写入原始聊天：
+
+```
+POST /v1/memories/ingest
+POST /v1/ingest/messages
+POST /v1/messages/ingest
+```
+
+这三个入口做的是同一件事：鉴权后把 `messages` 写进 D1。传 `auto_extract: false` 时，只保存原始聊天，等每日小秘书晚上统一整理入 Vectorize。
+
 **3. 无记忆导盲犬 API**
 
 ```
@@ -618,6 +628,12 @@ curl "https://<worker>/v1/memories/search" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>" \
   -H "content-type: application/json" \
   -d '{"query":"星线-0428","top_k":5}'
+
+# 直接上传外部聊天到 D1，不走 MCP，不立即抽取长期记忆
+curl "https://<worker>/v1/ingest/messages" \
+  -H "Authorization: Bearer <CHATBOX_API_KEY>" \
+  -H "content-type: application/json" \
+  -d '{"conversation_id":"claude-code-2026-05-15","source":"claude-code","auto_extract":false,"messages":[{"role":"user","content":"今天在 Claude Code 里讨论了 Aelios 的记忆结构。"},{"role":"assistant","content":"确认了 D1 做临时聊天台账，Vectorize 做长期记忆主库。"}]}'
 
 # Cache 健康（需要 DEBUG_API_KEY）
 curl "https://<worker>/v1/debug/cache_health" \

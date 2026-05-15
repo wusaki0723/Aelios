@@ -166,6 +166,13 @@ async function handleIngestMemories(
   });
 }
 
+export async function handleIngestMessagesApi(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+
+  return handleIngestMemories(request, env, ctx, auth.profile);
+}
+
 async function handlePatchMemory(
   request: Request,
   env: Env,

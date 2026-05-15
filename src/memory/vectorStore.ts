@@ -323,25 +323,37 @@ export async function searchVectorMemories(
   }
 
   const topK = Math.min(Math.max(Math.floor(input.topK), 1), 50);
-  let result = await requireVectorize(env).query(vector, {
+  const vectorize = requireVectorize(env);
+  const namespacedResult = await vectorize.query(vector, {
     topK,
     namespace: input.namespace,
     returnMetadata: "all",
     filter
   });
 
-  if (result.matches.length === 0) {
-    result = await requireVectorize(env).query(vector, {
-      topK,
-      returnMetadata: "all"
-    });
+  const legacyResult = await vectorize.query(vector, {
+    topK,
+    returnMetadata: "all"
+  });
+
+  const matchesByVectorId = new Map<string, VectorizeMatch>();
+  for (const match of [...namespacedResult.matches, ...legacyResult.matches]) {
+    const existing = matchesByVectorId.get(match.id);
+    if (!existing || match.score > existing.score) {
+      matchesByVectorId.set(match.id, match);
+    }
   }
 
-  return result.matches.flatMap((match): MemoryApiRecord[] => {
-    if (match.score < getMinScore(env)) return [];
-    const record = vectorMetadataToMemoryRecord(match, match.score);
-    return record ? [record] : [];
-  });
+  return [...matchesByVectorId.values()]
+    .flatMap((match): MemoryApiRecord[] => {
+      if (match.score < getMinScore(env)) return [];
+      const record = vectorMetadataToMemoryRecord(match, match.score);
+      if (!record || record.namespace !== input.namespace) return [];
+      if (input.types && input.types.length > 0 && !input.types.includes(record.type)) return [];
+      return [record];
+    })
+    .sort((a, b) => (b.score ?? 0) + b.importance * 0.05 - ((a.score ?? 0) + a.importance * 0.05))
+    .slice(0, topK);
 }
 
 async function listVectorIdsViaApi(

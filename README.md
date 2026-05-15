@@ -90,18 +90,21 @@ Deploy command:     npm run deploy:cloudflare
 | 变量名 | 默认值 | 干嘛的 |
 |--------|--------|--------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天模型 |
-| `MEMORY_FILTER_PROVIDER` | `workers-ai` | 记忆筛选压缩默认走 Cloudflare Workers AI |
-| `MEMORY_FILTER_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选压缩小秘书 |
+| `MEMORY_FILTER_MODEL` | `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选压缩小秘书，模型名前缀决定 provider |
 | `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 每次最多交给小秘书的候选记忆 |
 | `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最多返回几条记忆 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 + 摘要（快且便宜） |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 不填，用 `MEMORY_MODEL` | 长期摘要生成（可选覆盖） |
+| `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入 |
+| `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
 想换模型？直接在 Cloudflare Dashboard 的 Variables 里改，不用动代码。
 
 模型名格式是 `provider/model`，比如：
+- `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`
+- `worker/@cf/meta/llama-3.3-70b-instruct-fp8-fast`
 - `deepseek/deepseek-v4-pro`
 - `google-ai-studio/gemini-2.5-flash`
 - `anthropic/claude-sonnet-4-6`
@@ -202,8 +205,7 @@ https://<你的 Worker 地址>/health
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天 |
-| `MEMORY_FILTER_PROVIDER` | `workers-ai` | 记忆筛选提供方。设 `openai-compatible` 可改走 AI Gateway |
-| `MEMORY_FILTER_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选 |
+| `MEMORY_FILTER_MODEL` | `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选，模型名前缀决定 provider |
 | `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 进入小秘书的候选记忆上限 |
 | `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最终返回记忆上限 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
@@ -211,6 +213,7 @@ https://<你的 Worker 地址>/health
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 空（用 MEMORY_MODEL） | 摘要生成 |
 | `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入 |
+| `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
 **Claude 专属（可选）：**
 
@@ -408,12 +411,13 @@ Worker:      companion-memory-proxy
 D1:          companion_memory_proxy
 Vectorize:   memo-kb (768 维 cosine)
 Queue:       companion-memory
-Embedding:   workers-ai/@cf/google/embeddinggemma-300m (默认值，不建议普通用户改；如覆盖必须仍是 768 维)
+Embedding:   workers-ai/@cf/google/embeddinggemma-300m
+Dimensions:  768 (如覆盖 EMBEDDING_MODEL，输出维度仍需匹配)
 ```
 
 ### 模型路由
 
-所有模型调用走 Cloudflare AI Gateway，不绕开。
+聊天和非 Workers AI 模型调用走 Cloudflare AI Gateway。`workers-ai/`、`worker/`、`@cf/` 前缀的筛选和 embedding 会直接走 Worker 的 Workers AI binding。
 
 ```
 用户传 model=companion
@@ -439,7 +443,8 @@ Embedding:   workers-ai/@cf/google/embeddinggemma-300m (默认值，不建议普
   -> OpenAI compat: <AI_GATEWAY_BASE_URL>/compat/chat/completions
 
 Embedding
-  -> <AI_GATEWAY_BASE_URL>/compat/embeddings
+  -> workers-ai/@cf/... 或 @cf/...: env.AI.run
+  -> 其他 provider/model: <AI_GATEWAY_BASE_URL>/compat/embeddings
 ```
 
 非 Claude 模型走 OpenAI-compatible 穿透，不加 Claude-only 参数。非 Claude 会剥离顶层 `thinking` 字段。

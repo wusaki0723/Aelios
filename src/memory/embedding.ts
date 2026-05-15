@@ -6,8 +6,17 @@ const DEFAULT_EMBEDDING_MODEL = "workers-ai/@cf/google/embeddinggemma-300m";
 function workersAiModelName(model: string): string | null {
   const normalized = model.trim();
   if (normalized.startsWith("workers-ai/")) return normalized.slice("workers-ai/".length);
+  if (normalized.startsWith("worker/")) return normalized.slice("worker/".length);
   if (normalized.startsWith("@cf/")) return normalized;
   return null;
+}
+
+function readEmbeddingDimensions(env: Env): number | undefined {
+  const raw = env.EMBEDDING_DIMENSIONS;
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  return Math.floor(value);
 }
 
 function readEmbedding(result: unknown): number[] | null {
@@ -53,10 +62,12 @@ export async function createEmbedding(env: Env, text: string): Promise<number[] 
   }
 
   let response: Response;
+  const dimensions = readEmbeddingDimensions(env);
   try {
     response = await callOpenAICompatEmbeddings(env, {
       model,
-      input: text
+      input: text,
+      ...(dimensions ? { dimensions } : {})
     });
   } catch (error) {
     console.error("memory embedding failed", error);

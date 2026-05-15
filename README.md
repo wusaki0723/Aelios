@@ -90,7 +90,7 @@ Deploy command:     npm run deploy:cloudflare
 | 变量名 | 默认值 | 干嘛的 |
 |--------|--------|--------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天模型 |
-| `MEMORY_FILTER_MODEL` | `google-ai-studio/gemini-2.5-flash-lite` | 记忆筛选压缩小秘书，模型名前缀决定 provider |
+| `MEMORY_FILTER_MODEL` | `openrouter/meta-llama/llama-3.3-70b-instruct` | 记忆筛选压缩小秘书，模型名前缀决定 provider |
 | `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 每次最多交给小秘书的候选记忆 |
 | `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最多返回几条记忆 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
@@ -205,7 +205,7 @@ https://<你的 Worker 地址>/health
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天 |
-| `MEMORY_FILTER_MODEL` | `google-ai-studio/gemini-2.5-flash-lite` | 记忆筛选，模型名前缀决定 provider |
+| `MEMORY_FILTER_MODEL` | `openrouter/meta-llama/llama-3.3-70b-instruct` | 记忆筛选，模型名前缀决定 provider |
 | `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 进入小秘书的候选记忆上限 |
 | `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最终返回记忆上限 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
@@ -503,7 +503,7 @@ dash_to_comma:      —、——、– 改成 ，
   -> Vectorize 搜索 memo-kb（长期记忆主库）
   -> 从 Vectorize metadata 读取 content/type/tags/importance/status
   -> 分数过滤 + 去重 + 截断候选
-  -> Workers AI / MEMORY_FILTER_MODEL 用 JSON mode 分拣压缩
+  -> MEMORY_FILTER_MODEL 用 JSON mode 分拣压缩
   -> 注入 dynamic_memory_patch
   -> pinned identity/persona -> persona_pinned block
 ```

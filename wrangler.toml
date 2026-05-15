@@ -15,7 +15,7 @@ binding = "AI"
 # up in Cloudflare Variables and can be changed without touching code.
 PUBLIC_MODEL_NAME = "companion"
 CHAT_MODEL = "deepseek/deepseek-v4-pro"
-MEMORY_FILTER_MODEL = "google-ai-studio/gemini-2.5-flash-lite"
+MEMORY_FILTER_MODEL = "openrouter/meta-llama/llama-3.3-70b-instruct"
 MEMORY_FILTER_MAX_CANDIDATES = "12"
 MEMORY_FILTER_MAX_OUTPUT = "6"
 MEMORY_FILTER_MAX_CONTENT_CHARS = "700"

@@ -268,6 +268,13 @@ function mergeFilteredItems(memories: MemoryApiRecord[], items: FilteredMemoryIt
   return result;
 }
 
+function buildFallbackMemories(memories: MemoryApiRecord[], maxOutput: number): MemoryApiRecord[] {
+  return memories.slice(0, maxOutput).map((memory) => ({
+    ...memory,
+    content: truncateText(memory.content, 160)
+  }));
+}
+
 async function callWorkersAiFilter(env: Env, prompt: string): Promise<unknown> {
   if (!env.AI) return "";
 
@@ -330,9 +337,9 @@ export async function filterAndCompressMemories(
 
   const maxOutput = getMaxOutput(env);
   const candidates = prepareCandidates(env, input.memories);
-  if (candidates.length <= 1) return candidates;
+  if (candidates.length === 0) return [];
 
-  const fallback = candidates.slice(0, maxOutput);
+  const fallback = buildFallbackMemories(candidates, maxOutput);
   const prompt = buildPrompt({
     query,
     memories: candidates,

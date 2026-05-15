@@ -90,14 +90,14 @@ Deploy command:     npm run deploy:cloudflare
 | 变量名 | 默认值 | 干嘛的 |
 |--------|--------|--------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天模型 |
-| `MEMORY_FILTER_MODEL` | `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选压缩小秘书，模型名前缀决定 provider |
+| `MEMORY_FILTER_MODEL` | `google-ai-studio/gemini-2.5-flash-lite` | 记忆筛选压缩小秘书，模型名前缀决定 provider |
 | `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 每次最多交给小秘书的候选记忆 |
 | `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最多返回几条记忆 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 + 摘要（快且便宜） |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 不填，用 `MEMORY_MODEL` | 长期摘要生成（可选覆盖） |
-| `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入 |
+| `EMBEDDING_MODEL` | `google-ai-studio/gemini-embedding-2` | 向量嵌入 |
 | `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
 想换模型？直接在 Cloudflare Dashboard 的 Variables 里改，不用动代码。
@@ -205,14 +205,14 @@ https://<你的 Worker 地址>/health
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天 |
-| `MEMORY_FILTER_MODEL` | `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选，模型名前缀决定 provider |
+| `MEMORY_FILTER_MODEL` | `google-ai-studio/gemini-2.5-flash-lite` | 记忆筛选，模型名前缀决定 provider |
 | `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 进入小秘书的候选记忆上限 |
 | `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最终返回记忆上限 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 空（用 MEMORY_MODEL） | 摘要生成 |
-| `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入 |
+| `EMBEDDING_MODEL` | `google-ai-studio/gemini-embedding-2` | 向量嵌入 |
 | `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
 **Claude 专属（可选）：**
@@ -411,7 +411,7 @@ Worker:      companion-memory-proxy
 D1:          companion_memory_proxy
 Vectorize:   memo-kb (768 维 cosine)
 Queue:       companion-memory
-Embedding:   workers-ai/@cf/google/embeddinggemma-300m
+Embedding:   google-ai-studio/gemini-embedding-2
 Dimensions:  768 (如覆盖 EMBEDDING_MODEL，输出维度仍需匹配)
 ```
 

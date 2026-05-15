@@ -4,15 +4,15 @@
 
 这个仓库现在有三种用法。**默认先用完整版就行**，后两个是给有特殊需求的人开的轻量入口：
 
-1. **完整版**：聊天网关 + 自动记忆 + 摘要 + Claude cache。大多数人用这个。
+1. **完整版**：聊天网关 + 记忆注入 + 每日小秘书整理 + Claude cache。大多数人用这个。
 2. **纯记忆库 MCP**：只把记忆库暴露成 MCP 工具，给 Claude、Codex、MCP 客户端调用。
 3. **无记忆导盲犬 API**：只做看图/转发，不保存消息，不搜索记忆，不碰 D1。
 
 Chatbox、Cherry Studio、网页前端、IM bot 等支持 OpenAI API 的客户端，接上完整版就能用：
 
 - `/v1/chat/completions` 聊天
-- 自动长期记忆注入 + 自动写入
-- 长期对话摘要
+- 自动长期记忆注入
+- 每日小秘书整理：原始聊天先存 D1，凌晨统一生成摘要、重要原文和少量长期记忆
 - Vectorize 语义搜索
 - Cloudflare AI Gateway 统一代理
 - Claude 自动路由 + prompt cache
@@ -67,17 +67,21 @@ Deploy command:     npm run deploy:cloudflare
 
 **Deploy command 不要改！** 必须是 `npm run deploy:cloudflare`。它会自动建 D1、Vectorize、Queue、跑数据库升级、再部署。
 
-### 第三步：填完整版的三个必填变量
+### 第三步：填必填变量
 
 在 Cloudflare 项目 -> `Variables and Secrets` 里添加：
 
 | 变量名 | 在哪里找 | 说明 |
 |--------|---------|------|
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Dashboard 右侧/URL 里 | 你的 Account ID |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API Tokens 页面 | 给 Worker 调 Vectorize 管理 API 用 |
 | `AI_GATEWAY_BASE_URL` | Cloudflare AI Gateway 页面 | 你的网关地址，长这样：`https://gateway.ai.cloudflare.com/v1/xxx/yyy` |
 | `CF_AIG_TOKEN` | Cloudflare Dashboard | AI Gateway 调用用的 token |
 | `CHATBOX_API_KEY` | 你自己编一个 | 客户端连接用的密码，例如 `sk-my-key-123` |
 
-填完这 3 个，**完整版**就能跑了。MCP 和导盲犬 API 不用先管。
+填完这些，**完整版**就能跑了。MCP 和导盲犬 API 不用先管。
+
+`CLOUDFLARE_API_TOKEN` 至少需要 Vectorize Read 权限；如果你要用 MCP 删除记忆、运行清理脚本，给它 Vectorize Write 权限。
 
 ### 第四步：改模型（可选）
 
@@ -86,7 +90,8 @@ Deploy command:     npm run deploy:cloudflare
 | 变量名 | 默认值 | 干嘛的 |
 |--------|--------|--------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天模型 |
-| `MEMORY_FILTER_MODEL` | `google-ai-studio/gemini-2.5-flash` | 记忆筛选压缩（快且便宜） |
+| `MEMORY_FILTER_PROVIDER` | `workers-ai` | 记忆筛选压缩默认走 Cloudflare Workers AI |
+| `MEMORY_FILTER_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选压缩小秘书 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 + 摘要（快且便宜） |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 不填，用 `MEMORY_MODEL` | 长期摘要生成（可选覆盖） |
@@ -179,10 +184,12 @@ https://<你的 Worker 地址>/health
 
 ### 所有环境变量速查表
 
-**必填（3 个）：**
+**必填：**
 
 | 变量名 | 必填 | 说明 |
 |--------|------|------|
+| `CLOUDFLARE_ACCOUNT_ID` | 是 | Cloudflare Account ID |
+| `CLOUDFLARE_API_TOKEN` | 是 | Cloudflare API Token，用于 Vectorize list/get/delete |
 | `AI_GATEWAY_BASE_URL` | 是 | Cloudflare AI Gateway 地址 |
 | `CF_AIG_TOKEN` | 是 | AI Gateway 调用用的 token |
 | `CHATBOX_API_KEY` | 是 | 客户端连接密码 |
@@ -192,7 +199,8 @@ https://<你的 Worker 地址>/health
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天 |
-| `MEMORY_FILTER_MODEL` | `google-ai-studio/gemini-2.5-flash` | 记忆筛选 |
+| `MEMORY_FILTER_PROVIDER` | `workers-ai` | 记忆筛选提供方。设 `openai-compatible` 可改走 AI Gateway |
+| `MEMORY_FILTER_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 空（用 MEMORY_MODEL） | 摘要生成 |
@@ -206,6 +214,8 @@ https://<你的 Worker 地址>/health
 | `ANTHROPIC_THINKING_BUDGET` | `1024` | 思考 token 预算（1024-32000） |
 | `ANTHROPIC_CACHE_TTL` | `5m` | Prompt cache 时长（`5m` 或 `1h`） |
 | `ANTHROPIC_CACHE_ENABLED` | `true` | 设 `false` 关闭 cache |
+| `ANTHROPIC_AUTO_CACHE_ENABLED` | `true` | 开启 Anthropic 顶层自动缓存，让多轮历史像 Claude Code 一样向后滚动缓存 |
+| `ANTHROPIC_ROLLING_CACHE_ENABLED` | `true` | 在最后一条 user 内容上显式打 cache_control。部分中转不支持 automatic 时，这个更接近 Claude Code |
 | `FORCE_ANTHROPIC_NATIVE` | 空 | 设 `true` 强制所有模型走 Anthropic native |
 | `CUSTOM_ANTHROPIC_MESSAGES_PATH` | `messages` | custom Claude 的原生 messages 路径 |
 
@@ -218,7 +228,16 @@ https://<你的 Worker 地址>/health
 | `MEMORY_TOP_K` | `8` | 记忆搜索返回条数 |
 | `MEMORY_MIN_SCORE` | `0.35` | 记忆搜索最低相关度 |
 | `MEMORY_MIN_IMPORTANCE` | `0.55` | 记忆写入最低重要性 |
+| `MEMORY_BACKEND` | `vectorize` | 长期记忆主库。默认 Vectorize；设 `d1` 可回到旧模式 |
+| `VECTORIZE_INDEX_NAME` | `memo-kb` | Vectorize 索引名，给 list-vectors API 使用 |
 | `ENABLE_AUTO_MEMORY` | 空（开启） | 设 `false` 关闭自动记忆 |
+| `ENABLE_INCREMENTAL_MEMORY` | `false` | 设 `true` 才恢复每轮聊天后即时抽取 |
+| `ENABLE_DAILY_MEMORY_DIGEST` | `true` | 每日小秘书整理原始聊天 |
+| `DAILY_DIGEST_TIME_ZONE` | `Asia/Singapore` | 每日摘要日期使用的时区 |
+| `DAILY_DIGEST_MAX_MESSAGES` | `320` | 每次每日整理最多处理的原始消息数 |
+| `DAILY_DIGEST_MEMORY_CONTEXT_LIMIT` | `250` | 每日整理时提供给模型参考的旧记忆数量 |
+| `DAILY_DIGEST_EXCERPT_LIMIT` | `8` | 每日最多保存的重要原文段落 |
+| `EMPTY_MEMORY_MIN_CHARS` | `4` | 每日整理时清理短空记忆的阈值 |
 | `PUBLIC_MODEL_NAME` | `companion` | 客户端看到的模型名 |
 | `MEMORY_MCP_API_KEY` | 空 | 纯记忆库 MCP 的单独钥匙 |
 | `GUIDE_DOG_API_KEY` | 空 | 无记忆导盲犬 API 的单独钥匙 |
@@ -356,11 +375,13 @@ Embedding:   workers-ai/@cf/google/embeddinggemma-300m (默认值，不建议普
 
 目标模型名含 anthropic 或 claude
   -> Anthropic native: <AI_GATEWAY_BASE_URL>/anthropic/v1/messages
-  -> 显式 cache_control on client_system block
+  -> 顶层 automatic cache_control 负责缓存增长中的多轮历史
+  -> 显式 cache_control on client_system block 负责缓存稳定 system 前缀
+  -> 显式 cache_control on last user block 负责滚动缓存对话历史
   -> cf-aig-skip-cache: true
 
-目标模型名是 custom-saki/claude-opus-4-7 这类 custom Claude
-  -> Provider-specific native: <AI_GATEWAY_BASE_URL>/custom-saki/messages
+目标模型名是 custom-provider/claude-opus-4-7 这类 custom Claude
+  -> Provider-specific native: <AI_GATEWAY_BASE_URL>/custom-provider/messages
   -> 发给上游的 model 会变成 claude-opus-4-7
   -> 仍然保留 Anthropic cache_control
   -> 如果 custom provider 的 base_url 没有 /v1，把 CUSTOM_ANTHROPIC_MESSAGES_PATH 改成 v1/messages
@@ -393,7 +414,13 @@ messages:
   9. current_user          — 当前用户消息（保留原始 content，图片不丢）
 ```
 
-cache_control 只落在 client_system（block 5），前面的 stable blocks 可被 Claude prompt cache 缓存。
+默认会同时使用三层 Claude prompt cache：
+
+- 顶层 automatic `cache_control`：Anthropic 会自动把缓存断点放到最后一个可缓存 block，并随着多轮历史增长向后推进。这更接近 Claude Code 的命中形态。
+- 显式 `cache_control`：仍然落在 client_system（block 5），保证前面的 stable blocks 有独立缓存。
+- 滚动显式 `cache_control`：额外落在最后一条 user 内容上。实测部分中转会忽略顶层 automatic，但支持这个显式断点，命中形态会变成 `input` 很小、`cache_read` 随历史增长、`cache_creation` 写入新增段。
+
+如果发现动态记忆每轮变化太大，导致 system 层频繁失效，可以优先减少 RAG 注入内容，或把 `ANTHROPIC_AUTO_CACHE_ENABLED=false` 退回只缓存稳定 system 的模式。
 
 tool/tool_calls 请求 fallback 到旧路径，assembler 不处理 tool。
 
@@ -419,10 +446,9 @@ dash_to_comma:      —、——、– 改成 ，
 ```
 取最后一条 user 消息文本
   -> EMBEDDING_MODEL 生成向量
-  -> Vectorize 搜索 memo-kb
-  -> 若 Vectorize 命中但 D1 无 active 记录，不注入
-  -> 若 Vectorize 老 metadata 无 D1 ref，legacy fallback（仅 active metadata）
-  -> MEMORY_FILTER_MODEL 分拣压缩
+  -> Vectorize 搜索 memo-kb（长期记忆主库）
+  -> 从 Vectorize metadata 读取 content/type/tags/importance/status
+  -> Workers AI / MEMORY_FILTER_MODEL 分拣压缩
   -> 注入 dynamic_memory_patch
   -> pinned identity/persona -> persona_pinned block
 ```
@@ -431,19 +457,19 @@ dash_to_comma:      —、——、– 改成 ，
 
 ```
 保存 user/assistant messages 到 D1
-  -> 后台 Queue: memory_maintenance
-    -> explicit fallback（"记住/长期偏好/口令是"等关键词）
-    -> 否则 MEMORY_MODEL 抽取记忆 JSON
-    -> importance/confidence 过滤
-    -> 重复检查（归一化文本比较）
-    -> merge/supersede 判断（高相似度时合并或替换）
-    -> D1 memories + Vectorize upsert
-    -> maybeUpdateLongTermSummary（每 50 条新消息触发一次）
-      -> 取最近 120 条消息 + 旧摘要
-      -> SUMMARY_MODEL (fallback MEMORY_MODEL) 生成新摘要
-      -> sanitize 去元信息，截断 ≤2000 字
-      -> upsert summaries 表（每 namespace 一条）
+  -> 默认不即时写入长期记忆
+  -> 每天 04:10（Asia/Singapore）触发 scheduled 小秘书
+    -> 读取上次整理后的原始聊天
+    -> 读取一批 Vectorize 旧 active 记忆作为参考
+    -> 清理空/过短记忆
+    -> SUMMARY_MODEL/MEMORY_MODEL 生成固定格式日摘要
+    -> 保存 daily_summary + important excerpt
+    -> 新增少量高质量长期记忆
+    -> 更新/删除冲突、重复、过期旧记忆
+    -> 原始 messages 只保留 3 天
 ```
+
+如果你想恢复旧版“每轮聊天后就抽取长期记忆”的行为，把 `ENABLE_INCREMENTAL_MEMORY=true` 加到 Cloudflare Variables。
 
 **聊天后（清理）：**
 
@@ -585,17 +611,20 @@ curl "https://<worker>/v1/chat/completions" \
 curl "https://<worker>/v1/chat/completions" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>" \
   -H "content-type: application/json" \
-  -d '{"model":"companion","stream":false,"messages":[{"role":"user","content":"请记住：我的常用暗号是蓝莓星线-0428。"}],"max_tokens":80}'
+  -d '{"model":"companion","stream":false,"messages":[{"role":"user","content":"请记住：我的测试暗号是星线-0428。"}],"max_tokens":80}'
 
 # 搜索记忆
 curl "https://<worker>/v1/memories/search" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>" \
   -H "content-type: application/json" \
-  -d '{"query":"蓝莓星线-0428","top_k":5}'
+  -d '{"query":"星线-0428","top_k":5}'
 
 # Cache 健康（需要 DEBUG_API_KEY）
 curl "https://<worker>/v1/debug/cache_health" \
   -H "Authorization: Bearer <DEBUG_API_KEY>"
+
+# Claude cache 实测：连续打 3 轮并打印 cache_write/cache_read
+WORKER_URL="https://<worker>" DEBUG_API_KEY="<DEBUG_API_KEY>" npm run cache:test
 
 # 纯记忆库 MCP：列工具
 curl "https://<worker>/mcp?token=<MEMORY_MCP_API_KEY>" \

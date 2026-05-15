@@ -14,6 +14,7 @@ import {
   buildAnthropicNativeRequest,
   buildAnthropicRequestFromAssembled,
   callAnthropicNative,
+  getAnthropicCacheMode,
   parseAnthropicNonStream
 } from "../proxy/anthropicAdapter";
 import { buildOpenAICompatRequest, buildOpenAIRequestFromAssembled, callOpenAICompat } from "../proxy/openaiAdapter";
@@ -226,6 +227,7 @@ export async function handleChatCompletions(
     }
 
     const parsed = parseAnthropicNonStream(anthropicParsed as never);
+    const anthropicCacheMode = getAnthropicCacheMode(env);
     // Filter visible content only — reasoning_content is preserved upstream.
     const filteredContent = applyRegexRules(parsed.content, CONTENT_RULES);
     if (parsed.openai.choices?.[0]?.message) {
@@ -242,7 +244,7 @@ export async function handleChatCompletions(
       stream: false,
       finishReason: parsed.finishReason,
       usage: parsed.usage,
-      cacheMode: "anthropic_explicit",
+      cacheMode: anthropicCacheMode,
       cacheTtl: env.ANTHROPIC_CACHE_TTL || "5m"
     });
 
@@ -254,7 +256,7 @@ export async function handleChatCompletions(
           provider,
           model: targetModel,
           usage: parsed.usage,
-          cacheMode: "anthropic_explicit",
+          cacheMode: anthropicCacheMode,
           cacheTtl: env.ANTHROPIC_CACHE_TTL || "5m",
           clientSystemHash,
           cacheAnchorBlock

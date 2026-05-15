@@ -16,7 +16,7 @@ import type { Env } from "../types";
 // Default retention windows (hardcoded, not user-configurable)
 // ---------------------------------------------------------------------------
 
-const MESSAGES_RETENTION_DAYS = 14;
+const MESSAGES_RETENTION_DAYS = 3;
 const USAGE_LOGS_RETENTION_DAYS = 30;
 const MEMORY_EVENTS_RETENTION_DAYS = 30;
 const IDEMPOTENCY_KEYS_RETENTION_DAYS = 7;

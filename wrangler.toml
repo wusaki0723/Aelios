@@ -3,17 +3,34 @@ main = "src/index.ts"
 compatibility_date = "2026-04-01"
 keep_vars = true
 
+[triggers]
+# Cloudflare cron uses UTC. 20:10 UTC is 04:10 in Singapore/China time.
+crons = ["10 20 * * *"]
+
+[ai]
+binding = "AI"
+
 [vars]
 # Visible model knobs. These are intentionally in wrangler.toml so they show
 # up in Cloudflare Variables and can be changed without touching code.
 PUBLIC_MODEL_NAME = "companion"
 CHAT_MODEL = "deepseek/deepseek-v4-pro"
-MEMORY_FILTER_MODEL = "google-ai-studio/gemini-2.5-flash"
+MEMORY_FILTER_PROVIDER = "workers-ai"
+MEMORY_FILTER_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 MEMORY_MODEL = "deepseek/deepseek-v4-flash"
 VISION_MODEL = "google-ai-studio/gemini-3-flash-preview"
 GUIDE_DOG_MODEL = "google-ai-studio/gemini-3-flash-preview"
+MEMORY_BACKEND = "vectorize"
+VECTORIZE_INDEX_NAME = "memo-kb"
+ENABLE_INCREMENTAL_MEMORY = "false"
+ENABLE_DAILY_MEMORY_DIGEST = "true"
+DAILY_DIGEST_TIME_ZONE = "Asia/Singapore"
 ANTHROPIC_THINKING_ENABLED = "false"
 ANTHROPIC_THINKING_BUDGET = "1024"
+ANTHROPIC_CACHE_ENABLED = "true"
+ANTHROPIC_AUTO_CACHE_ENABLED = "true"
+ANTHROPIC_ROLLING_CACHE_ENABLED = "true"
+ANTHROPIC_CACHE_TTL = "5m"
 # For custom Anthropic-compatible providers whose base_url already ends in /v1,
 # keep this as "messages". If the base_url is only the root domain, use
 # "v1/messages".

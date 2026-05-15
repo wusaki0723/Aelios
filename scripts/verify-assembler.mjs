@@ -1325,14 +1325,41 @@ function getAnthropicMaxTokens(req, env) {
   return Math.max(maxTokens, thinking.budget_tokens + Math.min(Math.max(maxTokens, 256), 4096));
 }
 
+function buildCacheControl(env) {
+  if (env.ANTHROPIC_CACHE_ENABLED === "false") return undefined;
+  const ttl = env.ANTHROPIC_CACHE_TTL === "1h" ? "1h" : "5m";
+  return ttl === "1h" ? { type: "ephemeral", ttl } : { type: "ephemeral" };
+}
+
+function buildAutomaticCacheControl(env) {
+  if (env.ANTHROPIC_CACHE_ENABLED === "false") return undefined;
+  if (env.ANTHROPIC_AUTO_CACHE_ENABLED === "false") return undefined;
+  return buildCacheControl(env);
+}
+
+function applyRollingMessageCache(messages, env) {
+  const cacheControl = buildCacheControl(env);
+  if (!cacheControl) return;
+  if (env.ANTHROPIC_ROLLING_CACHE_ENABLED === "false") return;
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "user" || message.content.length === 0) continue;
+    message.content[message.content.length - 1].cache_control = cacheControl;
+    return;
+  }
+}
+
 function buildAnthropicRequestFromAssembled(req, targetModel, assembled, env) {
   const thinking = buildThinkingConfig(env, req);
   const system = assembledToAnthropicSystem(assembled.system_blocks);
   applyCacheOverrides(system, env);
   const messages = assembledToAnthropicMessages(assembled.messages);
+  applyRollingMessageCache(messages, env);
   return {
     model: targetModel.replace(/^anthropic\//i, ""),
     max_tokens: getAnthropicMaxTokens(req, env),
+    cache_control: buildAutomaticCacheControl(env),
     temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
     thinking,
@@ -1398,7 +1425,7 @@ check("OpenAI helper: strips Claude native thinking but keeps reasoning_effort",
   assert.strictEqual(req.reasoning_effort, "high");
 });
 
-check("Anthropic helper: cache_control only on client_system", () => {
+check("Anthropic helper: system cache_control stays on client_system", () => {
   const ctx = makeBaseCtx();
   ctx.systemMessages = [{ role: "system", content: "角色卡" }];
   ctx.ragMemories = [{ type: "note", importance: 0.7, content: "喜欢猫" }];
@@ -1414,6 +1441,20 @@ check("Anthropic helper: cache_control only on client_system", () => {
   assert.ok(withCache[0].text.includes("角色卡"));
 });
 
+check("Anthropic helper: rolling cache_control lands on latest user message", () => {
+  const ctx = makeBaseCtx();
+  const assembled = assemble(ctx);
+  const req = buildAnthropicRequestFromAssembled(
+    { messages: [] },
+    "anthropic/claude-sonnet-4-6",
+    assembled,
+    {}
+  );
+  const lastUser = [...req.messages].reverse().find((m) => m.role === "user");
+  const lastBlock = lastUser.content[lastUser.content.length - 1];
+  assert.deepStrictEqual(lastBlock.cache_control, { type: "ephemeral" });
+});
+
 check("Anthropic helper: ANTHROPIC_CACHE_ENABLED=false removes cache_control", () => {
   const ctx = makeBaseCtx();
   const assembled = assemble(ctx);
@@ -1425,6 +1466,11 @@ check("Anthropic helper: ANTHROPIC_CACHE_ENABLED=false removes cache_control", (
   );
   const withCache = req.system.filter((b) => b.cache_control);
   assert.strictEqual(withCache.length, 0);
+  assert.strictEqual(req.cache_control, undefined);
+  const userBlocksWithCache = req.messages
+    .flatMap((m) => m.content)
+    .filter((b) => b.cache_control);
+  assert.strictEqual(userBlocksWithCache.length, 0);
 });
 
 check("Anthropic helper: ANTHROPIC_CACHE_TTL=1h sets ttl=1h", () => {
@@ -1439,6 +1485,9 @@ check("Anthropic helper: ANTHROPIC_CACHE_TTL=1h sets ttl=1h", () => {
   const anchor = req.system.find((b) => b.cache_control);
   assert.ok(anchor);
   assert.deepStrictEqual(anchor.cache_control, { type: "ephemeral", ttl: "1h" });
+  const lastUser = [...req.messages].reverse().find((m) => m.role === "user");
+  const lastBlock = lastUser.content[lastUser.content.length - 1];
+  assert.deepStrictEqual(lastBlock.cache_control, { type: "ephemeral", ttl: "1h" });
 });
 
 check("Anthropic helper: defaults ttl to 5m", () => {
@@ -1453,6 +1502,7 @@ check("Anthropic helper: defaults ttl to 5m", () => {
   const anchor = req.system.find((b) => b.cache_control);
   assert.ok(anchor);
   assert.deepStrictEqual(anchor.cache_control, { type: "ephemeral", ttl: "5m" });
+  assert.deepStrictEqual(req.cache_control, { type: "ephemeral" });
 });
 
 check("Anthropic helper: structured content stringified (temporary fallback)", () => {
@@ -2085,7 +2135,7 @@ check("history rules only include strip_thinking", () => {
 // src/memory/retention.ts logic exactly.
 // ---------------------------------------------------------------------------
 
-const MESSAGES_RETENTION_DAYS = 14;
+const MESSAGES_RETENTION_DAYS = 3;
 const USAGE_LOGS_RETENTION_DAYS = 30;
 const MEMORY_EVENTS_RETENTION_DAYS = 30;
 const IDEMPOTENCY_KEYS_RETENTION_DAYS = 7;
@@ -2137,13 +2187,13 @@ function simulateThrottle(lastRun, now) {
 
 console.log("\n--- Test 15: D1 Lifecycle Retention ---");
 
-check("messages older than 14 days are deleted", () => {
+check("messages older than 3 days are deleted", () => {
   const cutoff = daysAgo(MESSAGES_RETENTION_DAYS);
-  const old = new Date(Date.now() - 15 * 86_400_000).toISOString();
-  const recent = new Date(Date.now() - 5 * 86_400_000).toISOString();
+  const old = new Date(Date.now() - 4 * 86_400_000).toISOString();
+  const recent = new Date(Date.now() - 2 * 86_400_000).toISOString();
   // In the real DB: DELETE FROM messages WHERE namespace = ? AND created_at < cutoff
-  assert.ok(old < cutoff, "15-day-old message should be before cutoff");
-  assert.ok(recent > cutoff, "5-day-old message should be after cutoff");
+  assert.ok(old < cutoff, "4-day-old message should be before cutoff");
+  assert.ok(recent > cutoff, "2-day-old message should be after cutoff");
 });
 
 check("usage_logs older than 30 days are deleted", () => {
@@ -2324,7 +2374,7 @@ check("retention throttle: exactly 24h boundary should proceed", () => {
 });
 
 check("retention constants are correct", () => {
-  assert.strictEqual(MESSAGES_RETENTION_DAYS, 14);
+  assert.strictEqual(MESSAGES_RETENTION_DAYS, 3);
   assert.strictEqual(USAGE_LOGS_RETENTION_DAYS, 30);
   assert.strictEqual(MEMORY_EVENTS_RETENTION_DAYS, 30);
   assert.strictEqual(IDEMPOTENCY_KEYS_RETENTION_DAYS, 7);

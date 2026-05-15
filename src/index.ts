@@ -6,9 +6,15 @@ import { handleGuideDogChatCompletions } from "./api/guideDog";
 import { handleMemories } from "./api/memories";
 import { handleMcp } from "./api/mcp";
 import { handleModels } from "./api/models";
+import { runDailyMemoryDigest } from "./memory/dailyDigest";
+import { runMemoryRetention } from "./memory/retention";
 import { handleQueueMessage } from "./queue/consumer";
 import type { Env, QueueMessage } from "./types";
 import { openAiError } from "./utils/json";
+
+function getDailyDigestNamespace(env: Env): string {
+  return env.DAILY_DIGEST_NAMESPACE?.trim() || "default";
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -62,5 +68,17 @@ export default {
         message.retry();
       }
     }
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const namespace = getDailyDigestNamespace(env);
+    ctx.waitUntil(
+      Promise.all([
+        runDailyMemoryDigest(env, namespace),
+        runMemoryRetention(env, namespace)
+      ]).then(([digest, retention]) => {
+        console.log("scheduled daily memory maintenance", { namespace, digest, retention });
+      })
+    );
   }
 };

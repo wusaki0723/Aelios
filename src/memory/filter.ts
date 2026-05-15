@@ -1,6 +1,8 @@
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MemoryApiRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 
+const DEFAULT_WORKERS_AI_FILTER_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
 interface FilteredMemoryItem {
   id: string;
   content: string;
@@ -21,7 +23,15 @@ function sanitizeMemoryContent(text: string): string {
 }
 
 function isEnabled(env: Env): boolean {
-  return env.ENABLE_MEMORY_FILTER !== "false" && Boolean(env.MEMORY_FILTER_MODEL);
+  return env.ENABLE_MEMORY_FILTER !== "false";
+}
+
+function getProvider(env: Env): "workers-ai" | "openai-compatible" {
+  return env.MEMORY_FILTER_PROVIDER === "openai-compatible" ? "openai-compatible" : "workers-ai";
+}
+
+function getModel(env: Env): string {
+  return env.MEMORY_FILTER_MODEL || DEFAULT_WORKERS_AI_FILTER_MODEL;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -134,6 +144,73 @@ function mergeFilteredItems(memories: MemoryApiRecord[], items: FilteredMemoryIt
   return result;
 }
 
+function readWorkersAiText(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (!result || typeof result !== "object") return "";
+
+  const value = result as {
+    response?: unknown;
+    result?: unknown;
+    text?: unknown;
+    output?: unknown;
+  };
+
+  if (typeof value.response === "string") return value.response;
+  if (typeof value.text === "string") return value.text;
+  if (typeof value.output === "string") return value.output;
+  if (typeof value.result === "string") return value.result;
+  return "";
+}
+
+async function callWorkersAiFilter(env: Env, prompt: string): Promise<string> {
+  if (!env.AI) return "";
+
+  const result = await env.AI.run(getModel(env), {
+    messages: [
+      {
+        role: "system",
+        content: "你是严格的 JSON 生成器。你只输出 JSON。"
+      },
+      {
+        role: "user",
+        content: prompt
+      }
+    ],
+    temperature: 0,
+    max_tokens: 700
+  });
+
+  return readWorkersAiText(result);
+}
+
+async function callOpenAICompatFilter(env: Env, prompt: string): Promise<string> {
+  if (!env.MEMORY_FILTER_MODEL) return "";
+
+  const request: OpenAIChatRequest = {
+    model: env.MEMORY_FILTER_MODEL,
+    messages: [
+      {
+        role: "system",
+        content: "你是严格的 JSON 生成器。你只输出 JSON。"
+      },
+      {
+        role: "user",
+        content: prompt
+      }
+    ],
+    temperature: 0,
+    max_tokens: 700,
+    stream: false
+  };
+
+  const response = await callOpenAICompat(env, request);
+  if (!response.ok) return "";
+
+  const parsed = (await response.json()) as OpenAIChatResponse;
+  const content = parsed.choices?.[0]?.message?.content;
+  return typeof content === "string" ? content : "";
+}
+
 export async function filterAndCompressMemories(
   env: Env,
   input: { query: string; memories: MemoryApiRecord[] }
@@ -146,34 +223,19 @@ export async function filterAndCompressMemories(
   const maxCandidates = getMaxCandidates(env);
   const maxOutput = getMaxOutput(env);
   const candidates = input.memories.slice(0, maxCandidates);
-  const request: OpenAIChatRequest = {
-    model: env.MEMORY_FILTER_MODEL || "",
-    messages: [
-      {
-        role: "system",
-        content: "你是严格的 JSON 生成器。你只输出 JSON。"
-      },
-      {
-        role: "user",
-        content: buildPrompt({
-          query,
-          memories: candidates,
-          maxOutput
-        })
-      }
-    ],
-    temperature: 0,
-    max_tokens: 700,
-    stream: false
-  };
+  const prompt = buildPrompt({
+    query,
+    memories: candidates,
+    maxOutput
+  });
 
   try {
-    const response = await callOpenAICompat(env, request);
-    if (!response.ok) return input.memories;
+    const text =
+      getProvider(env) === "openai-compatible"
+        ? await callOpenAICompatFilter(env, prompt)
+        : await callWorkersAiFilter(env, prompt);
+    if (!text) return input.memories;
 
-    const parsed = (await response.json()) as OpenAIChatResponse;
-    const content = parsed.choices?.[0]?.message?.content;
-    const text = typeof content === "string" ? content : "";
     const items = parseFilteredItems(text);
     if (!items || items.length === 0) return input.memories;
 

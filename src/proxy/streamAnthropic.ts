@@ -1,7 +1,7 @@
 import { saveAssistantMessage } from "../db/messages";
 import { saveUsageLog } from "../db/usageLogs";
 import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../queue/producer";
-import { normalizeAnthropicUsage } from "./anthropicAdapter";
+import { getAnthropicCacheMode, normalizeAnthropicUsage } from "./anthropicAdapter";
 import {
   createThinkingFilterState,
   flushStreamFilter,
@@ -113,7 +113,7 @@ async function persistStreamResult(options: StreamAnthropicOptions, state: Strea
     stream: true,
     finishReason: state.finishReason,
     usage: state.usage,
-    cacheMode: "anthropic_explicit",
+    cacheMode: getAnthropicCacheMode(options.env),
     cacheTtl: options.env.ANTHROPIC_CACHE_TTL || "5m"
   });
 
@@ -123,7 +123,7 @@ async function persistStreamResult(options: StreamAnthropicOptions, state: Strea
     provider: options.provider,
     model: options.upstreamModel,
     usage: state.usage,
-    cacheMode: "anthropic_explicit",
+    cacheMode: getAnthropicCacheMode(options.env),
     cacheTtl: options.env.ANTHROPIC_CACHE_TTL || "5m",
     clientSystemHash: options.clientSystemHash ?? null,
     cacheAnchorBlock: options.cacheAnchorBlock ?? null

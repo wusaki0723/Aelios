@@ -9,6 +9,9 @@
     "setup:cloudflare": "node scripts/setup-cloudflare.mjs",
     "deploy:cloudflare": "npm run setup:cloudflare && wrangler deploy --keep-vars",
     "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && node scripts/verify-assembler.mjs",
+    "vectorize:clean": "node scripts/clean-vectorize-memory.mjs",
+    "cache:test": "node scripts/test-claude-cache.mjs",
     "db:migrate:local": "wrangler d1 migrations apply companion_memory_proxy --local",
     "db:migrate:remote": "wrangler d1 migrations apply companion_memory_proxy --remote"
   },

@@ -5,6 +5,7 @@ import {
   createMemory,
   getMemoryById,
   listMemories,
+  listMemoriesPage,
   softDeleteMemory,
   updateMemory
 } from "../db/memories";
@@ -12,53 +13,20 @@ import { saveIngestMessages } from "../db/messages";
 import { deleteMemoryEmbedding, upsertMemoryEmbedding } from "../memory/embedding";
 import { searchMemories, toMemoryApiRecord } from "../memory/search";
 import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
-import type { Env, KeyProfile, OpenAIChatMessage } from "../types";
+import type { Env, KeyProfile } from "../types";
 import { json, openAiError } from "../utils/json";
-
-function normalizeLimit(value: string | null, fallback = 50): number {
-  const parsed = Number(value || fallback);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(Math.max(Math.floor(parsed), 1), 500);
-}
-
-function resolveNamespace(profile: KeyProfile, requested: unknown): string {
-  if (profile.debug && typeof requested === "string" && requested.trim()) {
-    return requested.trim();
-  }
-
-  return profile.namespace;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() : undefined;
-}
-
-function readOptionalString(value: unknown): string | null | undefined {
-  if (value === null) return null;
-  return readString(value);
-}
-
-function readNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function readBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-}
-
-async function readBody(request: Request): Promise<Record<string, unknown> | null> {
-  try {
-    const body = (await request.json()) as unknown;
-    return body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
+import {
+  readBoolean,
+  readJsonObject,
+  readMessages,
+  readNonNegativeInt,
+  readNumber,
+  readOptionalString,
+  readPositiveInt,
+  readString,
+  readStringArray,
+  resolveNamespace
+} from "../utils/request";
 
 async function handleCreateMemory(
   request: Request,
@@ -69,7 +37,7 @@ async function handleCreateMemory(
   const scopeError = requireScope(profile, "memory:write");
   if (scopeError) return scopeError;
 
-  const body = await readBody(request);
+  const body = await readJsonObject(request);
   if (!body) return openAiError("Request body must be a JSON object", 400);
 
   const content = readString(body.content);
@@ -109,15 +77,24 @@ async function handleListMemories(request: Request, env: Env, profile: KeyProfil
 
   const url = new URL(request.url);
   const namespace = resolveNamespace(profile, url.searchParams.get("namespace"));
-  const records = await listMemories(env.DB, {
+  const limit = readPositiveInt(url.searchParams.get("limit"), 100, 1000);
+  const offset = readNonNegativeInt(url.searchParams.get("offset"), 0, 100_000);
+  const page = await listMemoriesPage(env.DB, {
     namespace,
     type: url.searchParams.get("type") || undefined,
     status: url.searchParams.get("status") || "active",
-    limit: normalizeLimit(url.searchParams.get("limit"), 50)
+    limit,
+    offset
   });
 
   return json({
-    data: records.map((record) => toMemoryApiRecord(record))
+    data: page.records.map((record) => toMemoryApiRecord(record)),
+    paging: {
+      limit,
+      offset,
+      has_more: page.hasMore,
+      next_offset: page.nextOffset
+    }
   });
 }
 
@@ -125,7 +102,7 @@ async function handleSearchMemories(request: Request, env: Env, profile: KeyProf
   const scopeError = requireScope(profile, "memory:read");
   if (scopeError) return scopeError;
 
-  const body = await readBody(request);
+  const body = await readJsonObject(request);
   if (!body) return openAiError("Request body must be a JSON object", 400);
 
   const query = readString(body.query) || "";
@@ -140,34 +117,6 @@ async function handleSearchMemories(request: Request, env: Env, profile: KeyProf
   return json({ data });
 }
 
-function readMessages(value: unknown): OpenAIChatMessage[] {
-  if (!Array.isArray(value)) return [];
-
-  return value.flatMap((item): OpenAIChatMessage[] => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as { role?: unknown; content?: unknown };
-    if (
-      record.role !== "system" &&
-      record.role !== "user" &&
-      record.role !== "assistant" &&
-      record.role !== "tool"
-    ) {
-      return [];
-    }
-
-    if (typeof record.content !== "string" && record.content !== null && !Array.isArray(record.content)) {
-      return [];
-    }
-
-    return [
-      {
-        role: record.role,
-        content: record.content
-      }
-    ];
-  });
-}
-
 async function handleIngestMemories(
   request: Request,
   env: Env,
@@ -177,7 +126,7 @@ async function handleIngestMemories(
   const scopeError = requireScope(profile, "memory:write");
   if (scopeError) return scopeError;
 
-  const body = await readBody(request);
+  const body = await readJsonObject(request);
   if (!body) return openAiError("Request body must be a JSON object", 400);
 
   const messages = readMessages(body.messages);
@@ -227,7 +176,7 @@ async function handlePatchMemory(
   const scopeError = requireScope(profile, "memory:write");
   if (scopeError) return scopeError;
 
-  const body = await readBody(request);
+  const body = await readJsonObject(request);
   if (!body) return openAiError("Request body must be a JSON object", 400);
 
   const namespace = resolveNamespace(profile, body.namespace);

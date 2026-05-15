@@ -1,12 +1,27 @@
 import { authenticate } from "../auth/apiKey";
 import { getOrCreateConversation } from "../db/conversations";
-import { createMemory, listMemories } from "../db/memories";
 import { saveIngestMessages } from "../db/messages";
-import { upsertMemoryEmbedding } from "../memory/embedding";
-import { searchMemories, toMemoryApiRecord } from "../memory/search";
+import { filterAndCompressMemories } from "../memory/filter";
+import {
+  createVectorMemory,
+  deleteVectorMemory,
+  getVectorMemory,
+  listVectorMemories,
+  searchVectorMemories
+} from "../memory/vectorStore";
 import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
-import type { Env, KeyProfile, OpenAIChatMessage, Scope } from "../types";
+import type { Env, KeyProfile, Scope } from "../types";
 import { json } from "../utils/json";
+import {
+  isRecord,
+  readBoolean,
+  readMessages,
+  readNumber,
+  readPositiveInt,
+  readString,
+  readStringArray,
+  resolveNamespace
+} from "../utils/request";
 
 type JsonRpcId = string | number | null;
 
@@ -30,31 +45,6 @@ function withTokenQuery(request: Request): Request {
   const headers = new Headers(request.headers);
   headers.set("authorization", `Bearer ${token}`);
   return new Request(request, { headers });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function readBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-}
-
-function resolveNamespace(profile: KeyProfile, requested: unknown): string {
-  return profile.debug && typeof requested === "string" && requested.trim() ? requested.trim() : profile.namespace;
 }
 
 function hasScope(profile: KeyProfile, scope: Scope): boolean {
@@ -92,19 +82,6 @@ function toolError(message: string): Record<string, unknown> {
   };
 }
 
-function readMessages(value: unknown): OpenAIChatMessage[] {
-  if (!Array.isArray(value)) return [];
-
-  return value.flatMap((item): OpenAIChatMessage[] => {
-    if (!isRecord(item)) return [];
-    const role = item.role;
-    if (role !== "system" && role !== "user" && role !== "assistant" && role !== "tool") return [];
-    const content = item.content;
-    if (typeof content !== "string" && content !== null && !Array.isArray(content)) return [];
-    return [{ role, content }];
-  });
-}
-
 function getTools(): Array<Record<string, unknown>> {
   return [
     {
@@ -134,6 +111,7 @@ function getTools(): Array<Record<string, unknown>> {
           confidence: { type: "number" },
           pinned: { type: "boolean" },
           tags: { type: "array", items: { type: "string" } },
+          source: { type: "string" },
           namespace: { type: "string" }
         },
         required: ["content"]
@@ -145,11 +123,35 @@ function getTools(): Array<Record<string, unknown>> {
       inputSchema: {
         type: "object",
         properties: {
-          limit: { type: "number", minimum: 1, maximum: 100 },
+          limit: { type: "number", minimum: 1, maximum: 1000 },
+          cursor: { type: "string" },
+          include_ids: { type: "boolean" },
           type: { type: "string" },
           status: { type: "string" },
           namespace: { type: "string" }
         }
+      }
+    },
+    {
+      name: "memory_get",
+      description: "Get one memory from the Vectorize memory library by id.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" }
+        },
+        required: ["id"]
+      }
+    },
+    {
+      name: "memory_delete",
+      description: "Delete one memory from the Vectorize memory library by id.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" }
+        },
+        required: ["id"]
       }
     },
     {
@@ -192,12 +194,13 @@ async function callTool(
     if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
     const query = readString(args.query);
     if (!query) return toolError("query is required");
-    const data = await searchMemories(env, {
+    const memories = await searchVectorMemories(env, {
       namespace: resolveNamespace(profile, args.namespace),
       query,
-      topK: readNumber(args.top_k, Number(env.MEMORY_TOP_K || 8)),
+      topK: readNumber(args.top_k, Number(env.MEMORY_TOP_K || 12)),
       types: readStringArray(args.types)
     });
+    const data = await filterAndCompressMemories(env, { query, memories });
     return textToolResult({ data });
   }
 
@@ -205,33 +208,66 @@ async function callTool(
     if (!hasScope(profile, "memory:write")) return toolError("Missing memory:write scope");
     const content = readString(args.content);
     if (!content) return toolError("content is required");
-    const memory = await createMemory(env.DB, {
+    const memory = await createVectorMemory(env, {
       namespace: resolveNamespace(profile, args.namespace),
       type: readString(args.type) || "note",
       content,
       summary: readString(args.summary) || null,
       importance: readNumber(args.importance, 0.5),
       confidence: readNumber(args.confidence, 0.8),
-      status: "active",
       pinned: readBoolean(args.pinned),
       tags: readStringArray(args.tags),
-      source: "mcp",
-      sourceMessageIds: [],
-      expiresAt: null
+      source: readString(args.source) || "mcp",
+      sourceMessageIds: []
     });
-    ctx.waitUntil(upsertMemoryEmbedding(env, memory));
-    return textToolResult({ data: toMemoryApiRecord(memory) });
+    return textToolResult({ data: memory });
   }
 
   if (params.name === "memory_list") {
     if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
-    const records = await listMemories(env.DB, {
-      namespace: resolveNamespace(profile, args.namespace),
-      type: readString(args.type),
-      status: readString(args.status) || "active",
-      limit: Math.min(Math.max(Math.floor(readNumber(args.limit, 50)), 1), 100)
+    const limit = readPositiveInt(args.limit, 100, 1000);
+    try {
+      const page = await listVectorMemories(env, {
+        namespace: resolveNamespace(profile, args.namespace),
+        count: limit,
+        cursor: readString(args.cursor)
+      });
+      return textToolResult({
+        data: page.data,
+        ...(readBoolean(args.include_ids) ? { ids: page.ids } : {}),
+        paging: {
+          limit,
+          cursor: page.cursor,
+          has_more: page.hasMore,
+          count: page.count,
+          total_count: page.totalCount
+        }
+      });
+    } catch (error) {
+      return toolError(error instanceof Error ? error.message : "memory_list failed");
+    }
+  }
+
+  if (params.name === "memory_get") {
+    if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
+    const id = readString(args.id);
+    if (!id) return toolError("id is required");
+    const memory = await getVectorMemory(env, id);
+    if (!memory) return toolError("Memory not found");
+    return textToolResult({ data: memory });
+  }
+
+  if (params.name === "memory_delete") {
+    if (!hasScope(profile, "memory:write")) return toolError("Missing memory:write scope");
+    const id = readString(args.id);
+    if (!id) return toolError("id is required");
+    await deleteVectorMemory(env, id);
+    return textToolResult({
+      data: {
+        id,
+        deleted: true
+      }
     });
-    return textToolResult({ data: records.map((record) => toMemoryApiRecord(record)) });
   }
 
   if (params.name === "memory_ingest") {

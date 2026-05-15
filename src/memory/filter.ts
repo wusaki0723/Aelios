@@ -9,7 +9,7 @@ interface FilteredMemoryItem {
 }
 
 export interface MemoryFilterMeta {
-  status: "disabled" | "success" | "fallback" | "empty";
+  status: "disabled" | "success" | "error" | "empty";
   provider: "workers-ai" | "openai-compatible";
   model: string;
   raw_count: number;
@@ -43,6 +43,8 @@ function sanitizeMemoryContent(text: string): string {
   return text
     .replace(/<time_reminder>[^|。\n]*/gi, "")
     .replace(/对话摘要（\d+ 条消息）：?/g, "")
+    .replace(/用户话题[:：]/g, "")
+    .replace(/助手要点[:：]/g, "")
     .replace(/debug-test/gi, "")
     .replace(/记忆系统/g, "")
     .replace(/自动记忆测试口令/g, "口令")
@@ -239,12 +241,14 @@ function buildPrompt(input: {
 
   return [
     "你是长期记忆分拣器。你的任务是从候选记忆中挑出对当前用户消息真正有帮助的记忆，并压缩成短句。",
+    "注意：你不是在判断这条候选是否值得长期保存；你只判断它是否能帮助当前这轮回答、回忆或检索。",
     "候选已按相关度初筛；score 越高越相关。",
     "",
     "规则：",
-    "- 只保留与当前用户消息、长期偏好、正在进行的项目或稳定关系信息有关的记忆。",
-    "- 如果当前用户消息是在询问、回忆或检索过去内容，只要候选能直接回答这个问题，就保留并压缩。",
-    "- type=summary 的候选要抽取与当前用户消息匹配的片段，不要因为它是对话摘要格式就整条丢弃。",
+    "- 只保留能帮助当前用户消息的候选：直接回答问题、补全上下文、长期偏好、正在进行的项目或稳定关系信息。",
+    "- 如果当前用户消息是在询问、回忆或检索过去内容，只要候选与关键名词、事件、口令或时间线直接重合，就保留并压缩。",
+    "- type=summary 的候选要抽取与当前用户消息匹配的片段；不要因为它是短期聊天摘要或对话摘要格式就整条丢弃。",
+    "- 不要因为候选“不够长期稳定”而删除；删除标准只有明显无关、重复、空泛或调试噪音。",
     "- 删除寒暄、重复、牵强、明显无关的记忆。",
     "- 同一事实只保留一条，优先保留 score 更高或 pinned=true 的版本。",
     "- pinned=true 的记忆除非明显无关，否则优先保留。",
@@ -282,13 +286,6 @@ function mergeFilteredItems(memories: MemoryApiRecord[], items: FilteredMemoryIt
   }
 
   return result;
-}
-
-function buildFallbackMemories(memories: MemoryApiRecord[], maxOutput: number): MemoryApiRecord[] {
-  return memories.slice(0, maxOutput).map((memory) => ({
-    ...memory,
-    content: truncateText(memory.content, 160)
-  }));
 }
 
 function describeModelOutput(value: unknown): string {
@@ -407,11 +404,10 @@ export async function filterAndCompressMemoriesWithMeta(
     };
   }
 
-  const fallback = buildFallbackMemories(candidates, maxOutput);
   const activeMeta = {
     ...baseMeta,
     candidate_count: candidates.length,
-    output_count: fallback.length
+    output_count: 0
   };
   const prompt = buildPrompt({
     query,
@@ -427,10 +423,10 @@ export async function filterAndCompressMemoriesWithMeta(
         : await callWorkersAiFilter(env, prompt);
     if (!output) {
       return {
-        data: fallback,
+        data: [],
         meta: {
           ...activeMeta,
-          status: "fallback",
+          status: "error",
           reason: "empty_model_output",
           output_shape: describeModelOutput(output)
         }
@@ -440,10 +436,10 @@ export async function filterAndCompressMemoriesWithMeta(
     const items = parseFilteredItems(output);
     if (!items) {
       return {
-        data: fallback,
+        data: [],
         meta: {
           ...activeMeta,
-          status: "fallback",
+          status: "error",
           reason: "invalid_model_output",
           output_shape: describeModelOutput(output)
         }
@@ -463,10 +459,10 @@ export async function filterAndCompressMemoriesWithMeta(
   } catch (error) {
     console.error("memory filter failed", error);
     return {
-      data: fallback,
+      data: [],
       meta: {
         ...activeMeta,
-        status: "fallback",
+        status: "error",
         reason: error instanceof Error && error.message ? error.message : "model_error"
       }
     };

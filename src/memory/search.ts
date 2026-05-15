@@ -39,7 +39,7 @@ export function toMemoryApiRecord(record: MemoryRecord, score?: number): MemoryA
 }
 
 function getTopK(env: Env, requested?: number): number {
-  const fallback = Number(env.MEMORY_TOP_K || 8);
+  const fallback = Number(env.MEMORY_TOP_K || 12);
   const value = requested || fallback;
   return Math.min(Math.max(value, 1), 200);
 }

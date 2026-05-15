@@ -99,7 +99,7 @@ async function handleSearchMemories(request: Request, env: Env, profile: KeyProf
   if (!query) return openAiError("query is required", 400);
 
   const namespace = resolveNamespace(profile, body.namespace);
-  const topK = readPositiveInt(body.top_k, Number(env.MEMORY_TOP_K || 8), 50);
+  const topK = readPositiveInt(body.top_k, Number(env.MEMORY_TOP_K || 12), 50);
   const types = readStringArray(body.types);
   const raw =
     env.MEMORY_BACKEND === "d1"

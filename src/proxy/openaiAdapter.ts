@@ -71,7 +71,7 @@ export async function callOpenAICompat(env: Env, body: OpenAIChatRequest): Promi
 
 export async function callOpenAICompatEmbeddings(
   env: Env,
-  body: { model: string; input: string | string[] }
+  body: { model: string; input: string | string[]; dimensions?: number }
 ): Promise<Response> {
   const headers = buildOpenAICompatHeaders(env);
   if (body.model.startsWith("workers-ai/") && env.CLOUDFLARE_API_TOKEN) {

@@ -1,7 +1,7 @@
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MemoryApiRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 
-const DEFAULT_WORKERS_AI_FILTER_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_WORKERS_AI_FILTER_MODEL = "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 interface FilteredMemoryItem {
   id: string;
@@ -61,12 +61,25 @@ function isEnabled(env: Env): boolean {
   return env.ENABLE_MEMORY_FILTER !== "false";
 }
 
-function getProvider(env: Env): "workers-ai" | "openai-compatible" {
-  return env.MEMORY_FILTER_PROVIDER === "openai-compatible" ? "openai-compatible" : "workers-ai";
-}
-
 function getModel(env: Env): string {
   return env.MEMORY_FILTER_MODEL || DEFAULT_WORKERS_AI_FILTER_MODEL;
+}
+
+function workersAiModelName(model: string): string | null {
+  const normalized = model.trim();
+  if (normalized.startsWith("workers-ai/")) return normalized.slice("workers-ai/".length);
+  if (normalized.startsWith("worker/")) return normalized.slice("worker/".length);
+  if (normalized.startsWith("@cf/")) return normalized;
+  return null;
+}
+
+function getWorkersAiModel(env: Env): string | null {
+  const model = getModel(env);
+  return workersAiModelName(model);
+}
+
+function getProvider(env: Env): "workers-ai" | "openai-compatible" {
+  return getWorkersAiModel(env) ? "workers-ai" : "openai-compatible";
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -310,10 +323,10 @@ function describeModelOutput(value: unknown): string {
   return "object";
 }
 
-async function callWorkersAiFilter(env: Env, prompt: string): Promise<unknown> {
+async function callWorkersAiFilter(env: Env, prompt: string, model: string): Promise<unknown> {
   if (!env.AI) return "";
 
-  return env.AI.run(getModel(env), {
+  return env.AI.run(model, {
     messages: [
       {
         role: "system",
@@ -333,11 +346,9 @@ async function callWorkersAiFilter(env: Env, prompt: string): Promise<unknown> {
   });
 }
 
-async function callOpenAICompatFilter(env: Env, prompt: string): Promise<string> {
-  if (!env.MEMORY_FILTER_MODEL) return "";
-
+async function callOpenAICompatFilter(env: Env, prompt: string, model: string): Promise<string> {
   const request: OpenAIChatRequest = {
-    model: env.MEMORY_FILTER_MODEL,
+    model,
     messages: [
       {
         role: "system",
@@ -426,8 +437,8 @@ export async function filterAndCompressMemoriesWithMeta(
   try {
     const output =
       provider === "openai-compatible"
-        ? await callOpenAICompatFilter(env, prompt)
-        : await callWorkersAiFilter(env, prompt);
+        ? await callOpenAICompatFilter(env, prompt, model)
+        : await callWorkersAiFilter(env, prompt, getWorkersAiModel(env) || model);
     if (!output) {
       return {
         data: [],

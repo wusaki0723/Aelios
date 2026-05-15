@@ -30,7 +30,6 @@ export interface Env {
   MEMORY_BACKEND?: string;
   MEMORY_MODEL?: string;
   ENABLE_MEMORY_FILTER?: string;
-  MEMORY_FILTER_PROVIDER?: string;
   MEMORY_FILTER_MODEL?: string;
   VISION_MODEL?: string;
   GUIDE_DOG_MODEL?: string;
@@ -43,6 +42,7 @@ export interface Env {
   MEMORY_MIN_IMPORTANCE?: string;
   INJECTION_MODE?: string;
   EMBEDDING_MODEL?: string;
+  EMBEDDING_DIMENSIONS?: string;
   MEMORY_TOP_K?: string;
   MEMORY_MIN_SCORE?: string;
   ANTHROPIC_CACHE_ENABLED?: string;

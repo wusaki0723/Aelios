@@ -205,7 +205,6 @@ export async function createVectorMemory(env: Env, input: VectorMemoryInput): Pr
     {
       id: vectorId,
       values: vector,
-      namespace: normalized.namespace,
       metadata: toMetadata(normalized)
     }
   ]);
@@ -282,7 +281,6 @@ export async function updateVectorMemory(
     {
       id: vectorId,
       values: vector,
-      namespace: next.namespace,
       metadata: toMetadata(next)
     }
   ]);

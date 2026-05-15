@@ -344,6 +344,16 @@ POST /v1/messages/ingest
 
 这三个入口做的是同一件事：鉴权后把 `messages` 写进 D1。传 `auto_extract: false` 时，只保存原始聊天，等每日小秘书晚上统一整理入 Vectorize。
 
+每轮 hook 搜索长期记忆也可以直接走 REST，不用 MCP 握手：
+
+```
+POST /v1/memories/search
+POST /v1/memory/search
+POST /v1/search/memories
+```
+
+默认走 Vectorize 搜索，再用记忆小秘书分拣压缩。想要最低延迟时传 `filter: false`，只返回原始向量命中；想直接拿一段可塞进 prompt 的文本时传 `include_prompt: true`。
+
 **3. 无记忆导盲犬 API**
 
 ```
@@ -628,6 +638,12 @@ curl "https://<worker>/v1/memories/search" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>" \
   -H "content-type: application/json" \
   -d '{"query":"星线-0428","top_k":5}'
+
+# 每轮 hook 快速搜记忆：不走 MCP，跳过小秘书压缩，返回最快原始命中
+curl "https://<worker>/v1/memory/search" \
+  -H "Authorization: Bearer <CHATBOX_API_KEY>" \
+  -H "content-type: application/json" \
+  -d '{"query":"用户这轮消息文本","top_k":8,"filter":false,"include_prompt":true}'
 
 # 直接上传外部聊天到 D1，不走 MCP，不立即抽取长期记忆
 curl "https://<worker>/v1/ingest/messages" \

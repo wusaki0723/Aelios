@@ -11,7 +11,10 @@ import {
 } from "../db/memories";
 import { saveIngestMessages } from "../db/messages";
 import { deleteMemoryEmbedding, upsertMemoryEmbedding } from "../memory/embedding";
+import { filterAndCompressMemories } from "../memory/filter";
+import { formatMemoryPatch } from "../memory/inject";
 import { searchMemories, toMemoryApiRecord } from "../memory/search";
+import { searchVectorMemories } from "../memory/vectorStore";
 import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
 import type { Env, KeyProfile } from "../types";
 import { json, openAiError } from "../utils/json";
@@ -106,15 +109,30 @@ async function handleSearchMemories(request: Request, env: Env, profile: KeyProf
   if (!body) return openAiError("Request body must be a JSON object", 400);
 
   const query = readString(body.query) || "";
-  const topK = readNumber(body.top_k, Number(env.MEMORY_TOP_K || 8));
-  const data = await searchMemories(env, {
-    namespace: resolveNamespace(profile, body.namespace),
-    query,
-    topK,
-    types: readStringArray(body.types)
-  });
+  if (!query) return openAiError("query is required", 400);
 
-  return json({ data });
+  const namespace = resolveNamespace(profile, body.namespace);
+  const topK = readPositiveInt(body.top_k, Number(env.MEMORY_TOP_K || 8), 50);
+  const types = readStringArray(body.types);
+  const raw =
+    env.MEMORY_BACKEND === "d1"
+      ? await searchMemories(env, { namespace, query, topK, types })
+      : await searchVectorMemories(env, { namespace, query, topK, types });
+  const shouldFilter = readBoolean(body.filter, true);
+  const data = shouldFilter ? await filterAndCompressMemories(env, { query, memories: raw }) : raw;
+
+  return json({
+    data,
+    meta: {
+      namespace,
+      backend: env.MEMORY_BACKEND === "d1" ? "d1" : "vectorize",
+      top_k: topK,
+      raw_count: raw.length,
+      count: data.length,
+      filtered: shouldFilter
+    },
+    ...(readBoolean(body.include_prompt) ? { prompt: formatMemoryPatch(data) } : {})
+  });
 }
 
 async function handleIngestMemories(
@@ -171,6 +189,13 @@ export async function handleIngestMessagesApi(request: Request, env: Env, ctx: E
   if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
 
   return handleIngestMemories(request, env, ctx, auth.profile);
+}
+
+export async function handleSearchMemoriesApi(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+
+  return handleSearchMemories(request, env, auth.profile);
 }
 
 async function handlePatchMemory(

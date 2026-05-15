@@ -73,9 +73,14 @@ export async function callOpenAICompatEmbeddings(
   env: Env,
   body: { model: string; input: string | string[] }
 ): Promise<Response> {
+  const headers = buildOpenAICompatHeaders(env);
+  if (body.model.startsWith("workers-ai/") && env.CLOUDFLARE_API_TOKEN) {
+    headers.set("authorization", `Bearer ${env.CLOUDFLARE_API_TOKEN}`);
+  }
+
   return fetch(`${normalizeAiGatewayBaseUrl(env)}/compat/embeddings`, {
     method: "POST",
-    headers: buildOpenAICompatHeaders(env),
+    headers,
     body: JSON.stringify(body)
   });
 }

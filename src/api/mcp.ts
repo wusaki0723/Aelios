@@ -208,18 +208,23 @@ async function callTool(
     if (!hasScope(profile, "memory:write")) return toolError("Missing memory:write scope");
     const content = readString(args.content);
     if (!content) return toolError("content is required");
-    const memory = await createVectorMemory(env, {
-      namespace: resolveNamespace(profile, args.namespace),
-      type: readString(args.type) || "note",
-      content,
-      summary: readString(args.summary) || null,
-      importance: readNumber(args.importance, 0.5),
-      confidence: readNumber(args.confidence, 0.8),
-      pinned: readBoolean(args.pinned),
-      tags: readStringArray(args.tags),
-      source: readString(args.source) || "mcp",
-      sourceMessageIds: []
-    });
+    let memory;
+    try {
+      memory = await createVectorMemory(env, {
+        namespace: resolveNamespace(profile, args.namespace),
+        type: readString(args.type) || "note",
+        content,
+        summary: readString(args.summary) || null,
+        importance: readNumber(args.importance, 0.5),
+        confidence: readNumber(args.confidence, 0.8),
+        pinned: readBoolean(args.pinned),
+        tags: readStringArray(args.tags),
+        source: readString(args.source) || "mcp",
+        sourceMessageIds: []
+      });
+    } catch (error) {
+      return toolError(error instanceof Error ? error.message : "memory_create failed");
+    }
     return textToolResult({ data: memory });
   }
 

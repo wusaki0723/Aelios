@@ -43,14 +43,25 @@ export async function createEmbedding(env: Env, text: string): Promise<number[] 
   const workersAiModel = workersAiModelName(model);
   if (workersAiModel) {
     if (!env.AI) return null;
-    const result = await env.AI.run(workersAiModel as any, { text: [text] });
-    return readEmbedding(result);
+    try {
+      const result = await env.AI.run(workersAiModel as any, { text: [text] });
+      return readEmbedding(result);
+    } catch (error) {
+      console.error("memory embedding failed", error);
+      return null;
+    }
   }
 
-  const response = await callOpenAICompatEmbeddings(env, {
-    model,
-    input: text
-  });
+  let response: Response;
+  try {
+    response = await callOpenAICompatEmbeddings(env, {
+      model,
+      input: text
+    });
+  } catch (error) {
+    console.error("memory embedding failed", error);
+    return null;
+  }
 
   if (!response.ok) return null;
   return readEmbedding(await response.json());

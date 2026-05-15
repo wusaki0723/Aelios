@@ -1,20 +1,18 @@
 import { authenticate } from "../auth/apiKey";
 import { requireScope } from "../auth/scopes";
 import { getOrCreateConversation } from "../db/conversations";
-import {
-  createMemory,
-  getMemoryById,
-  listMemories,
-  listMemoriesPage,
-  softDeleteMemory,
-  updateMemory
-} from "../db/memories";
 import { saveIngestMessages } from "../db/messages";
-import { deleteMemoryEmbedding, upsertMemoryEmbedding } from "../memory/embedding";
 import { filterAndCompressMemories } from "../memory/filter";
 import { formatMemoryPatch } from "../memory/inject";
-import { searchMemories, toMemoryApiRecord } from "../memory/search";
-import { searchVectorMemories } from "../memory/vectorStore";
+import { searchMemories } from "../memory/search";
+import {
+  createVectorMemory,
+  deleteVectorMemory,
+  getVectorMemory,
+  listVectorMemories,
+  searchVectorMemories,
+  updateVectorMemory
+} from "../memory/vectorStore";
 import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
 import type { Env, KeyProfile } from "../types";
 import { json, openAiError } from "../utils/json";
@@ -22,7 +20,6 @@ import {
   readBoolean,
   readJsonObject,
   readMessages,
-  readNonNegativeInt,
   readNumber,
   readOptionalString,
   readPositiveInt,
@@ -34,7 +31,6 @@ import {
 async function handleCreateMemory(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
   profile: KeyProfile
 ): Promise<Response> {
   const scopeError = requireScope(profile, "memory:write");
@@ -50,14 +46,13 @@ async function handleCreateMemory(
     return openAiError("content is required", 400);
   }
 
-  const memory = await createMemory(env.DB, {
+  const memory = await createVectorMemory(env, {
     namespace: resolveNamespace(profile, body.namespace),
     type,
     content,
     summary: readOptionalString(body.summary),
     importance: readNumber(body.importance, 0.5),
     confidence: readNumber(body.confidence, 0.8),
-    status: readString(body.status) || "active",
     pinned: readBoolean(body.pinned),
     tags: readStringArray(body.tags),
     source: readOptionalString(body.source) || profile.source,
@@ -65,13 +60,7 @@ async function handleCreateMemory(
     expiresAt: readOptionalString(body.expires_at)
   });
 
-  ctx.waitUntil(
-    upsertMemoryEmbedding(env, memory).catch((error) => {
-      console.error("failed to upsert memory embedding", error);
-    })
-  );
-
-  return json({ data: toMemoryApiRecord(memory) }, { status: 201 });
+  return json({ data: memory }, { status: 201 });
 }
 
 async function handleListMemories(request: Request, env: Env, profile: KeyProfile): Promise<Response> {
@@ -81,22 +70,20 @@ async function handleListMemories(request: Request, env: Env, profile: KeyProfil
   const url = new URL(request.url);
   const namespace = resolveNamespace(profile, url.searchParams.get("namespace"));
   const limit = readPositiveInt(url.searchParams.get("limit"), 100, 1000);
-  const offset = readNonNegativeInt(url.searchParams.get("offset"), 0, 100_000);
-  const page = await listMemoriesPage(env.DB, {
+  const page = await listVectorMemories(env, {
     namespace,
-    type: url.searchParams.get("type") || undefined,
-    status: url.searchParams.get("status") || "active",
-    limit,
-    offset
+    count: limit,
+    cursor: readString(url.searchParams.get("cursor"))
   });
 
   return json({
-    data: page.records.map((record) => toMemoryApiRecord(record)),
+    data: page.data,
     paging: {
       limit,
-      offset,
+      cursor: page.cursor,
       has_more: page.hasMore,
-      next_offset: page.nextOffset
+      count: page.count,
+      total_count: page.totalCount
     }
   });
 }
@@ -201,7 +188,6 @@ export async function handleSearchMemoriesApi(request: Request, env: Env): Promi
 async function handlePatchMemory(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
   profile: KeyProfile,
   id: string
 ): Promise<Response> {
@@ -212,6 +198,9 @@ async function handlePatchMemory(
   if (!body) return openAiError("Request body must be a JSON object", 400);
 
   const namespace = resolveNamespace(profile, body.namespace);
+  const existing = await getVectorMemory(env, id);
+  if (!existing || existing.namespace !== namespace) return openAiError("Memory not found", 404);
+
   const patch = {
     type: readString(body.type),
     content: readString(body.content),
@@ -221,62 +210,40 @@ async function handlePatchMemory(
     status: readString(body.status),
     pinned: typeof body.pinned === "boolean" ? readBoolean(body.pinned) : undefined,
     tags: Array.isArray(body.tags) ? readStringArray(body.tags) : undefined,
+    source: body.source === undefined ? undefined : readOptionalString(body.source),
+    sourceMessageIds: Array.isArray(body.source_message_ids) ? readStringArray(body.source_message_ids) : undefined,
     expiresAt: body.expires_at === undefined ? undefined : readOptionalString(body.expires_at)
   };
 
-  const updated = await updateMemory(env.DB, {
-    namespace,
-    id,
-    patch
-  });
+  const updated = await updateVectorMemory(env, id, patch);
 
   if (!updated) return openAiError("Memory not found", 404);
-
-  ctx.waitUntil(
-    (updated.status === "active" ? upsertMemoryEmbedding(env, updated) : deleteMemoryEmbedding(env, updated)).catch((error) => {
-      console.error("failed to sync memory embedding", error);
-    })
-  );
-
-  return json({ data: toMemoryApiRecord(updated) });
+  return json({ data: updated });
 }
 
 async function handleDeleteMemory(
   env: Env,
-  ctx: ExecutionContext,
   profile: KeyProfile,
   id: string
 ): Promise<Response> {
   const scopeError = requireScope(profile, "memory:write");
   if (scopeError) return scopeError;
 
-  const deleted = await softDeleteMemory(env.DB, {
-    namespace: profile.namespace,
-    id
-  });
+  const existing = await getVectorMemory(env, id);
+  if (!existing || existing.namespace !== profile.namespace) return openAiError("Memory not found", 404);
 
-  if (!deleted) return openAiError("Memory not found", 404);
-
-  ctx.waitUntil(
-    deleteMemoryEmbedding(env, deleted).catch((error) => {
-      console.error("failed to delete memory embedding", error);
-    })
-  );
-
-  return json({ data: toMemoryApiRecord(deleted) });
+  await deleteVectorMemory(env, id);
+  return json({ data: { id: existing.id, vector_id: existing.vector_id, deleted: true } });
 }
 
 async function handleGetMemory(env: Env, profile: KeyProfile, id: string): Promise<Response> {
   const scopeError = requireScope(profile, "memory:read");
   if (scopeError) return scopeError;
 
-  const memory = await getMemoryById(env.DB, {
-    namespace: profile.namespace,
-    id
-  });
+  const memory = await getVectorMemory(env, id);
 
-  if (!memory) return openAiError("Memory not found", 404);
-  return json({ data: toMemoryApiRecord(memory) });
+  if (!memory || memory.namespace !== profile.namespace) return openAiError("Memory not found", 404);
+  return json({ data: memory });
 }
 
 export async function handleMemories(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -292,7 +259,7 @@ export async function handleMemories(request: Request, env: Env, ctx: ExecutionC
   }
 
   if (tail.length === 0 && request.method === "POST") {
-    return handleCreateMemory(request, env, ctx, auth.profile);
+    return handleCreateMemory(request, env, auth.profile);
   }
 
   if (tail.length === 1 && tail[0] === "search" && request.method === "POST") {
@@ -306,8 +273,8 @@ export async function handleMemories(request: Request, env: Env, ctx: ExecutionC
   if (tail.length === 1) {
     const id = tail[0];
     if (request.method === "GET") return handleGetMemory(env, auth.profile, id);
-    if (request.method === "PATCH") return handlePatchMemory(request, env, ctx, auth.profile, id);
-    if (request.method === "DELETE") return handleDeleteMemory(env, ctx, auth.profile, id);
+    if (request.method === "PATCH") return handlePatchMemory(request, env, auth.profile, id);
+    if (request.method === "DELETE") return handleDeleteMemory(env, auth.profile, id);
   }
 
   return openAiError("Not found", 404);

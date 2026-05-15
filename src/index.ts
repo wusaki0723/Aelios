@@ -47,6 +47,10 @@ export default {
       return handleMemories(request, env, ctx);
     }
 
+    if (url.pathname === "/v1/memory" || url.pathname.startsWith("/v1/memory/")) {
+      return handleMemories(request, env, ctx);
+    }
+
     if (
       request.method === "POST" &&
       (url.pathname === "/v1/ingest/messages" || url.pathname === "/v1/messages/ingest")
@@ -54,10 +58,7 @@ export default {
       return handleIngestMessagesApi(request, env, ctx);
     }
 
-    if (
-      request.method === "POST" &&
-      (url.pathname === "/v1/memory/search" || url.pathname === "/v1/search/memories")
-    ) {
+    if (request.method === "POST" && url.pathname === "/v1/search/memories") {
       return handleSearchMemoriesApi(request, env);
     }
 

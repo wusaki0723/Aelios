@@ -293,8 +293,15 @@ GET    /v1/memories
 POST   /v1/memories
 POST   /v1/memories/search
 POST   /v1/memories/ingest
+GET    /v1/memories/:id
 PATCH  /v1/memories/:id
 DELETE /v1/memories/:id
+GET    /v1/memory
+POST   /v1/memory
+POST   /v1/memory/search
+GET    /v1/memory/:id
+PATCH  /v1/memory/:id
+DELETE /v1/memory/:id
 GET/PUT/DELETE /v1/cache/:namespace/:key
 GET    /v1/debug/cache_health
 ```
@@ -334,6 +341,18 @@ memory_ingest  写入一段消息，并可触发自动抽取
 
 这个模式使用 D1、Vectorize、Queue，但不使用 `/v1/chat/completions`。
 
+直接管理长期记忆库时，用 REST CRUD；这一路返回的是 Vectorize 原始记忆，不经过小秘书压缩：
+
+```
+GET    /v1/memory
+POST   /v1/memory
+GET    /v1/memory/:id
+PATCH  /v1/memory/:id
+DELETE /v1/memory/:id
+```
+
+兼容路径 `/v1/memories` 也会走同一套 Vectorize 原始记忆管理。
+
 如果不想走 MCP，也可以直接走 REST 写入原始聊天：
 
 ```
@@ -353,6 +372,8 @@ POST /v1/search/memories
 ```
 
 默认走 Vectorize 搜索，再用记忆小秘书分拣压缩。想要最低延迟时传 `filter: false`，只返回原始向量命中；想直接拿一段可塞进 prompt 的文本时传 `include_prompt: true`。
+
+简单说：`/v1/memory/search` 是给模型召回用的，可能被小秘书加工；`/v1/memory/:id` 和列表/创建/修改/删除是给人或脚本管理原始记忆库用的。
 
 **3. 无记忆导盲犬 API**
 
@@ -644,6 +665,15 @@ curl "https://<worker>/v1/memory/search" \
   -H "Authorization: Bearer <CHATBOX_API_KEY>" \
   -H "content-type: application/json" \
   -d '{"query":"用户这轮消息文本","top_k":8,"filter":false,"include_prompt":true}'
+
+# 直接管理原始长期记忆：列表 / 创建 / 修改 / 删除都不经过小秘书
+curl "https://<worker>/v1/memory?limit=20" \
+  -H "Authorization: Bearer <CHATBOX_API_KEY>"
+
+curl "https://<worker>/v1/memory" \
+  -H "Authorization: Bearer <CHATBOX_API_KEY>" \
+  -H "content-type: application/json" \
+  -d '{"type":"note","content":"用户喜欢把直接管理的长期记忆保存在 Vectorize。","importance":0.7,"tags":["manual"]}'
 
 # 直接上传外部聊天到 D1，不走 MCP，不立即抽取长期记忆
 curl "https://<worker>/v1/ingest/messages" \

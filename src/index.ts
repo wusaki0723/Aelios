@@ -3,7 +3,7 @@ import { handleCache } from "./api/cache";
 import { handleCacheHealth } from "./api/debug";
 import { handleChatCompletions } from "./api/chatCompletions";
 import { handleGuideDogChatCompletions } from "./api/guideDog";
-import { handleIngestMessagesApi, handleMemories } from "./api/memories";
+import { handleIngestMessagesApi, handleMemories, handleSearchMemoriesApi } from "./api/memories";
 import { handleMcp } from "./api/mcp";
 import { handleModels } from "./api/models";
 import { runDailyMemoryDigest } from "./memory/dailyDigest";
@@ -52,6 +52,13 @@ export default {
       (url.pathname === "/v1/ingest/messages" || url.pathname === "/v1/messages/ingest")
     ) {
       return handleIngestMessagesApi(request, env, ctx);
+    }
+
+    if (
+      request.method === "POST" &&
+      (url.pathname === "/v1/memory/search" || url.pathname === "/v1/search/memories")
+    ) {
+      return handleSearchMemoriesApi(request, env);
     }
 
     if (url.pathname.startsWith("/v1/cache/")) {

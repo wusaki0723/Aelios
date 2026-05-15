@@ -46,19 +46,25 @@ async function handleCreateMemory(
     return openAiError("content is required", 400);
   }
 
-  const memory = await createVectorMemory(env, {
-    namespace: resolveNamespace(profile, body.namespace),
-    type,
-    content,
-    summary: readOptionalString(body.summary),
-    importance: readNumber(body.importance, 0.5),
-    confidence: readNumber(body.confidence, 0.8),
-    pinned: readBoolean(body.pinned),
-    tags: readStringArray(body.tags),
-    source: readOptionalString(body.source) || profile.source,
-    sourceMessageIds: readStringArray(body.source_message_ids),
-    expiresAt: readOptionalString(body.expires_at)
-  });
+  let memory;
+  try {
+    memory = await createVectorMemory(env, {
+      namespace: resolveNamespace(profile, body.namespace),
+      type,
+      content,
+      summary: readOptionalString(body.summary),
+      importance: readNumber(body.importance, 0.5),
+      confidence: readNumber(body.confidence, 0.8),
+      pinned: readBoolean(body.pinned),
+      tags: readStringArray(body.tags),
+      source: readOptionalString(body.source) || profile.source,
+      sourceMessageIds: readStringArray(body.source_message_ids),
+      expiresAt: readOptionalString(body.expires_at)
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "memory_create failed";
+    return openAiError(message, 503, "memory_error");
+  }
 
   return json({ data: memory }, { status: 201 });
 }

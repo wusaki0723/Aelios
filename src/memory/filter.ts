@@ -88,6 +88,11 @@ function getMaxContentChars(env: Env): number {
   return Number.isFinite(value) ? clamp(Math.floor(value), 120, 3000) : 700;
 }
 
+function getMaxOutputChars(env: Env): number {
+  const value = Number(env.MEMORY_FILTER_OUTPUT_CHARS || 300);
+  return Number.isFinite(value) ? clamp(Math.floor(value), 60, 1000) : 300;
+}
+
 function getFilterMinScore(env: Env): number {
   const value = Number(env.MEMORY_FILTER_MIN_SCORE || env.MEMORY_MIN_SCORE || 0.35);
   return Number.isFinite(value) ? clamp(value, 0, 1) : 0.35;
@@ -227,6 +232,7 @@ function buildPrompt(input: {
   memories: MemoryApiRecord[];
   maxOutput: number;
   maxContentChars: number;
+  maxOutputChars: number;
 }): string {
   const candidates = input.memories.map((memory, index) => ({
     index: index + 1,
@@ -257,7 +263,7 @@ function buildPrompt(input: {
     "- 不要输出记忆系统、debug-test、标签、测试口令等调试/后端元信息。",
     "- 如果候选里有真实口令，只保留口令本身，不要保留“测试”“标签”“debug”等包装词。",
     "- 没有相关记忆时输出空数组。",
-    "- 每条 content 控制在 60 个中文字以内。",
+    `- 每条 content 控制在 ${input.maxOutputChars} 个中文字以内。`,
     `- 最多输出 ${input.maxOutput} 条。`,
     "",
     "只输出 JSON，不要 markdown，不要解释。格式：",
@@ -413,7 +419,8 @@ export async function filterAndCompressMemoriesWithMeta(
     query,
     memories: candidates,
     maxOutput,
-    maxContentChars: getMaxContentChars(env)
+    maxContentChars: getMaxContentChars(env),
+    maxOutputChars: getMaxOutputChars(env)
   });
 
   try {

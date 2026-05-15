@@ -92,9 +92,9 @@ function toMetadata(input: Required<VectorMemoryInput> & { id: string; vectorId:
     confidence: input.confidence,
     status: "active",
     pinned: input.pinned,
-    tags: input.tags,
+    tags: JSON.stringify(input.tags),
     source: input.source || "",
-    source_message_ids: input.sourceMessageIds,
+    source_message_ids: JSON.stringify(input.sourceMessageIds),
     created_at: input.createdAt,
     updated_at: input.updatedAt,
     expires_at: input.expiresAt || ""

@@ -3,6 +3,13 @@ import { callOpenAICompatEmbeddings } from "../proxy/openaiAdapter";
 
 const DEFAULT_EMBEDDING_MODEL = "workers-ai/@cf/google/embeddinggemma-300m";
 
+function workersAiModelName(model: string): string | null {
+  const normalized = model.trim();
+  if (normalized.startsWith("workers-ai/")) return normalized.slice("workers-ai/".length);
+  if (normalized.startsWith("@cf/")) return normalized;
+  return null;
+}
+
 function readEmbedding(result: unknown): number[] | null {
   if (!result || typeof result !== "object") return null;
   const value = result as {
@@ -33,6 +40,13 @@ function readEmbedding(result: unknown): number[] | null {
 
 export async function createEmbedding(env: Env, text: string): Promise<number[] | null> {
   const model = env.EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
+  const workersAiModel = workersAiModelName(model);
+  if (workersAiModel) {
+    if (!env.AI) return null;
+    const result = await env.AI.run(workersAiModel as any, { text: [text] });
+    return readEmbedding(result);
+  }
+
   const response = await callOpenAICompatEmbeddings(env, {
     model,
     input: text
@@ -52,18 +66,23 @@ export async function upsertMemoryEmbedding(env: Env, memory: MemoryRecord): Pro
     {
       id: memory.vector_id,
       values: vector,
-      namespace: memory.namespace,
       metadata: {
         namespace: memory.namespace,
         kind: "memory",
         ref_id: memory.id,
         type: memory.type,
         content: memory.content,
+        summary: memory.summary || "",
         importance: memory.importance,
+        confidence: memory.confidence,
         status: memory.status,
         pinned: Boolean(memory.pinned),
         tags: memory.tags || "[]",
+        source: memory.source || "",
+        source_message_ids: memory.source_message_ids || "[]",
         created_at: memory.created_at,
+        updated_at: memory.updated_at,
+        expires_at: memory.expires_at || "",
       }
     }
   ]);

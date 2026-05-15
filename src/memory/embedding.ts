@@ -3,10 +3,6 @@ import { callOpenAICompatEmbeddings } from "../proxy/openaiAdapter";
 
 const DEFAULT_EMBEDDING_MODEL = "workers-ai/@cf/google/embeddinggemma-300m";
 
-function workersAiModelName(model: string): string {
-  return model.replace(/^workers-ai\//, "");
-}
-
 function readEmbedding(result: unknown): number[] | null {
   if (!result || typeof result !== "object") return null;
   const value = result as {
@@ -37,27 +33,13 @@ function readEmbedding(result: unknown): number[] | null {
 
 export async function createEmbedding(env: Env, text: string): Promise<number[] | null> {
   const model = env.EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
-  try {
-    const response = await callOpenAICompatEmbeddings(env, {
-      model,
-      input: text
-    });
+  const response = await callOpenAICompatEmbeddings(env, {
+    model,
+    input: text
+  });
 
-    if (response.ok) {
-      const vector = readEmbedding(await response.json());
-      if (vector) return vector;
-    }
-  } catch {
-    // Fall back to the native Workers AI binding below.
-  }
-
-  if (!env.AI || !model.startsWith("workers-ai/")) return null;
-
-  try {
-    return readEmbedding(await env.AI.run(workersAiModelName(model), { text: [text] }));
-  } catch {
-    return null;
-  }
+  if (!response.ok) return null;
+  return readEmbedding(await response.json());
 }
 
 export async function upsertMemoryEmbedding(env: Env, memory: MemoryRecord): Promise<boolean> {

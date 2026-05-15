@@ -8,6 +8,17 @@ interface FilteredMemoryItem {
   content: string;
 }
 
+export interface MemoryFilterMeta {
+  status: "disabled" | "success" | "fallback" | "empty";
+  provider: "workers-ai" | "openai-compatible";
+  model: string;
+  raw_count: number;
+  candidate_count: number;
+  output_count: number;
+  reason?: string;
+  output_shape?: string;
+}
+
 const FILTER_RESPONSE_SCHEMA = {
   type: "object",
   properties: {
@@ -275,6 +286,22 @@ function buildFallbackMemories(memories: MemoryApiRecord[], maxOutput: number): 
   }));
 }
 
+function describeModelOutput(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (typeof value !== "object") return typeof value;
+
+  const object = value as { response?: unknown; memories?: unknown; result?: unknown; output?: unknown; text?: unknown };
+  if (Array.isArray(object.memories)) return "object.memories_array";
+  if (typeof object.response === "string") return "object.response_string";
+  if (object.response && typeof object.response === "object") return "object.response_object";
+  if (typeof object.result === "string") return "object.result_string";
+  if (object.result && typeof object.result === "object") return "object.result_object";
+  if (typeof object.output === "string") return "object.output_string";
+  if (typeof object.text === "string") return "object.text_string";
+  return "object";
+}
+
 async function callWorkersAiFilter(env: Env, prompt: string): Promise<unknown> {
   if (!env.AI) return "";
 
@@ -330,16 +357,57 @@ export async function filterAndCompressMemories(
   env: Env,
   input: { query: string; memories: MemoryApiRecord[] }
 ): Promise<MemoryApiRecord[]> {
+  const result = await filterAndCompressMemoriesWithMeta(env, input);
+  return result.data;
+}
+
+export async function filterAndCompressMemoriesWithMeta(
+  env: Env,
+  input: { query: string; memories: MemoryApiRecord[] }
+): Promise<{ data: MemoryApiRecord[]; meta: MemoryFilterMeta }> {
   const query = input.query.trim();
+  const provider = getProvider(env);
+  const model = getModel(env);
+  const baseMeta = {
+    provider,
+    model,
+    raw_count: input.memories.length,
+    candidate_count: 0,
+    output_count: input.memories.length
+  };
+
   if (!isEnabled(env) || !query) {
-    return input.memories;
+    return {
+      data: input.memories,
+      meta: {
+        ...baseMeta,
+        status: "disabled",
+        reason: !query ? "empty_query" : "filter_disabled"
+      }
+    };
   }
 
   const maxOutput = getMaxOutput(env);
   const candidates = prepareCandidates(env, input.memories);
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) {
+    return {
+      data: [],
+      meta: {
+        ...baseMeta,
+        status: "empty",
+        candidate_count: 0,
+        output_count: 0,
+        reason: "no_candidates"
+      }
+    };
+  }
 
   const fallback = buildFallbackMemories(candidates, maxOutput);
+  const activeMeta = {
+    ...baseMeta,
+    candidate_count: candidates.length,
+    output_count: fallback.length
+  };
   const prompt = buildPrompt({
     query,
     memories: candidates,
@@ -349,18 +417,53 @@ export async function filterAndCompressMemories(
 
   try {
     const output =
-      getProvider(env) === "openai-compatible"
+      provider === "openai-compatible"
         ? await callOpenAICompatFilter(env, prompt)
         : await callWorkersAiFilter(env, prompt);
-    if (!output) return fallback;
+    if (!output) {
+      return {
+        data: fallback,
+        meta: {
+          ...activeMeta,
+          status: "fallback",
+          reason: "empty_model_output",
+          output_shape: describeModelOutput(output)
+        }
+      };
+    }
 
     const items = parseFilteredItems(output);
-    if (!items) return fallback;
+    if (!items) {
+      return {
+        data: fallback,
+        meta: {
+          ...activeMeta,
+          status: "fallback",
+          reason: "invalid_model_output",
+          output_shape: describeModelOutput(output)
+        }
+      };
+    }
 
     const filtered = mergeFilteredItems(candidates, items).slice(0, maxOutput);
-    return filtered;
+    return {
+      data: filtered,
+      meta: {
+        ...activeMeta,
+        status: "success",
+        output_count: filtered.length,
+        output_shape: describeModelOutput(output)
+      }
+    };
   } catch (error) {
     console.error("memory filter failed", error);
-    return fallback;
+    return {
+      data: fallback,
+      meta: {
+        ...activeMeta,
+        status: "fallback",
+        reason: error instanceof Error && error.message ? error.message : "model_error"
+      }
+    };
   }
 }

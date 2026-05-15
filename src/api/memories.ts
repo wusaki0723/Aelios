@@ -2,7 +2,7 @@ import { authenticate } from "../auth/apiKey";
 import { requireScope } from "../auth/scopes";
 import { getOrCreateConversation } from "../db/conversations";
 import { saveIngestMessages } from "../db/messages";
-import { filterAndCompressMemories } from "../memory/filter";
+import { filterAndCompressMemoriesWithMeta } from "../memory/filter";
 import { formatMemoryPatch } from "../memory/inject";
 import { searchMemories } from "../memory/search";
 import {
@@ -106,7 +106,10 @@ async function handleSearchMemories(request: Request, env: Env, profile: KeyProf
       ? await searchMemories(env, { namespace, query, topK, types })
       : await searchVectorMemories(env, { namespace, query, topK, types });
   const shouldFilter = readBoolean(body.filter, true);
-  const data = shouldFilter ? await filterAndCompressMemories(env, { query, memories: raw }) : raw;
+  const filterResult = shouldFilter
+    ? await filterAndCompressMemoriesWithMeta(env, { query, memories: raw })
+    : null;
+  const data = filterResult ? filterResult.data : raw;
 
   return json({
     data,
@@ -116,7 +119,8 @@ async function handleSearchMemories(request: Request, env: Env, profile: KeyProf
       top_k: topK,
       raw_count: raw.length,
       count: data.length,
-      filtered: shouldFilter
+      filtered: shouldFilter,
+      ...(readBoolean(body.include_filter_debug) && filterResult ? { memory_filter: filterResult.meta } : {})
     },
     ...(readBoolean(body.include_prompt) ? { prompt: formatMemoryPatch(data) } : {})
   });

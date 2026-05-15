@@ -41,6 +41,8 @@ const FILTER_RESPONSE_SCHEMA = {
 
 function sanitizeMemoryContent(text: string): string {
   return text
+    .replace(/<time_reminder>[^|。\n]*/gi, "")
+    .replace(/对话摘要（\d+ 条消息）：?/g, "")
     .replace(/debug-test/gi, "")
     .replace(/记忆系统/g, "")
     .replace(/自动记忆测试口令/g, "口令")
@@ -241,10 +243,13 @@ function buildPrompt(input: {
     "",
     "规则：",
     "- 只保留与当前用户消息、长期偏好、正在进行的项目或稳定关系信息有关的记忆。",
+    "- 如果当前用户消息是在询问、回忆或检索过去内容，只要候选能直接回答这个问题，就保留并压缩。",
+    "- type=summary 的候选要抽取与当前用户消息匹配的片段，不要因为它是对话摘要格式就整条丢弃。",
     "- 删除寒暄、重复、牵强、明显无关的记忆。",
     "- 同一事实只保留一条，优先保留 score 更高或 pinned=true 的版本。",
     "- pinned=true 的记忆除非明显无关，否则优先保留。",
     "- 不要添加候选记忆里没有的新事实。",
+    "- 不要输出“对话摘要”“用户话题”“助手要点”“time_reminder”等包装词。",
     "- 不要输出记忆系统、debug-test、标签、测试口令等调试/后端元信息。",
     "- 如果候选里有真实口令，只保留口令本身，不要保留“测试”“标签”“debug”等包装词。",
     "- 没有相关记忆时输出空数组。",

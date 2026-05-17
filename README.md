@@ -90,10 +90,11 @@ Deploy command:     npm run deploy:cloudflare
 | 变量名 | 默认值 | 干嘛的 |
 |--------|--------|--------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天模型 |
-| `MEMORY_FILTER_MODEL` | `openrouter/meta-llama/llama-3.3-70b-instruct` | 记忆筛选压缩小秘书，模型名前缀决定 provider |
+| `MEMORY_FILTER_MODEL` | `grok/grok-4.20-0309-non-reasoning` | 记忆筛选压缩小秘书，模型名前缀决定 provider；non-reasoning 模型不额外传 thinking/reasoning |
 | `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 每次最多交给小秘书的候选记忆 |
 | `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最多返回几条记忆 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
+| `MEMORY_FILTER_MAX_TOKENS` | `1400` | 小秘书 JSON 输出上限，避免多条压缩结果被 700 tokens 截断 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 + 摘要（快且便宜） |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 不填，用 `MEMORY_MODEL` | 长期摘要生成（可选覆盖） |
@@ -205,10 +206,11 @@ https://<你的 Worker 地址>/health
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天 |
-| `MEMORY_FILTER_MODEL` | `openrouter/meta-llama/llama-3.3-70b-instruct` | 记忆筛选，模型名前缀决定 provider |
+| `MEMORY_FILTER_MODEL` | `grok/grok-4.20-0309-non-reasoning` | 记忆筛选，模型名前缀决定 provider；non-reasoning 模型不额外传 thinking/reasoning |
 | `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 进入小秘书的候选记忆上限 |
 | `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最终返回记忆上限 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
+| `MEMORY_FILTER_MAX_TOKENS` | `1400` | 小秘书 JSON 输出上限，避免多条压缩结果被截断 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | 空（用 MEMORY_MODEL） | 摘要生成 |

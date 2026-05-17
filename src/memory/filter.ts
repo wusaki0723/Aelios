@@ -106,6 +106,11 @@ function getMaxOutputChars(env: Env): number {
   return Number.isFinite(value) ? clamp(Math.floor(value), 60, 1000) : 300;
 }
 
+function getMaxTokens(env: Env): number {
+  const value = Number(env.MEMORY_FILTER_MAX_TOKENS || 1400);
+  return Number.isFinite(value) ? clamp(Math.floor(value), 200, 4000) : 1400;
+}
+
 function getFilterMinScore(env: Env): number {
   const value = Number(env.MEMORY_FILTER_MIN_SCORE || env.MEMORY_MIN_SCORE || 0.35);
   return Number.isFinite(value) ? clamp(value, 0, 1) : 0.35;
@@ -323,7 +328,7 @@ function describeModelOutput(value: unknown): string {
   return "object";
 }
 
-async function callWorkersAiFilter(env: Env, prompt: string, model: string): Promise<unknown> {
+async function callWorkersAiFilter(env: Env, prompt: string, model: string, maxTokens: number): Promise<unknown> {
   if (!env.AI) return "";
 
   return env.AI.run(model, {
@@ -338,7 +343,7 @@ async function callWorkersAiFilter(env: Env, prompt: string, model: string): Pro
       }
     ],
     temperature: 0,
-    max_tokens: 700,
+    max_tokens: maxTokens,
     response_format: {
       type: "json_schema",
       json_schema: FILTER_RESPONSE_SCHEMA
@@ -346,7 +351,7 @@ async function callWorkersAiFilter(env: Env, prompt: string, model: string): Pro
   });
 }
 
-async function callOpenAICompatFilter(env: Env, prompt: string, model: string): Promise<string> {
+async function callOpenAICompatFilter(env: Env, prompt: string, model: string, maxTokens: number): Promise<string> {
   const request: OpenAIChatRequest = {
     model,
     messages: [
@@ -360,7 +365,10 @@ async function callOpenAICompatFilter(env: Env, prompt: string, model: string): 
       }
     ],
     temperature: 0,
-    max_tokens: 700,
+    max_tokens: maxTokens,
+    response_format: {
+      type: "json_object"
+    },
     stream: false
   };
 
@@ -433,12 +441,13 @@ export async function filterAndCompressMemoriesWithMeta(
     maxContentChars: getMaxContentChars(env),
     maxOutputChars: getMaxOutputChars(env)
   });
+  const maxTokens = getMaxTokens(env);
 
   try {
     const output =
       provider === "openai-compatible"
-        ? await callOpenAICompatFilter(env, prompt, model)
-        : await callWorkersAiFilter(env, prompt, getWorkersAiModel(env) || model);
+        ? await callOpenAICompatFilter(env, prompt, model, maxTokens)
+        : await callWorkersAiFilter(env, prompt, getWorkersAiModel(env) || model, maxTokens);
     if (!output) {
       return {
         data: [],

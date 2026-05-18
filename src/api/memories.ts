@@ -2,6 +2,7 @@ import { authenticate } from "../auth/apiKey";
 import { requireScope } from "../auth/scopes";
 import { getOrCreateConversation } from "../db/conversations";
 import { saveIngestMessages } from "../db/messages";
+import { runDailyMemoryDigest } from "../memory/dailyDigest";
 import { filterAndCompressMemoriesWithMeta } from "../memory/filter";
 import { formatMemoryPatch } from "../memory/inject";
 import { searchMemories } from "../memory/search";
@@ -181,6 +182,48 @@ async function handleIngestMemories(
   });
 }
 
+async function handleRunDigest(
+  request: Request,
+  env: Env,
+  profile: KeyProfile
+): Promise<Response> {
+  const scopeError = requireScope(profile, "memory:write");
+  if (scopeError) return scopeError;
+
+  const body = await readJsonObject(request);
+  if (!body) return openAiError("Request body must be a JSON object", 400);
+
+  const namespace = resolveNamespace(profile, body.namespace);
+  const date = readString(body.date);
+  const dates = readStringArray(body.dates);
+  const targets = dates.length > 0 ? dates : date ? [date] : [undefined];
+  const maxRuns = readPositiveInt(body.max_runs, Number(env.DAILY_DIGEST_MAX_RUNS || 3), 10);
+  const force = readBoolean(body.force, false);
+  const results: Array<{ date?: string; runs: Array<Awaited<ReturnType<typeof runDailyMemoryDigest>>> }> = [];
+
+  for (const target of targets) {
+    const runs: Array<Awaited<ReturnType<typeof runDailyMemoryDigest>>> = [];
+    for (let i = 0; i < maxRuns; i += 1) {
+      const result = await runDailyMemoryDigest(env, namespace, {
+        dateLabel: target,
+        force: force && i === 0
+      });
+      runs.push(result);
+      if (!result.ran || !result.stats?.hasMore) break;
+    }
+    results.push({ date: target, runs });
+  }
+
+  return json({
+    data: {
+      namespace,
+      force,
+      max_runs: maxRuns,
+      results
+    }
+  });
+}
+
 export async function handleIngestMessagesApi(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const auth = await authenticate(request, env);
   if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
@@ -274,6 +317,10 @@ export async function handleMemories(request: Request, env: Env, ctx: ExecutionC
 
   if (tail.length === 1 && tail[0] === "search" && request.method === "POST") {
     return handleSearchMemories(request, env, auth.profile);
+  }
+
+  if (tail.length === 1 && tail[0] === "digest" && request.method === "POST") {
+    return handleRunDigest(request, env, auth.profile);
   }
 
   if (tail.length === 1 && tail[0] === "ingest" && request.method === "POST") {

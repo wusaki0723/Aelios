@@ -308,6 +308,7 @@ POST   /mcp
 GET    /v1/memories
 POST   /v1/memories
 POST   /v1/memories/search
+POST   /v1/memories/digest
 POST   /v1/memories/ingest
 GET    /v1/memories/:id
 PATCH  /v1/memories/:id
@@ -315,6 +316,7 @@ DELETE /v1/memories/:id
 GET    /v1/memory
 POST   /v1/memory
 POST   /v1/memory/search
+POST   /v1/memory/digest
 GET    /v1/memory/:id
 PATCH  /v1/memory/:id
 DELETE /v1/memory/:id
@@ -390,6 +392,17 @@ POST /v1/search/memories
 默认走 Vectorize 搜索，再用记忆小秘书分拣压缩。想要最低延迟时传 `filter: false`，只返回原始向量命中；想直接拿一段可塞进 prompt 的文本时传 `include_prompt: true`。
 
 简单说：`/v1/memory/search` 是给模型召回用的，可能被小秘书加工；`/v1/memory/:id` 和列表/创建/修改/删除是给人或脚本管理原始记忆库用的。
+
+手动补跑每日小秘书：
+
+```bash
+curl "https://<worker>/v1/memory/digest" \
+  -H "Authorization: Bearer <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"dates":["2026-05-16","2026-05-17"],"max_runs":3}'
+```
+
+不传 `dates` 时默认整理昨天；`force:true` 会忽略当天已完成游标，只有确认要重跑时再用。
 
 **3. 无记忆导盲犬 API**
 

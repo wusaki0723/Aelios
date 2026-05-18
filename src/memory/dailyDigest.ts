@@ -1,4 +1,4 @@
-import { listMessagesByNamespace } from "../db/messages";
+import { listMessagesByNamespaceInRange } from "../db/messages";
 import { readCursor, writeCursor } from "../db/retention";
 import { upsertSummary } from "../db/summaries";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
@@ -45,6 +45,7 @@ interface DailyDigestResult {
 }
 
 interface DailyDigestStats {
+  date: string;
   processedMessages: number;
   addedMemories: number;
   updatedMemories: number;
@@ -52,6 +53,7 @@ interface DailyDigestStats {
   savedExcerpts: number;
   cleanedEmptyMemories: number;
   cursorAdvanced: boolean;
+  hasMore: boolean;
 }
 
 const DEFAULT_MAX_MESSAGES = 320;
@@ -59,6 +61,7 @@ const DEFAULT_MEMORY_CONTEXT_LIMIT = 250;
 const DEFAULT_EXCERPT_LIMIT = 8;
 const DEFAULT_EMPTY_MEMORY_MIN_CHARS = 4;
 const DEFAULT_TIME_ZONE = "Asia/Singapore";
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 function readPositiveInt(value: unknown, fallback: number, max: number): number {
   const parsed = typeof value === "string" ? Number(value) : typeof value === "number" ? value : fallback;
@@ -94,6 +97,95 @@ function formatDate(date: Date, timeZone: string): string {
     month: "2-digit",
     day: "2-digit"
   }).format(date);
+}
+
+function getTargetDigestDateLabel(timeZone: string, now = new Date()): string {
+  return formatDate(new Date(now.getTime() - ONE_DAY_MS), timeZone);
+}
+
+function parseDateLabel(dateLabel: string): { year: number; month: number; day: number } {
+  const [year, month, day] = dateLabel.split("-").map((value) => Number(value));
+  if (!year || !month || !day) {
+    throw new Error(`Invalid date label: ${dateLabel}`);
+  }
+  return { year, month, day };
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+
+  const values = new Map(parts.map((part) => [part.type, part.value]));
+  const year = Number(values.get("year"));
+  const month = Number(values.get("month"));
+  const day = Number(values.get("day"));
+  const hour = Number(values.get("hour")) % 24;
+  const minute = Number(values.get("minute"));
+  const second = Number(values.get("second"));
+  const zonedAsUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+
+  return zonedAsUtc - date.getTime();
+}
+
+function zonedWallTimeToUtc(input: {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  timeZone: string;
+}): Date {
+  const wallClockUtc = Date.UTC(input.year, input.month - 1, input.day, input.hour, input.minute, input.second);
+  let utc = wallClockUtc;
+
+  for (let i = 0; i < 3; i += 1) {
+    const offset = getTimeZoneOffsetMs(new Date(utc), input.timeZone);
+    const next = wallClockUtc - offset;
+    if (Math.abs(next - utc) < 1000) break;
+    utc = next;
+  }
+
+  return new Date(utc);
+}
+
+function addDaysToDateLabel(dateLabel: string, days: number, timeZone: string): string {
+  const { year, month, day } = parseDateLabel(dateLabel);
+  const localNoonUtc = zonedWallTimeToUtc({
+    year,
+    month,
+    day,
+    hour: 12,
+    minute: 0,
+    second: 0,
+    timeZone
+  });
+  return formatDate(new Date(localNoonUtc.getTime() + days * ONE_DAY_MS), timeZone);
+}
+
+function getDateRangeForLabel(dateLabel: string, timeZone: string): { startIso: string; endIso: string } {
+  const start = parseDateLabel(dateLabel);
+  const end = parseDateLabel(addDaysToDateLabel(dateLabel, 1, timeZone));
+
+  return {
+    startIso: zonedWallTimeToUtc({ ...start, hour: 0, minute: 0, second: 0, timeZone }).toISOString(),
+    endIso: zonedWallTimeToUtc({ ...end, hour: 0, minute: 0, second: 0, timeZone }).toISOString()
+  };
+}
+
+function readDailyCursor(value: string | null, startIso: string, endIso: string): { done: boolean; after: string | null } {
+  if (!value) return { done: false, after: null };
+  if (value.startsWith("done:")) return { done: true, after: null };
+  if (value >= startIso && value < endIso) return { done: false, after: value };
+  return { done: false, after: null };
 }
 
 function extractJsonObject(text: string): unknown | null {
@@ -234,15 +326,20 @@ function formatExistingMemories(memories: MemoryApiRecord[]): string {
 
 function buildDigestPrompt(input: {
   dateLabel: string;
+  startIso: string;
+  endIso: string;
   messages: MessageRecord[];
   existingMemories: MemoryApiRecord[];
   excerptLimit: number;
+  hasMore: boolean;
 }): string {
   return [
     "你是每日记忆小秘书。请把一天内的原始聊天整理成少量高质量长期记忆。",
-    "只输出 JSON，不要 markdown，不要解释。",
+    "只输出 JSON，不要 markdown，不要解释，不要输出思考过程。",
     "",
     "总原则：",
+    `- 你只能处理 ${input.dateLabel} 这一天窗口内的聊天。窗口是 ${input.startIso} 到 ${input.endIso}。`,
+    input.hasMore ? "- 这是当天的一批聊天，不是完整一天；只整理这一批里明确出现的信息。" : "- 这是当天最后一批或完整批次。",
     "- 原始聊天不要逐条变成记忆，只保留未来真的会用到的事实、偏好、边界、项目进展、承诺。",
     "- 宁可少记，也不要把临时语气、寒暄、重复话、空内容、调试内容写进长期记忆。",
     "- 当旧记忆和新信息冲突时，优先更新或删除旧记忆，不要并排留下互相打架的版本。",
@@ -304,31 +401,11 @@ function buildDigestPrompt(input: {
   ].join("\n");
 }
 
-function fallbackDigest(dateLabel: string, messages: MessageRecord[]): DailyDigestResult {
-  const userMessages = messages.filter((message) => message.role === "user").map((message) => message.content.trim()).filter(Boolean);
-  const assistantMessages = messages.filter((message) => message.role === "assistant").map((message) => message.content.trim()).filter(Boolean);
-
-  return {
-    date: dateLabel,
-    title: "日常对话",
-    summary: [
-      `${dateLabel} 共沉淀 ${messages.length} 条聊天。`,
-      userMessages.length > 0 ? `近期用户重点：${userMessages.slice(-5).map((text) => truncate(text, 120)).join(" / ")}` : "",
-      assistantMessages.length > 0 ? `我的回应重点：${assistantMessages.slice(-3).map((text) => truncate(text, 120)).join(" / ")}` : ""
-    ].filter(Boolean).join("\n"),
-    sections: [],
-    important_excerpts: [],
-    memories_to_add: [],
-    memories_to_update: [],
-    memories_to_delete: []
-  };
-}
-
 function formatDailySummary(result: DailyDigestResult, dateLabel: string, messages: MessageRecord[]): string {
   const parts = [
     `# ${result.date || dateLabel} ${result.title || "每日摘要"}`,
     "",
-    result.summary || fallbackDigest(dateLabel, messages).summary || ""
+    result.summary || `${dateLabel} 共整理 ${messages.length} 条聊天。`
   ];
 
   for (const section of result.sections ?? []) {
@@ -349,11 +426,14 @@ async function callDigestModel(
   const request: OpenAIChatRequest = {
     model,
     messages: [
-      { role: "system", content: "你是严格的 JSON 生成器。你只输出 JSON。" },
+      { role: "system", content: "你是严格的 JSON 生成器。你只输出 JSON，不要输出思考过程。" },
       { role: "user", content: prompt }
     ],
     temperature: 0,
-    max_tokens: 2200,
+    max_tokens: readPositiveInt(env.DAILY_DIGEST_MAX_TOKENS, 3000, 8000),
+    response_format: {
+      type: "json_object"
+    },
     stream: false
   };
 
@@ -363,8 +443,8 @@ async function callDigestModel(
     const parsed = (await response.json()) as OpenAIChatResponse;
     const message = parsed.choices?.[0]?.message as ({ content?: unknown; reasoning_content?: unknown }) | undefined;
     const content = typeof message?.content === "string" ? message.content.trim() : "";
-    const reasoning = typeof message?.reasoning_content === "string" ? message.reasoning_content.trim() : "";
-    const json = extractJsonObject(content || reasoning);
+    const json = extractJsonObject(content);
+    if (!json) return null;
     return normalizeDigestResult(json);
   } catch (error) {
     console.error("daily digest model failed", error);
@@ -407,6 +487,10 @@ async function saveDailySummaryMemory(
     source: "daily_digest",
     sourceMessageIds: input.messageIds
   });
+}
+
+function shouldSaveDailySummaryMemory(env: Env): boolean {
+  return env.ENABLE_DAILY_SUMMARY_MEMORY === "true";
 }
 
 async function saveImportantExcerpts(
@@ -478,15 +562,29 @@ export async function runDailyMemoryDigest(
 ): Promise<{ ran: boolean; stats?: DailyDigestStats }> {
   if (env.ENABLE_DAILY_MEMORY_DIGEST === "false") return { ran: false };
 
-  const cursorName = `daily_digest:${namespace}`;
-  const cursor = await readCursor(env.DB, cursorName);
-  const maxMessages = readPositiveInt(env.DAILY_DIGEST_MAX_MESSAGES, DEFAULT_MAX_MESSAGES, 1000);
-  const messages = await listMessagesByNamespace(env.DB, namespace, cursor, maxMessages);
-  if (messages.length === 0) return { ran: false };
-
   const timeZone = readString(env.DAILY_DIGEST_TIME_ZONE) || DEFAULT_TIME_ZONE;
+  const dateLabel = getTargetDigestDateLabel(timeZone);
+  const { startIso, endIso } = getDateRangeForLabel(dateLabel, timeZone);
+  const cursorName = `daily_digest:${namespace}:${dateLabel}`;
+  const cursor = await readCursor(env.DB, cursorName);
+  const cursorState = readDailyCursor(cursor, startIso, endIso);
+  if (cursorState.done) return { ran: false };
+
+  const maxMessages = readPositiveInt(env.DAILY_DIGEST_MAX_MESSAGES, DEFAULT_MAX_MESSAGES, 1000);
+  const messages = await listMessagesByNamespaceInRange(env.DB, {
+    namespace,
+    startCreatedAt: startIso,
+    endCreatedAt: endIso,
+    afterCreatedAt: cursorState.after,
+    limit: maxMessages
+  });
+  if (messages.length === 0) {
+    await writeCursor(env.DB, cursorName, `done:${cursorState.after ?? startIso}`);
+    return { ran: false };
+  }
+
   const lastMessage = messages[messages.length - 1];
-  const dateLabel = formatDate(new Date(lastMessage.created_at), timeZone);
+  const hasMore = messages.length >= maxMessages;
   const memoryContextLimit = readPositiveInt(
     env.DAILY_DIGEST_MEMORY_CONTEXT_LIMIT,
     DEFAULT_MEMORY_CONTEXT_LIMIT,
@@ -505,11 +603,18 @@ export async function runDailyMemoryDigest(
 
   const prompt = buildDigestPrompt({
     dateLabel,
+    startIso,
+    endIso,
     messages,
     existingMemories,
-    excerptLimit: readPositiveInt(env.DAILY_DIGEST_EXCERPT_LIMIT, DEFAULT_EXCERPT_LIMIT, 20)
+    excerptLimit: readPositiveInt(env.DAILY_DIGEST_EXCERPT_LIMIT, DEFAULT_EXCERPT_LIMIT, 20),
+    hasMore
   });
-  const digest = (await callDigestModel(env, prompt)) ?? fallbackDigest(dateLabel, messages);
+  const digest = await callDigestModel(env, prompt);
+  if (!digest) {
+    console.error("daily digest: model did not return valid JSON; cursor not advanced");
+    return { ran: false };
+  }
   const summaryContent = formatDailySummary(digest, dateLabel, messages);
   const messageIds = messages.map((message) => message.id);
 
@@ -520,12 +625,14 @@ export async function runDailyMemoryDigest(
     toMessageId: lastMessage.id,
     messageCount: messages.length
   });
-  await saveDailySummaryMemory(env, {
-    namespace,
-    dateLabel,
-    content: summaryContent,
-    messageIds
-  });
+  if (shouldSaveDailySummaryMemory(env)) {
+    await saveDailySummaryMemory(env, {
+      namespace,
+      dateLabel,
+      content: summaryContent,
+      messageIds
+    });
+  }
 
   const updates = await applyMemoryUpdates(env, {
     namespace,
@@ -555,18 +662,20 @@ export async function runDailyMemoryDigest(
     fallbackMessageIds: messageIds
   });
 
-  await writeCursor(env.DB, cursorName, lastMessage.created_at);
+  await writeCursor(env.DB, cursorName, hasMore ? lastMessage.created_at : `done:${lastMessage.created_at}`);
 
   return {
     ran: true,
     stats: {
+      date: dateLabel,
       processedMessages: messages.length,
       addedMemories,
       updatedMemories: updates.updated,
       deletedMemories: updates.deleted,
       savedExcerpts,
       cleanedEmptyMemories,
-      cursorAdvanced: true
+      cursorAdvanced: true,
+      hasMore
     }
   };
 }

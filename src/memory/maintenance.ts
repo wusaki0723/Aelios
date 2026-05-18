@@ -73,6 +73,8 @@ export async function runMemoryMaintenance(
   env: Env,
   message: MemoryMaintenanceQueueMessage
 ): Promise<{ processed: boolean }> {
+  if (env.ENABLE_INCREMENTAL_MEMORY !== "true") return { processed: false };
+
   const started = await tryStartIdempotentTask(env.DB, {
     key: message.idempotencyKey,
     taskType: message.type

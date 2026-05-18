@@ -16,6 +16,25 @@ function getDailyDigestNamespace(env: Env): string {
   return env.DAILY_DIGEST_NAMESPACE?.trim() || "default";
 }
 
+function getDailyDigestMaxRuns(env: Env): number {
+  const parsed = Number(env.DAILY_DIGEST_MAX_RUNS || 3);
+  if (!Number.isFinite(parsed)) return 3;
+  return Math.min(Math.max(Math.floor(parsed), 1), 10);
+}
+
+async function runDailyMemoryDigestBatches(env: Env, namespace: string): Promise<unknown[]> {
+  const results: unknown[] = [];
+  const maxRuns = getDailyDigestMaxRuns(env);
+
+  for (let i = 0; i < maxRuns; i += 1) {
+    const result = await runDailyMemoryDigest(env, namespace);
+    results.push(result);
+    if (!result.ran || !result.stats?.hasMore) break;
+  }
+
+  return results;
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -89,7 +108,7 @@ export default {
     const namespace = getDailyDigestNamespace(env);
     ctx.waitUntil(
       Promise.all([
-        runDailyMemoryDigest(env, namespace),
+        runDailyMemoryDigestBatches(env, namespace),
         runMemoryRetention(env, namespace)
       ]).then(([digest, retention]) => {
         console.log("scheduled daily memory maintenance", { namespace, digest, retention });

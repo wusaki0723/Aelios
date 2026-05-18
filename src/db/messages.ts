@@ -184,6 +184,36 @@ export async function listMessagesByNamespace(
   return result.results ?? [];
 }
 
+export async function listMessagesByNamespaceInRange(
+  db: D1Database,
+  input: {
+    namespace: string;
+    startCreatedAt: string;
+    endCreatedAt: string;
+    afterCreatedAt?: string | null;
+    limit: number;
+  }
+): Promise<MessageRecord[]> {
+  let sql = `SELECT id, conversation_id, namespace, role, content, source, created_at
+             FROM messages
+             WHERE namespace = ?
+               AND role IN ('user', 'assistant')
+               AND created_at >= ?
+               AND created_at < ?`;
+  const binds: unknown[] = [input.namespace, input.startCreatedAt, input.endCreatedAt];
+
+  if (input.afterCreatedAt) {
+    sql += ` AND created_at > ?`;
+    binds.push(input.afterCreatedAt);
+  }
+
+  sql += ` ORDER BY created_at ASC LIMIT ?`;
+  binds.push(input.limit);
+
+  const result = await db.prepare(sql).bind(...binds).all<MessageRecord>();
+  return result.results ?? [];
+}
+
 export async function saveIngestMessages(
   db: D1Database,
   input: {

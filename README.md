@@ -95,9 +95,9 @@ Deploy command:     npm run deploy:cloudflare
 | `MEMORY_FILTER_MAX_OUTPUT` | `6` | 小秘书最多返回几条记忆 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
 | `MEMORY_FILTER_MAX_TOKENS` | `1400` | 小秘书 JSON 输出上限，避免多条压缩结果被 700 tokens 截断 |
-| `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 + 摘要（快且便宜） |
+| `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
-| `SUMMARY_MODEL` | 不填，用 `MEMORY_MODEL` | 长期摘要生成（可选覆盖） |
+| `SUMMARY_MODEL` | `grok/grok-4.20-0309-non-reasoning` | 每日整理小秘书，默认不用推理模型，避免 thinking 挤掉 JSON |
 | `EMBEDDING_MODEL` | `google-ai-studio/gemini-embedding-2` | 向量嵌入 |
 | `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
@@ -213,7 +213,7 @@ https://<你的 Worker 地址>/health
 | `MEMORY_FILTER_MAX_TOKENS` | `1400` | 小秘书 JSON 输出上限，避免多条压缩结果被截断 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
-| `SUMMARY_MODEL` | 空（用 MEMORY_MODEL） | 摘要生成 |
+| `SUMMARY_MODEL` | `grok/grok-4.20-0309-non-reasoning` | 每日整理小秘书，默认不用推理模型，避免 thinking 挤掉 JSON |
 | `EMBEDDING_MODEL` | `google-ai-studio/gemini-embedding-2` | 向量嵌入 |
 | `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
@@ -246,10 +246,13 @@ https://<你的 Worker 地址>/health
 | `ENABLE_AUTO_MEMORY` | 空（开启） | 设 `false` 关闭自动记忆 |
 | `ENABLE_INCREMENTAL_MEMORY` | `false` | 设 `true` 才恢复每轮聊天后即时抽取 |
 | `ENABLE_DAILY_MEMORY_DIGEST` | `true` | 每日小秘书整理原始聊天 |
-| `DAILY_DIGEST_TIME_ZONE` | `Asia/Singapore` | 每日摘要日期使用的时区 |
-| `DAILY_DIGEST_MAX_MESSAGES` | `320` | 每次每日整理最多处理的原始消息数 |
+| `DAILY_DIGEST_TIME_ZONE` | `Asia/Singapore` | 每日整理按这个时区切自然日；默认每天凌晨处理昨天 |
+| `DAILY_DIGEST_MAX_MESSAGES` | `320` | 每次每日整理最多处理的原始消息数；当天太长会分批继续 |
+| `DAILY_DIGEST_MAX_RUNS` | `3` | 每次定时任务最多连续整理几批，防止单次模型输入太大 |
+| `DAILY_DIGEST_MAX_TOKENS` | `3000` | 每日整理小秘书最多输出 token |
 | `DAILY_DIGEST_MEMORY_CONTEXT_LIMIT` | `250` | 每日整理时提供给模型参考的旧记忆数量 |
 | `DAILY_DIGEST_EXCERPT_LIMIT` | `8` | 每日最多保存的重要原文段落 |
+| `ENABLE_DAILY_SUMMARY_MEMORY` | `false` | 设 `true` 才把每日摘要也写入 Vectorize；默认只留在 D1 |
 | `EMPTY_MEMORY_MIN_CHARS` | `4` | 每日整理时清理短空记忆的阈值 |
 | `PUBLIC_MODEL_NAME` | `companion` | 客户端看到的模型名 |
 | `MEMORY_MCP_API_KEY` | 空 | 纯记忆库 MCP 的单独钥匙 |
@@ -516,11 +519,12 @@ dash_to_comma:      —、——、– 改成 ，
 保存 user/assistant messages 到 D1
   -> 默认不即时写入长期记忆
   -> 每天 04:10（Asia/Singapore）触发 scheduled 小秘书
-    -> 读取上次整理后的原始聊天
+    -> 只读取昨天这个自然日的原始聊天
+    -> 如果当天聊天太多，就按 DAILY_DIGEST_MAX_MESSAGES 分批处理，最多连续跑 DAILY_DIGEST_MAX_RUNS 批
     -> 读取一批 Vectorize 旧 active 记忆作为参考
     -> 清理空/过短记忆
     -> SUMMARY_MODEL/MEMORY_MODEL 生成固定格式日摘要
-    -> 保存 daily_summary + important excerpt
+    -> 日摘要默认只保存到 D1；important excerpt 可进入 Vectorize
     -> 新增少量高质量长期记忆
     -> 更新/删除冲突、重复、过期旧记忆
     -> 原始 messages 只保留 3 天

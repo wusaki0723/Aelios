@@ -369,6 +369,7 @@ async function callOpenAICompatFilter(env: Env, prompt: string, model: string, m
     response_format: {
       type: "json_object"
     },
+    enable_thinking: false,
     stream: false
   };
 
@@ -376,8 +377,10 @@ async function callOpenAICompatFilter(env: Env, prompt: string, model: string, m
   if (!response.ok) return "";
 
   const parsed = (await response.json()) as OpenAIChatResponse;
-  const content = parsed.choices?.[0]?.message?.content;
-  return typeof content === "string" ? content : "";
+  const message = parsed.choices?.[0]?.message;
+  const content = typeof message?.content === "string" ? message.content.trim() : "";
+  const reasoning = typeof message?.reasoning_content === "string" ? message.reasoning_content.trim() : "";
+  return content || reasoning;
 }
 
 export async function filterAndCompressMemories(

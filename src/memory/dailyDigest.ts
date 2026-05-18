@@ -558,16 +558,17 @@ async function applyMemoryUpdates(
 
 export async function runDailyMemoryDigest(
   env: Env,
-  namespace: string
+  namespace: string,
+  options: { dateLabel?: string; force?: boolean } = {}
 ): Promise<{ ran: boolean; stats?: DailyDigestStats }> {
   if (env.ENABLE_DAILY_MEMORY_DIGEST === "false") return { ran: false };
 
   const timeZone = readString(env.DAILY_DIGEST_TIME_ZONE) || DEFAULT_TIME_ZONE;
-  const dateLabel = getTargetDigestDateLabel(timeZone);
+  const dateLabel = readString(options.dateLabel) || getTargetDigestDateLabel(timeZone);
   const { startIso, endIso } = getDateRangeForLabel(dateLabel, timeZone);
   const cursorName = `daily_digest:${namespace}:${dateLabel}`;
   const cursor = await readCursor(env.DB, cursorName);
-  const cursorState = readDailyCursor(cursor, startIso, endIso);
+  const cursorState = options.force ? { done: false, after: null } : readDailyCursor(cursor, startIso, endIso);
   if (cursorState.done) return { ran: false };
 
   const maxMessages = readPositiveInt(env.DAILY_DIGEST_MAX_MESSAGES, DEFAULT_MAX_MESSAGES, 1000);

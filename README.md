@@ -97,7 +97,7 @@ Deploy command:     npm run deploy:cloudflare
 | `MEMORY_FILTER_MAX_TOKENS` | `1400` | 小秘书 JSON 输出上限，避免多条压缩结果被 700 tokens 截断 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
-| `SUMMARY_MODEL` | `grok/grok-4.20-0309-non-reasoning` | 每日整理小秘书，默认不用推理模型，避免 thinking 挤掉 JSON |
+| `SUMMARY_MODEL` | `deepseek/deepseek-v4-pro` | 每日整理小秘书，负责把 D1 临时聊天整理入长期记忆 |
 | `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入，默认走 Workers AI |
 | `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
@@ -213,7 +213,7 @@ https://<你的 Worker 地址>/health
 | `MEMORY_FILTER_MAX_TOKENS` | `1400` | 小秘书 JSON 输出上限，避免多条压缩结果被截断 |
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
-| `SUMMARY_MODEL` | `grok/grok-4.20-0309-non-reasoning` | 每日整理小秘书，默认不用推理模型，避免 thinking 挤掉 JSON |
+| `SUMMARY_MODEL` | `deepseek/deepseek-v4-pro` | 每日整理小秘书，负责把 D1 临时聊天整理入长期记忆 |
 | `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入，默认走 Workers AI |
 | `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
@@ -249,7 +249,7 @@ https://<你的 Worker 地址>/health
 | `DAILY_DIGEST_TIME_ZONE` | `Asia/Singapore` | 每日整理按这个时区切自然日；默认每天凌晨处理昨天 |
 | `DAILY_DIGEST_MAX_MESSAGES` | `320` | 每次每日整理最多处理的原始消息数；当天太长会分批继续 |
 | `DAILY_DIGEST_MAX_RUNS` | `3` | 每次定时任务最多连续整理几批，防止单次模型输入太大 |
-| `DAILY_DIGEST_MAX_TOKENS` | `3000` | 每日整理小秘书最多输出 token |
+| `DAILY_DIGEST_MAX_TOKENS` | `5000` | 每日整理小秘书最多输出 token |
 | `DAILY_DIGEST_MEMORY_CONTEXT_LIMIT` | `250` | 每日整理时提供给模型参考的旧记忆数量 |
 | `DAILY_DIGEST_EXCERPT_LIMIT` | `8` | 每日最多保存的重要原文段落 |
 | `ENABLE_DAILY_SUMMARY_MEMORY` | `false` | 设 `true` 才把每日摘要也写入 Vectorize；默认只留在 D1 |

@@ -173,6 +173,17 @@ async function getVectorsByIdsBatched(
   return vectors;
 }
 
+function candidateVectorIds(id: string): string[] {
+  const trimmed = id.trim();
+  if (!trimmed) return [];
+  const candidates = trimmed.startsWith("mem_mem_")
+    ? [trimmed]
+    : trimmed.startsWith("mem_")
+      ? [`mem_${trimmed}`, trimmed]
+      : [`mem_${trimmed}`, trimmed];
+  return [...new Set(candidates)];
+}
+
 export async function createVectorMemory(env: Env, input: VectorMemoryInput): Promise<MemoryApiRecord> {
   const content = input.content.trim();
   if (!content) throw new Error("content is required");
@@ -232,14 +243,22 @@ export async function createVectorMemory(env: Env, input: VectorMemoryInput): Pr
 }
 
 export async function getVectorMemory(env: Env, id: string): Promise<MemoryApiRecord | null> {
-  const vectorId = id.startsWith("mem_") ? id : `mem_${id}`;
-  const vectors = await requireVectorize(env).getByIds([vectorId]);
-  return vectorMetadataToMemoryRecord(vectors[0] || { id: vectorId, metadata: {} });
+  const vectorIds = candidateVectorIds(id);
+  const vectors = vectorIds.length > 0 ? await requireVectorize(env).getByIds(vectorIds) : [];
+
+  for (const vector of vectors) {
+    const record = vectorMetadataToMemoryRecord(vector);
+    if (record) return record;
+  }
+
+  return null;
 }
 
 export async function deleteVectorMemory(env: Env, id: string): Promise<boolean> {
-  const vectorId = id.startsWith("mem_") ? id : `mem_${id}`;
-  await requireVectorize(env).deleteByIds([vectorId]);
+  const existing = await getVectorMemory(env, id);
+  const vectorIds = existing?.vector_id ? [existing.vector_id] : candidateVectorIds(id);
+  if (vectorIds.length === 0) return false;
+  await requireVectorize(env).deleteByIds(vectorIds);
   return true;
 }
 

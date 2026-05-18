@@ -87,6 +87,7 @@ export async function upsertMemoryEmbedding(env: Env, memory: MemoryRecord): Pro
   await env.VECTORIZE.upsert([
     {
       id: memory.vector_id,
+      namespace: memory.namespace,
       values: vector,
       metadata: {
         namespace: memory.namespace,

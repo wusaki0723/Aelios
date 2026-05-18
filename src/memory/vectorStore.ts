@@ -215,6 +215,7 @@ export async function createVectorMemory(env: Env, input: VectorMemoryInput): Pr
   await requireVectorize(env).upsert([
     {
       id: vectorId,
+      namespace: normalized.namespace,
       values: vector,
       metadata: toMetadata(normalized)
     }
@@ -299,6 +300,7 @@ export async function updateVectorMemory(
   await requireVectorize(env).upsert([
     {
       id: vectorId,
+      namespace: next.namespace,
       values: vector,
       metadata: toMetadata(next)
     }

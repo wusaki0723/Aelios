@@ -73,12 +73,17 @@ function compactMatch(match: VectorizeMatch): Record<string, unknown> {
   const record = vectorMetadataToMemoryRecord(match, match.score);
   return {
     id: match.id,
+    vector_namespace: match.namespace,
     score: match.score,
     namespace: record?.namespace,
     ref_id: record?.id,
     type: record?.type,
     content_preview: record?.content.slice(0, 120)
   };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function queryVectorize(
@@ -102,6 +107,53 @@ async function queryVectorize(
     namespaced: namespaced.matches.map(compactMatch),
     legacy: legacy.matches.map(compactMatch)
   };
+}
+
+async function waitForVectorMemory(
+  env: Env,
+  memory: MemoryApiRecord,
+  vector: number[],
+  namespace: string
+): Promise<{
+  visible: boolean;
+  attempts: number;
+  getByPublicId: MemoryApiRecord | null;
+  getByVectorId: MemoryApiRecord | null;
+  directQuery: { namespaced: Record<string, unknown>[]; legacy: Record<string, unknown>[] };
+  apiSearch: MemoryApiRecord[];
+}> {
+  let getByPublicId: MemoryApiRecord | null = null;
+  let getByVectorId: MemoryApiRecord | null = null;
+  let directQuery: { namespaced: Record<string, unknown>[]; legacy: Record<string, unknown>[] } = {
+    namespaced: [],
+    legacy: []
+  };
+  let apiSearch: MemoryApiRecord[] = [];
+
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    getByPublicId = await getVectorMemory(env, memory.id);
+    getByVectorId = memory.vector_id ? await getVectorMemory(env, memory.vector_id) : null;
+    directQuery = await queryVectorize(env, vector, namespace);
+    apiSearch = await searchVectorMemories(env, {
+      namespace,
+      query: memory.content,
+      topK: 10
+    });
+
+    const visible =
+      Boolean(getByPublicId || getByVectorId) ||
+      directQuery.namespaced.some((match) => match.id === memory.vector_id || match.ref_id === memory.id) ||
+      directQuery.legacy.some((match) => match.id === memory.vector_id || match.ref_id === memory.id) ||
+      apiSearch.some((item) => item.id === memory.id || item.vector_id === memory.vector_id);
+
+    if (visible || attempt === 8) {
+      return { visible, attempts: attempt, getByPublicId, getByVectorId, directQuery, apiSearch };
+    }
+
+    await delay(2500);
+  }
+
+  return { visible: false, attempts: 8, getByPublicId, getByVectorId, directQuery, apiSearch };
 }
 
 export async function handleVectorHealth(request: Request, env: Env): Promise<Response> {
@@ -172,25 +224,19 @@ export async function handleVectorHealth(request: Request, env: Env): Promise<Re
       vector_id: created.vector_id
     };
 
-    const getByPublicId = await getVectorMemory(env, created.id);
-    const getByVectorId = created.vector_id ? await getVectorMemory(env, created.vector_id) : null;
+    const visibility = await waitForVectorMemory(env, created, vector, namespace);
     checks.get = {
-      by_id: Boolean(getByPublicId),
-      by_vector_id: Boolean(getByVectorId),
-      by_id_vector_id: getByPublicId?.vector_id || null,
-      by_vector_id_vector_id: getByVectorId?.vector_id || null
+      attempts: visibility.attempts,
+      by_id: Boolean(visibility.getByPublicId),
+      by_vector_id: Boolean(visibility.getByVectorId),
+      by_id_vector_id: visibility.getByPublicId?.vector_id || null,
+      by_vector_id_vector_id: visibility.getByVectorId?.vector_id || null
     };
 
-    const directQuery = await queryVectorize(env, vector, namespace);
-    const apiSearch = await searchVectorMemories(env, {
-      namespace,
-      query: phrase,
-      topK: 10
-    });
-    checks.after_query = directQuery;
+    checks.after_query = visibility.directQuery;
     checks.api_search = {
-      count: apiSearch.length,
-      hits: apiSearch.map((memory) => ({
+      count: visibility.apiSearch.length,
+      hits: visibility.apiSearch.map((memory) => ({
         id: memory.id,
         vector_id: memory.vector_id,
         score: memory.score,
@@ -199,20 +245,14 @@ export async function handleVectorHealth(request: Request, env: Env): Promise<Re
       }))
     };
 
-    const foundCreated =
-      Boolean(getByPublicId || getByVectorId) ||
-      directQuery.namespaced.some((match) => match.id === created?.vector_id || match.ref_id === created?.id) ||
-      directQuery.legacy.some((match) => match.id === created?.vector_id || match.ref_id === created?.id) ||
-      apiSearch.some((memory) => memory.id === created?.id || memory.vector_id === created?.vector_id);
-
     checks.result = {
-      ok: foundCreated,
-      reason: foundCreated ? "canary_visible_after_write" : "canary_not_visible_after_write"
+      ok: visibility.visible,
+      reason: visibility.visible ? "canary_visible_after_write" : "canary_not_visible_after_write"
     };
 
-    result.ok = foundCreated;
+    result.ok = visibility.visible;
     result.checks = checks;
-    return json(result, { status: foundCreated ? 200 : 500 });
+    return json(result, { status: visibility.visible ? 200 : 500 });
   } catch (error) {
     result.checks = {
       ...(typeof result.checks === "object" && result.checks ? result.checks : {}),

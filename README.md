@@ -98,7 +98,7 @@ Deploy command:     npm run deploy:cloudflare
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | `grok/grok-4.20-0309-non-reasoning` | 每日整理小秘书，默认不用推理模型，避免 thinking 挤掉 JSON |
-| `EMBEDDING_MODEL` | `google-ai-studio/gemini-embedding-2` | 向量嵌入 |
+| `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入，默认走 Workers AI |
 | `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
 想换模型？直接在 Cloudflare Dashboard 的 Variables 里改，不用动代码。
@@ -214,7 +214,7 @@ https://<你的 Worker 地址>/health
 | `MEMORY_MODEL` | `deepseek/deepseek-v4-flash` | 记忆抽取 |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
 | `SUMMARY_MODEL` | `grok/grok-4.20-0309-non-reasoning` | 每日整理小秘书，默认不用推理模型，避免 thinking 挤掉 JSON |
-| `EMBEDDING_MODEL` | `google-ai-studio/gemini-embedding-2` | 向量嵌入 |
+| `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入，默认走 Workers AI |
 | `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
 
 **Claude 专属（可选）：**
@@ -429,7 +429,7 @@ Worker:      companion-memory-proxy
 D1:          companion_memory_proxy
 Vectorize:   memo-kb (768 维 cosine)
 Queue:       companion-memory
-Embedding:   google-ai-studio/gemini-embedding-2
+Embedding:   workers-ai/@cf/google/embeddinggemma-300m
 Dimensions:  768 (如覆盖 EMBEDDING_MODEL，输出维度仍需匹配)
 ```
 

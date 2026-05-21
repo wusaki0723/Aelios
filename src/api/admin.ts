@@ -21,7 +21,7 @@ const ADMIN_HTML = String.raw`<!doctype html>
 *{box-sizing:border-box} html,body{height:100%} body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden}
 button,input,textarea,select{font:inherit;color:inherit} button{cursor:pointer} .mono{font-family:var(--mono);font-size:12px}
 .app{height:100dvh;display:grid;grid-template-rows:48px 1fr}
-.top{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);background:rgba(17,18,21,.9);backdrop-filter:blur(12px)}
+.top{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel);backdrop-filter:blur(12px)}
 .brand{display:flex;align-items:center;gap:9px;min-width:138px}.mark{width:24px;height:24px;border-radius:6px;background:var(--accent);color:#111;display:grid;place-items:center;font-weight:800}.brand b{display:block;font-size:13px}.brand span{display:block;font:10px var(--mono);letter-spacing:.14em;color:var(--faint)}
 .tabs{display:flex;gap:5px}.tab{height:32px;border:1px solid transparent;background:transparent;color:var(--muted);border-radius:6px;padding:0 10px}.tab.active{background:var(--panel2);color:var(--text);border-color:var(--line)}
 .cred{display:flex;gap:8px;flex:1;min-width:0}.input{height:32px;border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:0 9px;outline:none;min-width:0}.input:focus,.textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent2)}.worker{flex:1}.key{width:260px}

@@ -107,7 +107,7 @@ function buildClientFiltered(items){
   });
 }
 async function loadList(cursor=null, append=false){
-  state.loading = true; state.error = ""; if(!append) state.memories = []; render();
+  state.loading = true; state.error = ""; if(!append) state.memories = []; render(append);
   try {
     const data = await request("/v1/memory?limit=100" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""));
     const incoming = data.data || [];
@@ -115,11 +115,11 @@ async function loadList(cursor=null, append=false){
     state.paging = data.paging || { cursor:null, has_more:false, count:incoming.length };
     state.status = "connected";
   } catch(e) { state.error = e.message; state.status = state.status === "idle" ? "error" : state.status; }
-  state.loading = false; render();
+  state.loading = false; render(append);
 }
 async function searchMemories(){
   if(!state.filters.query.trim()){ await loadList(); return; }
-  state.loading = true; state.error = ""; state.memories = []; render();
+  state.loading = true; state.error = ""; state.memories = []; render(false);
   try {
     const body = {
       query: state.filters.query,
@@ -133,7 +133,7 @@ async function searchMemories(){
     state.paging = { cursor:null, has_more:false, count:data.meta?.count || state.memories.length, total_count:data.meta?.raw_count, meta:data.meta };
     state.status = "connected";
   } catch(e) { state.error = e.message; }
-  state.loading = false; render();
+  state.loading = false; render(false);
 }
 async function saveMemory(){
   const form = collectForm();
@@ -345,9 +345,26 @@ function renderDebug(){
     '<section class="debug-card"><div class="debug-head"><b>Vector Health</b><span class="meta">GET /v1/debug/vector_health</span><span class="grow"></span><button class="btn primary" id="run-health">'+(state.debugLoading==="health"?"运行中":"运行向量健康检查")+'</button></div>'+healthRows()+'</section>'+
     '<section class="debug-card"><div class="debug-head"><b>Vector Reindex</b><span class="meta">POST /v1/debug/vector_reindex</span><span class="grow"></span><button class="btn" id="run-dry">'+(state.debugLoading==="dry"?"统计中":"Dry run")+'</button><button class="btn danger" id="run-reindex">'+(state.debugLoading==="run"?"重嵌中":"重嵌当前页")+'</button></div>'+reindexRows()+(state.reindex?.data?.has_more?'<div style="padding:12px"><button class="btn" id="reindex-next">下一页 cursor</button></div>':'')+'</section></main>';
 }
-function render(){
+function captureScroll(){
+  return {
+    list: $(".list")?.scrollTop || 0,
+    detail: $(".detail")?.scrollTop || 0,
+    side: $(".side")?.scrollTop || 0,
+    debug: $(".debug")?.scrollTop || 0
+  };
+}
+function restoreScroll(pos){
+  if(!pos) return;
+  const list = $(".list"); if(list) list.scrollTop = pos.list || 0;
+  const detail = $(".detail"); if(detail) detail.scrollTop = pos.detail || 0;
+  const side = $(".side"); if(side) side.scrollTop = pos.side || 0;
+  const debug = $(".debug"); if(debug) debug.scrollTop = pos.debug || 0;
+}
+function render(preserveScroll=true){
+  const scroll = preserveScroll ? captureScroll() : null;
   app.innerHTML = renderTop() + (state.tab === "debug" ? renderDebug() : '<div class="main">'+renderFilters()+renderList()+renderDetail()+'</div>') + (state.toast ? '<div class="toast">'+esc(state.toast)+'</div>' : "");
   bind();
+  restoreScroll(scroll);
 }
 function bind(){
   $("#worker-url")?.addEventListener("input", e=>{ state.workerUrl=e.target.value; savePrefs(); });

@@ -36,36 +36,52 @@ Aelios 是一个跑在 Cloudflare Workers 上的 AI 记忆系统。你把 Chatbo
 
 ---
 
-## 人类版：照着点就行
+## 人类版：有手就行的图文部署教程
 
-你不用看代码。卡住了就把这个项目的链接发给你的 AI，让它照下面的"AI 版"帮你操作。
+你不用看代码。照着点就能先跑起一个最小记忆库；想把它接成完整聊天网关，再多填两个 AI Gateway 变量就行。
+
+这份教程分两档：
+
+1. **最小记忆库可用版**：可以写入、搜索、编辑、删除长期记忆；默认 embedding 和记忆筛选小秘书都走 Cloudflare Workers AI。
+2. **完整版聊天网关**：可以接 Chatbox、Cherry Studio、网页前端、IM bot 等 OpenAI-compatible 客户端，让聊天自动注入记忆。
 
 ### 第一步：Fork 项目
 
-打开项目地址，点右上角 `Fork` -> `Create fork`：
+打开项目地址：
+
+[https://github.com/wusaki0723/Aelios](https://github.com/wusaki0723/Aelios)
+
+点击右上角：
 
 ```
-https://github.com/wusaki0723/Aelios
+Fork -> Create fork
 ```
 
-Fork 完你会得到自己的仓库：
+仓库名可以改，也可以不改。
+如果你特别在意隐私，可以在仓库 Settings 里把 fork 改成 private。
+
+不用太担心 GitHub 仓库本身，因为你的聊天内容和记忆不会存在 GitHub 里，它们会存在你自己的 Cloudflare D1 和 Vectorize 里。
+
+### 第二步：在 Cloudflare 创建 Worker
+
+打开 Cloudflare Dashboard，进入：
 
 ```
-https://github.com/<你的名字>/Aelios
+Workers & Pages
+-> Create application
 ```
 
-### 第二步：Cloudflare 关联你的 Fork
+![进入 Workers and Pages](docs/assets/tutorial/cloudflare-workers-create-application.png)
 
-```
-Cloudflare Dashboard
-  -> Workers & Pages
-  -> Create application
-  -> Import a repository
-  -> 选 GitHub
-  -> 选 <你的名字>/Aelios
-```
+选择连接 GitHub，然后选中你刚刚 fork 的 Aelios 仓库。
 
-配置这样填：
+![选择 Aelios 仓库](docs/assets/tutorial/cloudflare-select-aelios-repository.png)
+
+中间如果出现授权、连接 GitHub、选择仓库之类的页面，保持默认即可。
+
+### 第三步：填写部署配置
+
+Cloudflare 会让你填写项目配置。照下面这样填：
 
 ```
 Project name:       companion-memory-proxy
@@ -75,62 +91,89 @@ Build command:      npm ci
 Deploy command:     npm run deploy:cloudflare
 ```
 
-**Deploy command 不要改！** 必须是 `npm run deploy:cloudflare`。它会自动建 D1、Vectorize、Queue、跑数据库升级、再部署。
+**Deploy command 一定要填 `npm run deploy:cloudflare`。**
 
-### 第三步：填必填变量
+不要填成 `npm run deploy`，也不要填成 `wrangler deploy`。
+这个命令会自动帮你创建和升级 D1、Vectorize、Queue，然后再部署 Worker。
 
-在 Cloudflare 项目 -> `Variables and Secrets` 里添加：
+填完之后点 Deploy。
 
-| 变量名 | 在哪里找 | 说明 |
-|--------|---------|------|
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Dashboard 右侧/URL 里 | 你的 Account ID |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API Tokens 页面 | 给 Worker 调 Vectorize 管理 API 用 |
-| `AI_GATEWAY_BASE_URL` | Cloudflare AI Gateway 页面 | 你的网关地址，长这样：`https://gateway.ai.cloudflare.com/v1/xxx/yyy` |
-| `CF_AIG_TOKEN` | Cloudflare Dashboard | AI Gateway 调用用的 token |
-| `CHATBOX_API_KEY` | 你自己编一个 | 客户端连接用的密码，例如 `sk-my-key-123` |
+### 第四步：添加最小必填变量
 
-填完这些，**完整版**就能跑了。MCP 和导盲犬 API 不用先管。
+第一次部署可能会因为缺环境变量失败，这是正常的。
+进入你刚刚创建的 Worker 项目：
 
-`CLOUDFLARE_API_TOKEN` 至少需要 Vectorize Read 权限；如果你要用 MCP 删除记忆、运行清理脚本，给它 Vectorize Write 权限。
+```
+Settings
+-> Variables and Secrets
+-> Add variable
+```
 
-### 第四步：改模型（可选）
+![添加环境变量](docs/assets/tutorial/cloudflare-variables-chatbox-key.png)
 
-模型已经在代码里配好了默认值，**不改也能用**。想换模型的话：
+最小记忆库模式需要填这几个：
 
-| 变量名 | 默认值 | 干嘛的 |
-|--------|--------|--------|
-| `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天模型 |
-| `MEMORY_FILTER_MODEL` | `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 记忆筛选压缩小秘书；默认走 Workers AI |
-| `MEMORY_FILTER_MAX_CANDIDATES` | `12` | 每次最多交给小秘书的候选记忆 |
-| `MEMORY_FILTER_MAX_OUTPUT` | `4` | 小秘书最多返回几条记忆 |
-| `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 小秘书每条返回内容最多多少字 |
-| `MEMORY_FILTER_MAX_TOKENS` | `1400` | 小秘书 JSON 输出上限，避免多条压缩结果被 700 tokens 截断 |
-| `SUMMARY_MODEL` | `deepseek/deepseek-v4-pro` | 每日整理小秘书，负责把 D1 临时聊天整理入长期记忆 |
-| `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图；普通聊天和导盲犬 API 都用它 |
-| `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入，默认走 Workers AI |
-| `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
+| 变量名 | 填什么 | 用来干嘛 |
+|--------|--------|----------|
+| `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare Account ID | 创建和管理 D1 / Vectorize / Queue |
+| `CLOUDFLARE_API_TOKEN` | 你的 Cloudflare API Token | 让部署脚本和 Worker 管理 Vectorize |
+| `CHATBOX_API_KEY` | 你自己编一个密码，例如 `sk-my-memory-key` | 以后访问这个 Worker 用 |
 
-想换模型？直接在 Cloudflare Dashboard 的 Variables 里改，不用动代码。
+`CHATBOX_API_KEY` 可以随便写一个你喜欢的，只要自己记住就行。
+比如：
 
-模型名格式是 `provider/model`，比如：
-- `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`
-- `worker/@cf/meta/llama-3.3-70b-instruct-fp8-fast`
-- `deepseek/deepseek-v4-pro`
-- `google-ai-studio/gemini-2.5-flash`
-- `anthropic/claude-sonnet-4-6`
-- `openai/gpt-4o`
+```
+sk-testapi
+sk-my-aelios-key
+sk-something-only-i-know
+```
 
-### 第五步：点 Deploy
+保存变量后，回到 Deployments 里重新部署一次。
 
-部署成功后你的地址长这样：
+部署成功后，你会得到一个 Worker 地址，大概长这样：
 
 ```
 https://companion-memory-proxy.<你的子域>.workers.dev
 ```
 
-### 第六步：打开记忆管理面板
+到这里，**记忆库功能其实已经能用了**。
 
-浏览器打开：
+因为默认的 embedding 和记忆筛选小秘书都走 Cloudflare Workers AI：
+
+```
+EMBEDDING_MODEL = workers-ai/@cf/google/embeddinggemma-300m
+MEMORY_FILTER_MODEL = workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast
+```
+
+所以即使你还没配置 AI Gateway，也可以写入、搜索、编辑、删除长期记忆。
+
+### 第五步：检查记忆库是否可用
+
+打开浏览器访问：
+
+```
+https://<你的 Worker 地址>/health
+```
+
+如果你还没有配置 AI Gateway，可能会看到它提示缺：
+
+```
+AI_GATEWAY_BASE_URL
+CF_AIG_TOKEN
+```
+
+这不代表记忆库坏了。
+这只代表“完整版聊天代理”还没配置好。
+
+最小记忆库可用时，你至少应该已经有：
+
+```
+D1: true
+Vectorize: true
+Queue: true
+```
+
+也可以打开管理面板：
 
 ```
 https://<你的 Worker 地址>/admin
@@ -146,20 +189,78 @@ https://<你的 Worker 地址>/memory-admin
 
 ```
 Worker URL:  https://<你的 Worker 地址>
-API Key:     你第三步填的 CHATBOX_API_KEY
+API Key:     你刚刚设置的 CHATBOX_API_KEY
 ```
 
-这个面板是给人类用的记忆库控制台。你可以直接搜索长期记忆、看 Vectorize 里到底存了什么、手工新增/编辑/删除记忆，也可以检查向量库状态和重建索引。
+这个面板可以用来搜索、查看、新增、编辑、删除你的长期记忆。
 
-### 第七步：客户端这样填
+### 第六步：配置 AI Gateway
+
+如果你只想先用记忆库，可以跳过这一步。
+如果你想让 Aelios 也能当聊天网关用，就继续配置 AI Gateway。
+
+在 Cloudflare 左侧找到：
+
+```
+AI
+-> AI Gateway
+-> Create a custom gateway
+```
+
+![创建 AI Gateway](docs/assets/tutorial/cloudflare-ai-gateway-create.png)
+
+创建成功后，页面上会有一个 `Your Gateway Endpoint`。
+把这个地址保存下来，后面要填进 Worker 环境变量里。
+
+接着进入 `Provider Keys`，添加你已有的模型 API key。
+可以添加官方 provider，也可以添加第三方自定义 provider。
+
+![配置 Provider Keys](docs/assets/tutorial/cloudflare-ai-gateway-provider-keys.png)
+
+### 第七步：给 Worker 添加 AI Gateway 变量
+
+回到刚刚部署好的 Worker：
+
+```
+Settings
+-> Variables and Secrets
+-> Add variable
+```
+
+添加：
+
+| 变量名 | 填什么 |
+|--------|--------|
+| `AI_GATEWAY_BASE_URL` | 刚刚复制的 Gateway Endpoint |
+| `CF_AIG_TOKEN` | Cloudflare AI Gateway 的调用 token |
+
+保存后重新部署。
+
+这一步完成后，完整版聊天网关也可以用了。
+
+### 第八步：客户端怎么填
 
 以 Chatbox 为例：
 
 ```
 Base URL:   https://<你的 Worker 地址>/v1
-API Key:    你第三步填的 CHATBOX_API_KEY
+API Key:    你设置的 CHATBOX_API_KEY
 Model:      companion
 ```
+
+然后你可以试着说：
+
+```
+请记住：我的测试暗号是苹果星星-0428。
+```
+
+过一会儿再问：
+
+```
+我的测试暗号是什么？
+```
+
+如果能答出来，就说明记忆链路已经跑通了。
 
 ### 可选：开启另外两个轻量入口
 
@@ -197,41 +298,24 @@ Model:      companion
 
 导盲犬只转发模型，不写记忆、不读记忆、不保存聊天记录。
 
-### 第八步：验证
-
-打开浏览器访问：
-
-```
-https://<你的 Worker 地址>/health
-```
-
-看到 `ok: true` 就成功了。
-
-然后在 Chatbox 里说：
-
-```
-请记住：我的常用暗号是苹果星星-0428。
-```
-
-过十几秒再问：
-
-```
-我的常用暗号是什么？
-```
-
-能答出来就搞定了。
-
 ### 所有环境变量速查表
 
-**必填：**
+**最小记忆库必填：**
 
-| 变量名 | 必填 | 说明 |
-|--------|------|------|
-| `CLOUDFLARE_ACCOUNT_ID` | 是 | Cloudflare Account ID |
-| `CLOUDFLARE_API_TOKEN` | 是 | Cloudflare API Token，用于 Vectorize list/get/delete |
-| `AI_GATEWAY_BASE_URL` | 是 | Cloudflare AI Gateway 地址 |
-| `CF_AIG_TOKEN` | 是 | AI Gateway 调用用的 token |
-| `CHATBOX_API_KEY` | 是 | 客户端连接密码 |
+| 变量名 | 说明 |
+|--------|------|
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API Token，用于 setup、Vectorize list/get/delete |
+| `CHATBOX_API_KEY` | 客户端和管理面板连接密码 |
+
+只用记忆库时，默认 embedding 和记忆筛选小秘书都走 Workers AI，不需要先配置 AI Gateway。
+
+**完整版聊天网关再填：**
+
+| 变量名 | 说明 |
+|--------|------|
+| `AI_GATEWAY_BASE_URL` | Cloudflare AI Gateway 地址 |
+| `CF_AIG_TOKEN` | AI Gateway 调用用的 token |
 
 **模型（都有默认值，可选改）：**
 

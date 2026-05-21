@@ -1,3 +1,4 @@
+import { handleAdmin } from "./api/admin";
 import { handleHealth } from "./api/health";
 import { handleCache } from "./api/cache";
 import { handleCacheHealth, handleVectorHealth, handleVectorReindex } from "./api/debug";
@@ -38,6 +39,10 @@ async function runDailyMemoryDigestBatches(env: Env, namespace: string): Promise
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (request.method === "GET" && (url.pathname === "/admin" || url.pathname === "/memory-admin")) {
+      return handleAdmin();
+    }
 
     if (request.method === "GET" && url.pathname === "/health") {
       return handleHealth(env);

@@ -390,6 +390,15 @@ POST /v1/search/memories
 
 简单说：`/v1/memory/search` 是给模型召回用的，可能被小秘书加工；`/v1/memory/:id` 和列表/创建/修改/删除是给人或脚本管理原始记忆库用的。
 
+也可以打开轻量管理面板：
+
+```
+https://<worker>/admin
+https://<worker>/memory-admin
+```
+
+面板在浏览器里保存 Worker URL 和 API key，只作为本地管理工具使用。它调用同一套 REST API，可以搜索、列表、创建、编辑、删除 Vectorize 长期记忆，也可以运行 `vector_health` 和按页 `vector_reindex`。
+
 手动补跑每日小秘书：
 
 ```bash

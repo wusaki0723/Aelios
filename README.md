@@ -1,12 +1,12 @@
 # Companion Memory Proxy (Aelios)
 
-部署在 Cloudflare Workers 上的 OpenAI-compatible 记忆网关。
+部署在 Cloudflare Workers 上的 OpenAI-compatible 记忆网关。让任何AI都能记住你的话。
 
-这个仓库现在有三种用法。**默认先用完整版就行**，后两个是给有特殊需求的人开的轻量入口：
+这个仓库现在有三种用法，正常部署完整版即可。
 
-1. **完整版**：聊天网关 + 记忆注入 + 每日小秘书整理 + Claude cache。大多数人用这个。
-2. **纯记忆库 MCP**：只把记忆库暴露成 MCP 工具，给 Claude、Codex、MCP 客户端调用。
-3. **无记忆导盲犬 API**：只做看图/转发，不保存消息，不搜索记忆，不碰 D1。
+1. **完整版**：聊天网关 + 记忆注入 + 每日小秘书整理 + Claude cache。OpenAI兼容网关，任何用OpenAI API的客户端直接换base_url就能用。
+2. **纯记忆库 MCP**：只把记忆库暴露成 MCP 工具，给 Claude、Codex、MCP 客户端调用。让官方客户端也能拥有跨设备跨窗口跨应用的记忆，随身携带
+3. **无记忆导盲犬 API**：针对部分纯文本LLM，前置新增一个看图模型转述图片内容。
 
 Chatbox、Cherry Studio、网页前端、IM bot 等支持 OpenAI API 的客户端，接上完整版就能用：
 

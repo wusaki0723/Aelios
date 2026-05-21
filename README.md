@@ -1,28 +1,38 @@
-# Companion Memory Proxy (Aelios)
+# Aelios：给 AI 用的长期记忆网关
 
-部署在 Cloudflare Workers 上的 OpenAI-compatible 记忆网关。让任何AI都能记住你的话。
+Aelios 是一个跑在 Cloudflare Workers 上的 AI 记忆系统。你把 Chatbox、Cherry Studio、网页前端、IM bot 或自己的脚本接到它，它就可以一边转发聊天，一边把重要信息整理成长期记忆。
 
-这个仓库现在有三种用法，正常部署完整版即可。
+简单说：**它让任何 AI 都能长期记住你的偏好、规则、关系事实、项目背景和重要原文。** 不只是这一轮聊天记得你，而是换窗口、换客户端、换模型之后，记忆也能跟着走。
 
-1. **完整版**：聊天网关 + 记忆注入 + 每日小秘书整理 + Claude cache。OpenAI兼容网关，任何用OpenAI API的客户端直接换base_url就能用。
-2. **纯记忆库 MCP**：只把记忆库暴露成 MCP 工具，给 Claude、Codex、MCP 客户端调用。让官方客户端也能拥有跨设备跨窗口跨应用的记忆，随身携带
-3. **无记忆导盲犬 API**：针对部分纯文本LLM，前置新增一个看图模型转述图片内容。
+它默认用 Cloudflare 这一套免费/低成本基础设施：
 
-Chatbox、Cherry Studio、网页前端、IM bot 等支持 OpenAI API 的客户端，接上完整版就能用：
+- **Worker**：提供 OpenAI-compatible API，可以直接接常见客户端。
+- **D1**：临时保存最近聊天，默认给每日小秘书整理用。
+- **Vectorize**：保存真正的长期记忆，支持语义搜索。
+- **Workers AI / AI Gateway**：调用聊天模型、embedding、小秘书模型。
+- **管理面板**：浏览器打开就能搜索、编辑、删除、重建记忆。
 
-- `/v1/chat/completions` 聊天
-- 自动长期记忆注入
-- 每日小秘书整理：原始聊天先存 D1，凌晨统一生成摘要、重要原文和少量长期记忆
-- Vectorize 语义搜索
-- Cloudflare AI Gateway 统一代理
-- Claude 自动路由 + prompt cache
-- 图片自动走视觉模型
-- D1 自动清理过期数据
+这个仓库有三种入口。**普通用户先用完整版就行**：
 
-新增的轻量入口：
+1. **完整版**：聊天网关 + 记忆注入 + 每日小秘书整理 + Claude cache。任何支持 OpenAI API 的客户端，基本只要换 `base_url` 就能用。
+2. **纯记忆库 MCP**：只把记忆库暴露成 MCP 工具，给 Claude、Codex、MCP 客户端调用。官方客户端也能拥有跨设备、跨窗口、跨应用的随身记忆。
+3. **无记忆导盲犬 API**：针对部分纯文本 LLM，前置新增一个看图模型转述图片内容。不保存消息，不搜索记忆，不碰 D1。
 
-- `/mcp` 纯记忆库 MCP
-- `/v1/guide-dog/chat/completions` 无记忆导盲犬 API
+完整版能做这些事：
+
+- `/v1/chat/completions`：像 OpenAI API 一样聊天。
+- 自动长期记忆注入：每轮聊天前从 Vectorize 找相关记忆。
+- 记忆小秘书：搜索后分拣、压缩、去重，只把有用的记忆塞回上下文。
+- 每日整理：原始聊天先存 D1，凌晨统一整理成摘要、重要原文和少量长期记忆。
+- Claude prompt cache：尽量复用稳定上下文，降低重复输入成本。
+- 图片自动走视觉模型。
+- D1 自动清理过期数据。
+
+常用入口：
+
+- `/admin` 或 `/memory-admin`：记忆管理面板。
+- `/mcp`：纯记忆库 MCP。
+- `/v1/guide-dog/chat/completions`：无记忆导盲犬 API。
 
 ---
 
@@ -118,7 +128,30 @@ Deploy command:     npm run deploy:cloudflare
 https://companion-memory-proxy.<你的子域>.workers.dev
 ```
 
-### 第六步：客户端这样填
+### 第六步：打开记忆管理面板
+
+浏览器打开：
+
+```
+https://<你的 Worker 地址>/admin
+```
+
+或者：
+
+```
+https://<你的 Worker 地址>/memory-admin
+```
+
+第一次打开时填：
+
+```
+Worker URL:  https://<你的 Worker 地址>
+API Key:     你第三步填的 CHATBOX_API_KEY
+```
+
+这个面板是给人类用的记忆库控制台。你可以直接搜索长期记忆、看 Vectorize 里到底存了什么、手工新增/编辑/删除记忆，也可以检查向量库状态和重建索引。
+
+### 第七步：客户端这样填
 
 以 Chatbox 为例：
 
@@ -164,7 +197,7 @@ Model:      companion
 
 导盲犬只转发模型，不写记忆、不读记忆、不保存聊天记录。
 
-### 第七步：验证
+### 第八步：验证
 
 打开浏览器访问：
 
@@ -296,6 +329,8 @@ Cloudflare Workers 上的 OpenAI-compatible Memory Proxy。
 
 ```
 GET    /health
+GET    /admin
+GET    /memory-admin
 GET    /v1/models
 POST   /v1/chat/completions
 POST   /v1/guide-dog/chat/completions

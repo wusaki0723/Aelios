@@ -44,7 +44,7 @@ function withTokenQuery(request: Request): Request {
 
   const headers = new Headers(request.headers);
   headers.set("authorization", `Bearer ${token}`);
-  return new Request(request, { headers });
+  return new Request(request.url, { headers });
 }
 
 function hasScope(profile: KeyProfile, scope: Scope): boolean {

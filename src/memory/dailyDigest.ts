@@ -64,13 +64,8 @@ const DEFAULT_EMPTY_MEMORY_MIN_CHARS = 4;
 const DEFAULT_TIME_ZONE = "Asia/Singapore";
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-function readDreamConfig(env: Env, dreamName: keyof Env, digestName: keyof Env): unknown {
-  return env[dreamName] ?? env[digestName];
-}
-
 function isDreamEnabled(env: Env): boolean {
-  if (env.ENABLE_DREAM !== undefined) return env.ENABLE_DREAM !== "false";
-  return env.ENABLE_DAILY_MEMORY_DIGEST !== "false";
+  return env.ENABLE_DREAM !== "false";
 }
 
 function readPositiveInt(value: unknown, fallback: number, max: number): number {
@@ -441,7 +436,7 @@ async function callDigestModel(
   env: Env,
   prompt: string
 ): Promise<DailyDigestResult | null> {
-  const model = readString(readDreamConfig(env, "DREAM_MODEL", "SUMMARY_MODEL")) || env.MEMORY_MODEL;
+  const model = readString(env.DREAM_MODEL);
   if (!model) return null;
 
   const request: OpenAIChatRequest = {
@@ -451,7 +446,7 @@ async function callDigestModel(
       { role: "user", content: prompt }
     ],
     temperature: 0,
-    max_tokens: readPositiveInt(readDreamConfig(env, "DREAM_MAX_TOKENS", "DAILY_DIGEST_MAX_TOKENS"), 3000, 8000),
+    max_tokens: readPositiveInt(env.DREAM_MAX_TOKENS, 3000, 8000),
     response_format: {
       type: "json_object"
     },
@@ -519,7 +514,7 @@ async function saveImportantExcerpts(
   input: { namespace: string; dateLabel: string; excerpts: ImportantExcerpt[]; fallbackMessageIds: string[] }
 ): Promise<number> {
   let saved = 0;
-  const limit = readPositiveInt(env.DAILY_DIGEST_EXCERPT_LIMIT, DEFAULT_EXCERPT_LIMIT, 20);
+  const limit = readPositiveInt(env.DREAM_EXCERPT_LIMIT, DEFAULT_EXCERPT_LIMIT, 20);
 
   for (const excerpt of input.excerpts.slice(0, limit)) {
     const quote = readString(excerpt.quote);
@@ -584,7 +579,7 @@ export async function runDailyMemoryDigest(
 ): Promise<{ ran: boolean; stats?: DailyDigestStats }> {
   if (!isDreamEnabled(env)) return { ran: false };
 
-  const timeZone = readString(readDreamConfig(env, "DREAM_TIME_ZONE", "DAILY_DIGEST_TIME_ZONE")) || DEFAULT_TIME_ZONE;
+  const timeZone = readString(env.DREAM_TIME_ZONE) || DEFAULT_TIME_ZONE;
   const dateLabel = readString(options.dateLabel) || getTargetDigestDateLabel(timeZone);
   const { startIso, endIso } = getDateRangeForLabel(dateLabel, timeZone);
   const cursorName = `dream:${namespace}:${dateLabel}`;
@@ -593,7 +588,7 @@ export async function runDailyMemoryDigest(
   const cursorState = options.force ? { done: false, after: null } : readDailyCursor(cursor, startIso, endIso);
   if (cursorState.done) return { ran: false };
 
-  const maxMessages = readPositiveInt(readDreamConfig(env, "DREAM_MAX_MESSAGES", "DAILY_DIGEST_MAX_MESSAGES"), DEFAULT_MAX_MESSAGES, 1000);
+  const maxMessages = readPositiveInt(env.DREAM_MAX_MESSAGES, DEFAULT_MAX_MESSAGES, 1000);
   const messages = await listMessagesByNamespaceInRange(env.DB, {
     namespace,
     startCreatedAt: startIso,
@@ -609,7 +604,7 @@ export async function runDailyMemoryDigest(
   const lastMessage = messages[messages.length - 1];
   const hasMore = messages.length >= maxMessages;
   const memoryContextLimit = readPositiveInt(
-    readDreamConfig(env, "DREAM_MEMORY_CONTEXT_LIMIT", "DAILY_DIGEST_MEMORY_CONTEXT_LIMIT"),
+    env.DREAM_MEMORY_CONTEXT_LIMIT,
     DEFAULT_MEMORY_CONTEXT_LIMIT,
     1000
   );
@@ -630,7 +625,7 @@ export async function runDailyMemoryDigest(
     endIso,
     messages,
     existingMemories,
-    excerptLimit: readPositiveInt(readDreamConfig(env, "DREAM_EXCERPT_LIMIT", "DAILY_DIGEST_EXCERPT_LIMIT"), DEFAULT_EXCERPT_LIMIT, 20),
+    excerptLimit: readPositiveInt(env.DREAM_EXCERPT_LIMIT, DEFAULT_EXCERPT_LIMIT, 20),
     hasMore
   });
   const digest = await callDigestModel(env, prompt);

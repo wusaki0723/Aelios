@@ -330,8 +330,7 @@ Model:      companion
 | `MEMORY_FILTER_MAX_OUTPUT` | `5` | reranker 选出并交给压缩模型的记忆上限 |
 | `MEMORY_FILTER_OUTPUT_CHARS` | `300` | 压缩模型每条返回内容最多多少字 |
 | `MEMORY_FILTER_MAX_TOKENS` | `1400` | 压缩模型 JSON 输出上限，避免多条压缩结果被截断 |
-| `DREAM_MODEL` | 同 `SUMMARY_MODEL` | 夜间 dream 模型，负责整理 transcript 和旧记忆，合并重复、修正过时记忆 |
-| `SUMMARY_MODEL` | `deepseek/deepseek-v4-pro` | 兼容旧变量；未设置 `DREAM_MODEL` 时作为 dream 模型 |
+| `DREAM_MODEL` | `deepseek/deepseek-v4-pro` | 后台记忆模型；负责增量抽取、合并判断、长期摘要和夜间 dream |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图；普通聊天和导盲犬 API 都用它 |
 | `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 向量嵌入，默认走 Workers AI |
 | `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 请求的目标维度 |
@@ -365,9 +364,8 @@ Model:      companion
 | `VECTORIZE_INDEX_NAME` | `memo-kb` | Vectorize 索引名，给 list-vectors API 使用 |
 | `ENABLE_AUTO_MEMORY` | 空（开启） | 设 `false` 关闭自动记忆 |
 | `ENABLE_INCREMENTAL_MEMORY` | `false` | 设 `true` 才恢复每轮聊天后即时抽取 |
-| `ENABLE_DREAM` | `true` | 夜间 dream 开关；未设置时兼容 `ENABLE_DAILY_MEMORY_DIGEST` |
-| `ENABLE_DAILY_MEMORY_DIGEST` | `true` | 旧变量名，仍兼容 |
-| `DREAM_TIME_ZONE` | 同 `DAILY_DIGEST_TIME_ZONE` | dream 按这个时区切自然日；默认每天凌晨处理昨天 |
+| `ENABLE_DREAM` | `true` | 夜间 dream 开关 |
+| `DREAM_TIME_ZONE` | `Asia/Singapore` | dream 按这个时区切自然日；默认每天凌晨处理昨天 |
 | `DREAM_MAX_MESSAGES` | `320` | 每次 dream 最多处理的原始消息数；当天太长会分批继续 |
 | `DREAM_MAX_RUNS` | `3` | 每次定时任务最多连续 dream 几批，防止单次模型输入太大 |
 | `DREAM_MAX_TOKENS` | `5000` | dream 模型最多输出 token |

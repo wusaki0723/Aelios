@@ -19,34 +19,24 @@ export interface Env {
   CF_AIG_TOKEN?: string;
   ENABLE_AUTO_MEMORY?: string;
   ENABLE_INCREMENTAL_MEMORY?: string;
-  ENABLE_DAILY_MEMORY_DIGEST?: string;
   ENABLE_DREAM?: string;
-  DAILY_DIGEST_NAMESPACE?: string;
   DREAM_NAMESPACE?: string;
-  DAILY_DIGEST_MAX_MESSAGES?: string;
   DREAM_MAX_MESSAGES?: string;
-  DAILY_DIGEST_MAX_RUNS?: string;
   DREAM_MAX_RUNS?: string;
-  DAILY_DIGEST_MAX_TOKENS?: string;
   DREAM_MAX_TOKENS?: string;
   DREAM_MODEL?: string;
-  DAILY_DIGEST_MEMORY_CONTEXT_LIMIT?: string;
   DREAM_MEMORY_CONTEXT_LIMIT?: string;
-  DAILY_DIGEST_EXCERPT_LIMIT?: string;
   DREAM_EXCERPT_LIMIT?: string;
-  DAILY_DIGEST_TIME_ZONE?: string;
   DREAM_TIME_ZONE?: string;
   ENABLE_DAILY_SUMMARY_MEMORY?: string;
   EMPTY_MEMORY_MIN_CHARS?: string;
   MEMORY_MODE?: string;
   MEMORY_BACKEND?: string;
-  MEMORY_MODEL?: string;
   ENABLE_MEMORY_FILTER?: string;
   MEMORY_FILTER_MODEL?: string;
   ENABLE_MEMORY_RERANKER?: string;
   MEMORY_RERANKER_MODEL?: string;
   VISION_MODEL?: string;
-  GUIDE_DOG_MODEL?: string;
   MEMORY_FILTER_MAX_CANDIDATES?: string;
   MEMORY_FILTER_MAX_OUTPUT?: string;
   MEMORY_FILTER_MAX_CONTENT_CHARS?: string;
@@ -73,7 +63,6 @@ export interface Env {
   ENABLE_CACHE_API?: string;
   CACHE_DEFAULT_TTL_SECONDS?: string;
   CACHE_MAX_VALUE_BYTES?: string;
-  SUMMARY_MODEL?: string;
 }
 
 export interface MemoryMaintenanceQueueMessage {

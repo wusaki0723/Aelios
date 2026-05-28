@@ -192,7 +192,7 @@ export async function extractMemoriesFromMessages(
   env: Env,
   messages: MessageRecord[]
 ): Promise<MemoryExtractionResult> {
-  const model = env.SUMMARY_MODEL || env.MEMORY_MODEL;
+  const model = env.DREAM_MODEL;
   if (!model || messages.length === 0) {
     return { memories: [] };
   }

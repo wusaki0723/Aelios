@@ -9,7 +9,6 @@ import { hasImageContent } from "../utils/messages";
 
 function resolveGuideDogModel(body: OpenAIChatRequest, env: Env): string {
   if (hasImageContent(body) && env.VISION_MODEL) return env.VISION_MODEL;
-  if (env.GUIDE_DOG_MODEL) return env.GUIDE_DOG_MODEL;
   return resolveTargetModel(body.model, KEY_PROFILES.guideDog, env);
 }
 

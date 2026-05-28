@@ -14,11 +14,11 @@ import type { Env, QueueMessage } from "./types";
 import { openAiError } from "./utils/json";
 
 function getDailyDigestNamespace(env: Env): string {
-  return env.DREAM_NAMESPACE?.trim() || env.DAILY_DIGEST_NAMESPACE?.trim() || "default";
+  return env.DREAM_NAMESPACE?.trim() || "default";
 }
 
 function getDailyDigestMaxRuns(env: Env): number {
-  const parsed = Number(env.DREAM_MAX_RUNS || env.DAILY_DIGEST_MAX_RUNS || 3);
+  const parsed = Number(env.DREAM_MAX_RUNS || 3);
   if (!Number.isFinite(parsed)) return 3;
   return Math.min(Math.max(Math.floor(parsed), 1), 10);
 }

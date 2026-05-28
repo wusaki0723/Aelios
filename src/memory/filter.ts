@@ -349,6 +349,8 @@ async function callWorkersAiFilter(env: Env, prompt: string, model: string, maxT
 }
 
 async function callOpenAICompatFilter(env: Env, prompt: string, model: string, maxTokens: number): Promise<string> {
+  const normalizedModel = model.trim().toLowerCase();
+  const supportsEnableThinkingField = normalizedModel !== "cerebras/gpt-oss-120b";
   const request: OpenAIChatRequest = {
     model,
     messages: [
@@ -366,9 +368,9 @@ async function callOpenAICompatFilter(env: Env, prompt: string, model: string, m
     response_format: {
       type: "json_object"
     },
-    enable_thinking: false,
     stream: false
   };
+  if (supportsEnableThinkingField) request.enable_thinking = false;
 
   const response = await callOpenAICompat(env, request);
   if (!response.ok) return "";

@@ -25,6 +25,7 @@ export interface VectorMemoryPatch {
   summary?: string | null;
   importance?: number;
   confidence?: number;
+  status?: string;
   pinned?: boolean;
   tags?: string[];
   source?: string | null;
@@ -80,7 +81,7 @@ function parseStringArray(value: unknown): string[] {
   return [value.trim()];
 }
 
-function toMetadata(input: Required<VectorMemoryInput> & { id: string; vectorId: string; createdAt: string; updatedAt: string }): Record<string, VectorizeVectorMetadata> {
+function toMetadata(input: Required<VectorMemoryInput> & { id: string; vectorId: string; createdAt: string; updatedAt: string; status?: string }): Record<string, VectorizeVectorMetadata> {
   return {
     kind: "memory",
     namespace: input.namespace,
@@ -90,7 +91,7 @@ function toMetadata(input: Required<VectorMemoryInput> & { id: string; vectorId:
     summary: input.summary || "",
     importance: input.importance,
     confidence: input.confidence,
-    status: "active",
+    status: input.status || "active",
     pinned: input.pinned,
     tags: JSON.stringify(input.tags),
     source: input.source || "",
@@ -259,6 +260,39 @@ export async function deleteVectorMemory(env: Env, id: string): Promise<boolean>
   const existing = await getVectorMemory(env, id);
   const vectorIds = existing?.vector_id ? [existing.vector_id] : candidateVectorIds(id);
   if (vectorIds.length === 0) return false;
+
+  if (existing?.vector_id) {
+    const vector = await createEmbedding(env, existing.content);
+    if (vector) {
+      const updatedAt = nowIso();
+      await requireVectorize(env).upsert([
+        {
+          id: existing.vector_id,
+          namespace: existing.namespace,
+          values: vector,
+          metadata: toMetadata({
+            namespace: existing.namespace,
+            type: existing.type,
+            content: existing.content,
+            summary: existing.summary ?? null,
+            importance: existing.importance,
+            confidence: existing.confidence,
+            pinned: existing.pinned,
+            tags: existing.tags,
+            source: existing.source ?? null,
+            sourceMessageIds: existing.source_message_ids,
+            expiresAt: existing.expires_at ?? null,
+            id: existing.id,
+            vectorId: existing.vector_id,
+            createdAt: existing.created_at,
+            updatedAt,
+            status: "deleted"
+          })
+        }
+      ]);
+    }
+  }
+
   await requireVectorize(env).deleteByIds(vectorIds);
   return true;
 }
@@ -286,6 +320,7 @@ export async function updateVectorMemory(
     summary: patch.summary === undefined ? existing.summary : patch.summary,
     importance: clampScore(patch.importance, existing.importance),
     confidence: clampScore(patch.confidence, existing.confidence),
+    status: patch.status ?? existing.status,
     pinned: patch.pinned ?? existing.pinned,
     tags: patch.tags ?? existing.tags,
     source: patch.source === undefined ? existing.source : patch.source,
@@ -313,6 +348,7 @@ export async function updateVectorMemory(
     summary: next.summary,
     importance: next.importance,
     confidence: next.confidence,
+    status: next.status,
     pinned: next.pinned,
     tags: next.tags,
     source: next.source,

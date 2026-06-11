@@ -535,6 +535,8 @@ function normalizeCompressor(batch, planner, output) {
         const content = normalizeReplacementContent(typeof item.content === "string" ? item.content.trim() : "", type);
         if (content.length < 8) return [];
         if (type !== "excerpt" && content.length > 320) return [];
+        if (type === "excerpt" && !/\n(?:咲咲|旦九)[：:]/.test(content)) return [];
+        if (type === "excerpt" && content.length > 900) return [];
         const replacementSourceIds = Array.isArray(item.source_ids)
           ? item.source_ids.filter((id) => sourceIds.has(id))
           : [];

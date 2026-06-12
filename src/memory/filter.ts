@@ -235,6 +235,7 @@ function extractJsonArray(value: unknown): unknown[] | null {
 function parseCompressedItems(value: unknown): CompressedMemorySlot[] | null {
   const array = extractJsonArray(value);
   if (!array) return null;
+  const isNullishLiteral = (text: string): boolean => ["null", "undefined", "none"].includes(text.trim().toLowerCase());
 
   const items: CompressedMemorySlot[] = [];
   for (const item of array) {
@@ -245,7 +246,7 @@ function parseCompressedItems(value: unknown): CompressedMemorySlot[] | null {
 
     if (typeof item === "string") {
       const sanitized = sanitizeMemoryContent(item);
-      items.push(sanitized ? { content: sanitized } : null);
+      items.push(sanitized && !isNullishLiteral(sanitized) ? { content: sanitized } : null);
       continue;
     }
 
@@ -263,7 +264,7 @@ function parseCompressedItems(value: unknown): CompressedMemorySlot[] | null {
 
     if (content) {
       const sanitized = sanitizeMemoryContent(content);
-      items.push(sanitized ? { content: sanitized } : null);
+      items.push(sanitized && !isNullishLiteral(sanitized) ? { content: sanitized } : null);
     } else {
       items.push(null);
     }

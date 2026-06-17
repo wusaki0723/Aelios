@@ -15,6 +15,12 @@ export interface CreateMemoryInput {
   source?: string | null;
   sourceMessageIds?: string[];
   expiresAt?: string | null;
+  factKey?: string | null;
+  thread?: string | null;
+  riskLevel?: string | null;
+  urgencyLevel?: string | null;
+  tensionScore?: number | null;
+  responsePosture?: string | null;
 }
 
 export interface ListMemoryFilters {
@@ -42,6 +48,12 @@ export interface UpdateMemoryInput {
   tags?: string[];
   sourceMessageIds?: string[];
   expiresAt?: string | null;
+  factKey?: string | null;
+  thread?: string | null;
+  riskLevel?: string | null;
+  urgencyLevel?: string | null;
+  tensionScore?: number | null;
+  responsePosture?: string | null;
 }
 
 export async function createMemory(db: D1Database, input: CreateMemoryInput): Promise<MemoryRecord> {
@@ -66,15 +78,22 @@ export async function createMemory(db: D1Database, input: CreateMemoryInput): Pr
     recall_count: 0,
     created_at: now,
     updated_at: now,
-    expires_at: input.expiresAt ?? null
+    expires_at: input.expiresAt ?? null,
+    fact_key: input.factKey ?? null,
+    thread: input.thread ?? null,
+    risk_level: input.riskLevel ?? null,
+    urgency_level: input.urgencyLevel ?? null,
+    tension_score: input.tensionScore ?? null,
+    response_posture: input.responsePosture ?? null
   };
 
   await db
     .prepare(
       `INSERT INTO memories (
         id, namespace, type, content, summary, importance, confidence, status,
-        pinned, tags, source, source_message_ids, vector_id, created_at, updated_at, expires_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        pinned, tags, source, source_message_ids, vector_id, created_at, updated_at, expires_at,
+        fact_key, thread, risk_level, urgency_level, tension_score, response_posture
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       record.id,
@@ -92,7 +111,13 @@ export async function createMemory(db: D1Database, input: CreateMemoryInput): Pr
       record.vector_id,
       record.created_at,
       record.updated_at,
-      record.expires_at
+      record.expires_at,
+      record.fact_key,
+      record.thread,
+      record.risk_level,
+      record.urgency_level,
+      record.tension_score,
+      record.response_posture
     )
     .run();
 
@@ -187,6 +212,12 @@ export async function updateMemory(
   if (input.patch.tags !== undefined) set("tags", JSON.stringify(input.patch.tags));
   if (input.patch.sourceMessageIds !== undefined) set("source_message_ids", JSON.stringify(input.patch.sourceMessageIds));
   if (input.patch.expiresAt !== undefined) set("expires_at", input.patch.expiresAt);
+  if (input.patch.factKey !== undefined) set("fact_key", input.patch.factKey);
+  if (input.patch.thread !== undefined) set("thread", input.patch.thread);
+  if (input.patch.riskLevel !== undefined) set("risk_level", input.patch.riskLevel);
+  if (input.patch.urgencyLevel !== undefined) set("urgency_level", input.patch.urgencyLevel);
+  if (input.patch.tensionScore !== undefined) set("tension_score", input.patch.tensionScore);
+  if (input.patch.responsePosture !== undefined) set("response_posture", input.patch.responsePosture);
 
   if (assignments.length === 0) {
     return getMemoryById(db, input);
@@ -212,6 +243,119 @@ export async function softDeleteMemory(
     patch: {
       status: "deleted"
     }
+  });
+}
+
+export async function listActiveMemoriesByFactKey(
+  db: D1Database,
+  input: { namespace: string; factKey: string; limit?: number }
+): Promise<MemoryRecord[]> {
+  const factKey = input.factKey.trim();
+  if (!factKey) return [];
+  const limit = Math.min(Math.max(Math.floor(input.limit ?? 10), 1), 50);
+  const result = await db
+    .prepare(
+      `SELECT * FROM memories
+       WHERE namespace = ?
+         AND fact_key = ?
+         AND status = 'active'
+       ORDER BY pinned DESC, updated_at DESC
+       LIMIT ?`
+    )
+    .bind(input.namespace, factKey, limit)
+    .all<MemoryRecord>();
+  return result.results ?? [];
+}
+
+export async function listMemoriesSince(
+  db: D1Database,
+  input: { namespace: string; since: string; limit?: number }
+): Promise<MemoryRecord[]> {
+  const limit = Math.min(Math.max(Math.floor(input.limit ?? 500), 1), 1000);
+  const result = await db
+    .prepare(
+      `SELECT * FROM memories
+       WHERE namespace = ?
+         AND created_at >= ?
+         AND status = 'active'
+       ORDER BY created_at ASC
+       LIMIT ?`
+    )
+    .bind(input.namespace, input.since, limit)
+    .all<MemoryRecord>();
+  return result.results ?? [];
+}
+
+export async function listFactKeyConflicts(
+  db: D1Database,
+  input: { namespace: string; limit?: number }
+): Promise<Array<{ fact_key: string; ids: string; count: number }>> {
+  const limit = Math.min(Math.max(Math.floor(input.limit ?? 100), 1), 1000);
+  const result = await db
+    .prepare(
+      `SELECT fact_key, group_concat(id) AS ids, count(*) AS count
+       FROM memories
+       WHERE namespace = ?
+         AND fact_key IS NOT NULL
+         AND fact_key != ''
+         AND status IN ('active', 'review')
+       GROUP BY fact_key
+       HAVING count(*) > 1
+       ORDER BY count DESC, fact_key
+       LIMIT ?`
+    )
+    .bind(input.namespace, limit)
+    .all<{ fact_key: string; ids: string; count: number }>();
+  return result.results ?? [];
+}
+
+export async function listExperienceSimilarMemories(
+  db: D1Database,
+  input: {
+    namespace: string;
+    riskLevel?: string | null;
+    urgencyLevel?: string | null;
+    tensionScore?: number | null;
+    excludeIds: string[];
+    limit: number;
+  }
+): Promise<Array<MemoryRecord & { score: number }>> {
+  const binds: unknown[] = [input.namespace, ...input.excludeIds];
+  const excludeClause = input.excludeIds.length > 0 ? `AND id NOT IN (${input.excludeIds.map(() => "?").join(", ")})` : "";
+  const clauses: string[] = ["namespace = ?", "status = 'active'"];
+  if (excludeClause) clauses.push(excludeClause.slice(4));
+  if (input.riskLevel) {
+    clauses.push("risk_level = ?");
+    binds.push(input.riskLevel);
+  }
+  if (input.urgencyLevel) {
+    clauses.push("urgency_level = ?");
+    binds.push(input.urgencyLevel);
+  }
+  if (typeof input.tensionScore === "number" && Number.isFinite(input.tensionScore)) {
+    clauses.push("tension_score IS NOT NULL");
+  }
+  binds.push(Math.min(Math.max(Math.floor(input.limit), 1), 50));
+
+  const result = await db
+    .prepare(
+      `SELECT * FROM memories
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY importance DESC, updated_at DESC
+       LIMIT ?`
+    )
+    .bind(...binds)
+    .all<MemoryRecord>();
+
+  const tension = input.tensionScore;
+  return (result.results ?? []).map((record) => {
+    const tensionScore =
+      typeof tension === "number" && typeof record.tension_score === "number"
+        ? Math.max(0, 1 - Math.abs(record.tension_score - tension))
+        : 0.5;
+    const riskScore = input.riskLevel && record.risk_level === input.riskLevel ? 0.2 : 0;
+    const urgencyScore = input.urgencyLevel && record.urgency_level === input.urgencyLevel ? 0.2 : 0;
+    return { ...record, score: Math.min(0.78, 0.35 + tensionScore * 0.25 + riskScore + urgencyScore) };
   });
 }
 

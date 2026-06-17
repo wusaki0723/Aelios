@@ -1,9 +1,10 @@
-import { createMemory, getMemoryById, updateMemory } from "../db/memories";
+import { createMemoryEvent } from "../db/memoryEvents";
+import { createMemory, getMemoryById, listActiveMemoriesByFactKey, updateMemory } from "../db/memories";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MemoryApiRecord, MemoryRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
-import { deleteMemoryEmbedding, upsertMemoryEmbedding } from "./embedding";
+import { upsertMemoryEmbedding } from "./embedding";
 import type { ExtractedMemory } from "./extract";
-import { searchMemories } from "./search";
+import { searchMemories, toMemoryApiRecord } from "./search";
 
 const MERGE_CANDIDATE_TOP_K = 5;
 const MERGE_SCORE_THRESHOLD = 0.82;
@@ -213,6 +214,15 @@ async function findMergeCandidates(
   env: Env,
   input: { namespace: string; memory: ExtractedMemory }
 ): Promise<MemoryApiRecord[]> {
+  if (input.memory.fact_key) {
+    const matches = await listActiveMemoriesByFactKey(env.DB, {
+      namespace: input.namespace,
+      factKey: input.memory.fact_key,
+      limit: MERGE_CANDIDATE_TOP_K
+    });
+    if (matches.length > 0) return matches.map((record) => toMemoryApiRecord(record, 1));
+  }
+
   const matches = await searchMemories(env, {
     namespace: input.namespace,
     query: input.memory.content,
@@ -227,6 +237,21 @@ async function findMergeCandidates(
   });
 }
 
+function chooseFactKeyDecision(incoming: ExtractedMemory, candidates: MemoryApiRecord[]): MemoryMergeDecision | null {
+  if (!incoming.fact_key) return null;
+  const target = candidates.find((candidate) => candidate.fact_key === incoming.fact_key && !candidate.pinned);
+  if (!target) return null;
+  return {
+    action: "supersede",
+    target_id: target.id,
+    content: incoming.content,
+    type: incoming.type,
+    importance: incoming.importance,
+    confidence: incoming.confidence,
+    tags: incoming.tags
+  };
+}
+
 async function createNewMemory(env: Env, input: PersistMemoryInput): Promise<MemoryRecord> {
   const created = await createMemory(env.DB, {
     namespace: input.namespace,
@@ -236,7 +261,13 @@ async function createNewMemory(env: Env, input: PersistMemoryInput): Promise<Mem
     confidence: input.memory.confidence,
     tags: input.memory.tags,
     source: input.source,
-    sourceMessageIds: input.sourceMessageIds
+    sourceMessageIds: input.sourceMessageIds,
+    factKey: input.memory.fact_key,
+    thread: input.memory.thread,
+    riskLevel: input.memory.risk_level,
+    urgencyLevel: input.memory.urgency_level,
+    tensionScore: input.memory.tension_score,
+    responsePosture: input.memory.response_posture
   });
 
   await upsertMemoryEmbedding(env, created);
@@ -264,7 +295,7 @@ export async function persistMemoryWithMerge(
 
   if (candidates.length === 0) return createNewMemory(env, input);
 
-  const decision = await decideMemoryMerge(env, input.memory, candidates);
+  const decision = chooseFactKeyDecision(input.memory, candidates) ?? (await decideMemoryMerge(env, input.memory, candidates));
   if ((decision.action === "merge" || decision.action === "supersede") && !decision.target_id) {
     return createNewMemory(env, input);
   }
@@ -291,7 +322,13 @@ export async function persistMemoryWithMerge(
         importance: Math.max(existing.importance, clampScore(decision.importance, input.memory.importance)),
         confidence: Math.max(existing.confidence, clampScore(decision.confidence, input.memory.confidence)),
         tags: uniqueStrings([...parseJsonArray(existing.tags), ...input.memory.tags, ...(decision.tags ?? [])]),
-        sourceMessageIds: uniqueStrings([...parseJsonArray(existing.source_message_ids), ...input.sourceMessageIds])
+        sourceMessageIds: uniqueStrings([...parseJsonArray(existing.source_message_ids), ...input.sourceMessageIds]),
+        factKey: input.memory.fact_key ?? existing.fact_key,
+        thread: input.memory.thread ?? existing.thread,
+        riskLevel: input.memory.risk_level ?? existing.risk_level,
+        urgencyLevel: input.memory.urgency_level ?? existing.urgency_level,
+        tensionScore: input.memory.tension_score ?? existing.tension_score,
+        responsePosture: input.memory.response_posture ?? existing.response_posture
       }
     });
 
@@ -306,13 +343,19 @@ export async function persistMemoryWithMerge(
       patch: { status: "superseded" }
     });
     if (superseded) {
-      try {
-        await deleteMemoryEmbedding(env, superseded);
-      } catch (error) {
-        // D1 status is already superseded, and search filters inactive D1 records.
-        // A stale vector is annoying but should not block writing the corrected memory.
-        console.error("failed to delete superseded memory embedding", error);
-      }
+      await createMemoryEvent(env.DB, {
+        namespace: input.namespace,
+        eventType: "z_conflict",
+        memoryId: superseded.id,
+        payload: {
+          action: "supersede",
+          old_memory_id: superseded.id,
+          incoming_fact_key: input.memory.fact_key ?? superseded.fact_key,
+          old_content: superseded.content,
+          new_content: decision.content ?? input.memory.content,
+          reason: input.memory.fact_key ? "fact_key_match" : "merge_decision"
+        }
+      });
     }
 
     return createNewMemory(env, {
@@ -323,7 +366,13 @@ export async function persistMemoryWithMerge(
         content: decision.content ?? input.memory.content,
         importance: clampScore(decision.importance, input.memory.importance),
         confidence: clampScore(decision.confidence, input.memory.confidence),
-        tags: uniqueStrings([...input.memory.tags, ...(decision.tags ?? [])])
+        tags: uniqueStrings([...input.memory.tags, ...(decision.tags ?? [])]),
+        fact_key: input.memory.fact_key,
+        thread: input.memory.thread,
+        risk_level: input.memory.risk_level,
+        urgency_level: input.memory.urgency_level,
+        tension_score: input.memory.tension_score,
+        response_posture: input.memory.response_posture
       }
     });
   }

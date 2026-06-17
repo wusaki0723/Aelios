@@ -106,6 +106,12 @@ export async function upsertMemoryEmbedding(env: Env, memory: MemoryRecord): Pro
         created_at: memory.created_at,
         updated_at: memory.updated_at,
         expires_at: memory.expires_at || "",
+        fact_key: memory.fact_key || "",
+        thread: memory.thread || "",
+        risk_level: memory.risk_level || "",
+        urgency_level: memory.urgency_level || "",
+        tension_score: memory.tension_score ?? "",
+        response_posture: memory.response_posture || "",
       }
     }
   ]);

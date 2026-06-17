@@ -360,8 +360,7 @@ Model:      companion
 | `MEMORY_FILTER_MIN_SCORE` | `0.35` | 进入 reranker 前的最低向量相关度；不填时跟随 `MEMORY_MIN_SCORE` |
 | `MEMORY_FILTER_MAX_CONTENT_CHARS` | `700` | 交给 reranker/压缩模型前，每条候选最多保留多少字 |
 | `MEMORY_MIN_IMPORTANCE` | `0.55` | 记忆写入最低重要性 |
-| `MEMORY_BACKEND` | `vectorize` | 长期记忆主库。默认 Vectorize；设 `d1` 可回到旧模式 |
-| `VECTORIZE_INDEX_NAME` | `memo-kb` | Vectorize 索引名，给 list-vectors API 使用 |
+| `VECTORIZE_INDEX_NAME` | `memo-kb` | Vectorize 索引名；D1 是唯一主存储，Vectorize 只作为向量索引层 |
 | `ENABLE_AUTO_MEMORY` | 空（开启） | 设 `false` 关闭自动记忆 |
 | `ENABLE_INCREMENTAL_MEMORY` | `false` | 设 `true` 才恢复每轮聊天后即时抽取 |
 | `ENABLE_DREAM` | `true` | 夜间 dream 开关 |

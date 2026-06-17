@@ -1,14 +1,18 @@
 import { authenticate } from "../auth/apiKey";
 import { getOrCreateConversation } from "../db/conversations";
+import { createMemory, getMemoryById, listMemoriesPage, softDeleteMemory } from "../db/memories";
 import { saveIngestMessages } from "../db/messages";
-import { filterAndCompressMemories } from "../memory/filter";
 import {
-  createVectorMemory,
-  deleteVectorMemory,
-  getVectorMemory,
-  listVectorMemories,
-  searchVectorMemories
-} from "../memory/vectorStore";
+  normalizeFactKey,
+  normalizeResponsePosture,
+  normalizeRiskLevel,
+  normalizeTensionScore,
+  normalizeThread,
+  normalizeUrgencyLevel
+} from "../memory/coordinates";
+import { upsertMemoryEmbedding } from "../memory/embedding";
+import { filterAndCompressMemories } from "../memory/filter";
+import { searchMemories, toMemoryApiRecord } from "../memory/search";
 import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
 import type { Env, KeyProfile, Scope } from "../types";
 import { json } from "../utils/json";
@@ -16,6 +20,7 @@ import {
   isRecord,
   readBoolean,
   readMessages,
+  readNonNegativeInt,
   readNumber,
   readPositiveInt,
   readString,
@@ -194,7 +199,7 @@ async function callTool(
     if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
     const query = readString(args.query);
     if (!query) return toolError("query is required");
-    const memories = await searchVectorMemories(env, {
+    const memories = await searchMemories(env, {
       namespace: resolveNamespace(profile, args.namespace),
       query,
       topK: readNumber(args.top_k, Number(env.MEMORY_TOP_K || 50)),
@@ -210,7 +215,7 @@ async function callTool(
     if (!content) return toolError("content is required");
     let memory;
     try {
-      memory = await createVectorMemory(env, {
+      const created = await createMemory(env.DB, {
         namespace: resolveNamespace(profile, args.namespace),
         type: readString(args.type) || "note",
         content,
@@ -220,8 +225,16 @@ async function callTool(
         pinned: readBoolean(args.pinned),
         tags: readStringArray(args.tags),
         source: readString(args.source) || "mcp",
-        sourceMessageIds: []
+        sourceMessageIds: [],
+        factKey: normalizeFactKey(args.fact_key),
+        thread: normalizeThread(args.thread),
+        riskLevel: normalizeRiskLevel(args.risk_level),
+        urgencyLevel: normalizeUrgencyLevel(args.urgency_level),
+        tensionScore: normalizeTensionScore(args.tension_score),
+        responsePosture: normalizeResponsePosture(args.response_posture)
       });
+      await upsertMemoryEmbedding(env, created);
+      memory = toMemoryApiRecord(created);
     } catch (error) {
       return toolError(error instanceof Error ? error.message : "memory_create failed");
     }
@@ -232,20 +245,20 @@ async function callTool(
     if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
     const limit = readPositiveInt(args.limit, 100, 1000);
     try {
-      const page = await listVectorMemories(env, {
+      const page = await listMemoriesPage(env.DB, {
         namespace: resolveNamespace(profile, args.namespace),
-        count: limit,
-        cursor: readString(args.cursor)
+        status: readString(args.status) || "active",
+        limit,
+        offset: readNonNegativeInt(args.cursor, 0, 1_000_000)
       });
       return textToolResult({
-        data: page.data,
-        ...(readBoolean(args.include_ids) ? { ids: page.ids } : {}),
+        data: page.records.map((record) => toMemoryApiRecord(record)),
+        ...(readBoolean(args.include_ids) ? { ids: page.records.map((record) => record.id) } : {}),
         paging: {
           limit,
-          cursor: page.cursor,
+          cursor: page.nextOffset === null ? null : String(page.nextOffset),
           has_more: page.hasMore,
-          count: page.count,
-          total_count: page.totalCount
+          count: page.records.length
         }
       });
     } catch (error) {
@@ -257,16 +270,20 @@ async function callTool(
     if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
     const id = readString(args.id);
     if (!id) return toolError("id is required");
-    const memory = await getVectorMemory(env, id);
+    const memory = await getMemoryById(env.DB, { namespace: resolveNamespace(profile, args.namespace), id });
     if (!memory) return toolError("Memory not found");
-    return textToolResult({ data: memory });
+    return textToolResult({ data: toMemoryApiRecord(memory) });
   }
 
   if (params.name === "memory_delete") {
     if (!hasScope(profile, "memory:write")) return toolError("Missing memory:write scope");
     const id = readString(args.id);
     if (!id) return toolError("id is required");
-    await deleteVectorMemory(env, id);
+    const namespace = resolveNamespace(profile, args.namespace);
+    const existing = await getMemoryById(env.DB, { namespace, id });
+    if (!existing) return toolError("Memory not found");
+    if (existing.pinned) return toolError("Pinned memory cannot be deleted");
+    await softDeleteMemory(env.DB, { namespace, id });
     return textToolResult({
       data: {
         id,

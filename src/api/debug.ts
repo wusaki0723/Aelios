@@ -1,13 +1,9 @@
 import { authenticate } from "../auth/apiKey";
 import { requireScope } from "../auth/scopes";
-import { createEmbedding } from "../memory/embedding";
+import { createMemory, getMemoryById, listMemoriesPage, softDeleteMemory } from "../db/memories";
+import { createEmbedding, deleteMemoryEmbedding, upsertMemoryEmbedding } from "../memory/embedding";
+import { searchMemories, toMemoryApiRecord } from "../memory/search";
 import {
-  createVectorMemory,
-  deleteVectorMemory,
-  getVectorMemory,
-  listVectorMemories,
-  searchVectorMemories,
-  updateVectorMemory,
   vectorMetadataToMemoryRecord
 } from "../memory/vectorStore";
 import { json, openAiError } from "../utils/json";
@@ -131,10 +127,11 @@ async function waitForVectorMemory(
   let apiSearch: MemoryApiRecord[] = [];
 
   for (let attempt = 1; attempt <= 8; attempt += 1) {
-    getByPublicId = await getVectorMemory(env, memory.id);
-    getByVectorId = memory.vector_id ? await getVectorMemory(env, memory.vector_id) : null;
+    const record = await getMemoryById(env.DB, { namespace, id: memory.id });
+    getByPublicId = record ? toMemoryApiRecord(record) : null;
+    getByVectorId = null;
     directQuery = await queryVectorize(env, vector, namespace);
-    apiSearch = await searchVectorMemories(env, {
+    apiSearch = await searchMemories(env, {
       namespace,
       query: memory.content,
       topK: 10
@@ -209,7 +206,7 @@ export async function handleVectorHealth(request: Request, env: Env): Promise<Re
     const beforeQuery = await queryVectorize(env, vector, namespace);
     checks.before_query = beforeQuery;
 
-    created = await createVectorMemory(env, {
+    const createdRecord = await createMemory(env.DB, {
       namespace,
       type: "debug",
       content: phrase,
@@ -218,6 +215,8 @@ export async function handleVectorHealth(request: Request, env: Env): Promise<Re
       tags: ["vector-health"],
       source: "debug"
     });
+    await upsertMemoryEmbedding(env, createdRecord);
+    created = toMemoryApiRecord(createdRecord);
     checks.create = {
       ok: true,
       id: created.id,
@@ -262,7 +261,8 @@ export async function handleVectorHealth(request: Request, env: Env): Promise<Re
   } finally {
     if (created?.id) {
       try {
-        await deleteVectorMemory(env, created.id);
+        const record = await softDeleteMemory(env.DB, { namespace, id: created.id });
+        if (record) await deleteMemoryEmbedding(env, record);
       } catch (error) {
         console.error("vector_health cleanup failed", error);
       }
@@ -287,36 +287,26 @@ export async function handleVectorReindex(request: Request, env: Env): Promise<R
   const model = readEmbeddingModel(env);
 
   try {
-    const page = await listVectorMemories(env, {
+    const page = await listMemoriesPage(env.DB, {
       namespace,
-      count: limit,
-      cursor
+      status: "active",
+      limit,
+      offset: cursor ? Number(cursor) || 0 : 0
     });
     const rewritten: Array<{ id: string; vector_id: string | null; ok: boolean; error?: string }> = [];
 
-    for (const memory of page.data) {
+    for (const memory of page.records) {
       if (dryRun) {
         rewritten.push({ id: memory.id, vector_id: memory.vector_id, ok: true });
         continue;
       }
 
       try {
-        const updated = await updateVectorMemory(env, memory.id, {
-          type: memory.type,
-          content: memory.content,
-          summary: memory.summary,
-          importance: memory.importance,
-          confidence: memory.confidence,
-          pinned: memory.pinned,
-          tags: memory.tags,
-          source: memory.source,
-          sourceMessageIds: memory.source_message_ids,
-          expiresAt: memory.expires_at
-        });
+        const ok = await upsertMemoryEmbedding(env, memory);
         rewritten.push({
           id: memory.id,
-          vector_id: updated?.vector_id || memory.vector_id,
-          ok: Boolean(updated)
+          vector_id: memory.vector_id,
+          ok
         });
       } catch (error) {
         rewritten.push({
@@ -336,13 +326,12 @@ export async function handleVectorReindex(request: Request, env: Env): Promise<R
         embedding_model: model,
         dry_run: dryRun,
         requested_limit: limit,
-        listed_ids: page.count,
-        matched_memories: page.data.length,
+        listed_ids: page.records.length,
+        matched_memories: page.records.length,
         rewritten_count: rewritten.length - failed.length,
         failed_count: failed.length,
-        cursor: page.cursor,
+        cursor: page.nextOffset === null ? null : String(page.nextOffset),
         has_more: page.hasMore,
-        total_count: page.totalCount,
         rewritten,
         failed
       }

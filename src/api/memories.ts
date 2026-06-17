@@ -1,19 +1,21 @@
 import { authenticate } from "../auth/apiKey";
 import { requireScope } from "../auth/scopes";
 import { getOrCreateConversation } from "../db/conversations";
+import { createMemory, getMemoryById, listMemoriesPage, softDeleteMemory, updateMemory } from "../db/memories";
 import { saveIngestMessages } from "../db/messages";
 import { runDailyMemoryDigest } from "../memory/dailyDigest";
+import { upsertMemoryEmbedding } from "../memory/embedding";
 import { filterAndCompressMemoriesWithMeta } from "../memory/filter";
 import { formatMemoryPatch } from "../memory/inject";
-import { searchMemories } from "../memory/search";
 import {
-  createVectorMemory,
-  deleteVectorMemory,
-  getVectorMemory,
-  listVectorMemories,
-  searchVectorMemories,
-  updateVectorMemory
-} from "../memory/vectorStore";
+  normalizeFactKey,
+  normalizeResponsePosture,
+  normalizeRiskLevel,
+  normalizeTensionScore,
+  normalizeThread,
+  normalizeUrgencyLevel
+} from "../memory/coordinates";
+import { searchMemories, toMemoryApiRecord } from "../memory/search";
 import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
 import type { Env, KeyProfile } from "../types";
 import { json, openAiError } from "../utils/json";
@@ -21,6 +23,7 @@ import {
   readBoolean,
   readJsonObject,
   readMessages,
+  readNonNegativeInt,
   readNumber,
   readOptionalString,
   readPositiveInt,
@@ -49,7 +52,7 @@ async function handleCreateMemory(
 
   let memory;
   try {
-    memory = await createVectorMemory(env, {
+    const created = await createMemory(env.DB, {
       namespace: resolveNamespace(profile, body.namespace),
       type,
       content,
@@ -60,8 +63,16 @@ async function handleCreateMemory(
       tags: readStringArray(body.tags),
       source: readOptionalString(body.source) || profile.source,
       sourceMessageIds: readStringArray(body.source_message_ids),
-      expiresAt: readOptionalString(body.expires_at)
+      expiresAt: readOptionalString(body.expires_at),
+      factKey: normalizeFactKey(body.fact_key),
+      thread: normalizeThread(body.thread),
+      riskLevel: normalizeRiskLevel(body.risk_level),
+      urgencyLevel: normalizeUrgencyLevel(body.urgency_level),
+      tensionScore: normalizeTensionScore(body.tension_score),
+      responsePosture: normalizeResponsePosture(body.response_posture)
     });
+    await upsertMemoryEmbedding(env, created);
+    memory = toMemoryApiRecord(created);
   } catch (error) {
     const message = error instanceof Error ? error.message : "memory_create failed";
     return openAiError(message, 503, "memory_error");
@@ -77,20 +88,22 @@ async function handleListMemories(request: Request, env: Env, profile: KeyProfil
   const url = new URL(request.url);
   const namespace = resolveNamespace(profile, url.searchParams.get("namespace"));
   const limit = readPositiveInt(url.searchParams.get("limit"), 100, 1000);
-  const page = await listVectorMemories(env, {
+  const offset = readNonNegativeInt(url.searchParams.get("cursor"), 0, 1_000_000);
+  const page = await listMemoriesPage(env.DB, {
     namespace,
-    count: limit,
-    cursor: readString(url.searchParams.get("cursor"))
+    status: readString(url.searchParams.get("status")) || "active",
+    type: readString(url.searchParams.get("type")) || undefined,
+    limit,
+    offset
   });
 
   return json({
-    data: page.data,
+    data: page.records.map((record) => toMemoryApiRecord(record)),
     paging: {
       limit,
-      cursor: page.cursor,
+      cursor: page.nextOffset === null ? null : String(page.nextOffset),
       has_more: page.hasMore,
-      count: page.count,
-      total_count: page.totalCount
+      count: page.records.length
     }
   });
 }
@@ -108,10 +121,7 @@ async function handleSearchMemories(request: Request, env: Env, profile: KeyProf
   const namespace = resolveNamespace(profile, body.namespace);
   const topK = readPositiveInt(body.top_k, Number(env.MEMORY_TOP_K || 50), 50);
   const types = readStringArray(body.types);
-  const raw =
-    env.MEMORY_BACKEND === "d1"
-      ? await searchMemories(env, { namespace, query, topK, types })
-      : await searchVectorMemories(env, { namespace, query, topK, types });
+  const raw = await searchMemories(env, { namespace, query, topK, types });
   const shouldFilter = readBoolean(body.filter, true);
   const filterResult = shouldFilter
     ? await filterAndCompressMemoriesWithMeta(env, { query, memories: raw })
@@ -122,7 +132,7 @@ async function handleSearchMemories(request: Request, env: Env, profile: KeyProf
     data,
     meta: {
       namespace,
-      backend: env.MEMORY_BACKEND === "d1" ? "d1" : "vectorize",
+      backend: "d1",
       top_k: topK,
       raw_count: raw.length,
       count: data.length,
@@ -251,7 +261,7 @@ async function handlePatchMemory(
   if (!body) return openAiError("Request body must be a JSON object", 400);
 
   const namespace = resolveNamespace(profile, body.namespace);
-  const existing = await getVectorMemory(env, id);
+  const existing = await getMemoryById(env.DB, { namespace, id });
   if (!existing || existing.namespace !== namespace) return openAiError("Memory not found", 404);
 
   const patch = {
@@ -263,15 +273,21 @@ async function handlePatchMemory(
     status: readString(body.status),
     pinned: typeof body.pinned === "boolean" ? readBoolean(body.pinned) : undefined,
     tags: Array.isArray(body.tags) ? readStringArray(body.tags) : undefined,
-    source: body.source === undefined ? undefined : readOptionalString(body.source),
     sourceMessageIds: Array.isArray(body.source_message_ids) ? readStringArray(body.source_message_ids) : undefined,
-    expiresAt: body.expires_at === undefined ? undefined : readOptionalString(body.expires_at)
+    expiresAt: body.expires_at === undefined ? undefined : readOptionalString(body.expires_at),
+    factKey: body.fact_key === undefined ? undefined : normalizeFactKey(body.fact_key),
+    thread: body.thread === undefined ? undefined : normalizeThread(body.thread),
+    riskLevel: body.risk_level === undefined ? undefined : normalizeRiskLevel(body.risk_level),
+    urgencyLevel: body.urgency_level === undefined ? undefined : normalizeUrgencyLevel(body.urgency_level),
+    tensionScore: body.tension_score === undefined ? undefined : normalizeTensionScore(body.tension_score),
+    responsePosture: body.response_posture === undefined ? undefined : normalizeResponsePosture(body.response_posture)
   };
 
-  const updated = await updateVectorMemory(env, id, patch);
+  const updated = await updateMemory(env.DB, { namespace, id, patch });
+  if (updated) await upsertMemoryEmbedding(env, updated);
 
   if (!updated) return openAiError("Memory not found", 404);
-  return json({ data: updated });
+  return json({ data: toMemoryApiRecord(updated) });
 }
 
 async function handleDeleteMemory(
@@ -282,10 +298,10 @@ async function handleDeleteMemory(
   const scopeError = requireScope(profile, "memory:write");
   if (scopeError) return scopeError;
 
-  const existing = await getVectorMemory(env, id);
+  const existing = await getMemoryById(env.DB, { namespace: profile.namespace, id });
   if (!existing || existing.namespace !== profile.namespace) return openAiError("Memory not found", 404);
 
-  await deleteVectorMemory(env, id);
+  await softDeleteMemory(env.DB, { namespace: profile.namespace, id });
   return json({ data: { id: existing.id, vector_id: existing.vector_id, deleted: true } });
 }
 
@@ -293,10 +309,10 @@ async function handleGetMemory(env: Env, profile: KeyProfile, id: string): Promi
   const scopeError = requireScope(profile, "memory:read");
   if (scopeError) return scopeError;
 
-  const memory = await getVectorMemory(env, id);
+  const memory = await getMemoryById(env.DB, { namespace: profile.namespace, id });
 
   if (!memory || memory.namespace !== profile.namespace) return openAiError("Memory not found", 404);
-  return json({ data: memory });
+  return json({ data: toMemoryApiRecord(memory) });
 }
 
 export async function handleMemories(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

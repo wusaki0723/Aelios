@@ -1,4 +1,10 @@
-import { fetchMemoriesByIds, markMemoriesRecalled, searchMemoriesByText } from "../db/memories";
+import { listRelationExpandedMemories } from "../db/memoryRelations";
+import {
+  fetchMemoriesByIds,
+  listExperienceSimilarMemories,
+  markMemoriesRecalled,
+  searchMemoriesByText
+} from "../db/memories";
 import type { Env, MemoryApiRecord, MemoryRecord } from "../types";
 import { createEmbedding } from "./embedding";
 
@@ -34,6 +40,12 @@ export function toMemoryApiRecord(record: MemoryRecord, score?: number): MemoryA
     created_at: record.created_at,
     updated_at: record.updated_at,
     expires_at: record.expires_at,
+    fact_key: record.fact_key,
+    thread: record.thread,
+    risk_level: record.risk_level,
+    urgency_level: record.urgency_level,
+    tension_score: record.tension_score,
+    response_posture: record.response_posture,
     ...(score === undefined ? {} : { score })
   };
 }
@@ -138,8 +150,46 @@ function toLegacyMemoryRecord(
     created_at: readMetadataString(metadata, "created_at") || now,
     updated_at: readMetadataString(metadata, "updated_at") || now,
     expires_at: null,
+    fact_key: readMetadataString(metadata, "fact_key"),
+    thread: readMetadataString(metadata, "thread"),
+    risk_level: readMetadataString(metadata, "risk_level"),
+    urgency_level: readMetadataString(metadata, "urgency_level"),
+    tension_score:
+      metadata.tension_score === undefined ? null : readMetadataNumber(metadata, "tension_score", 0.5),
+    response_posture: readMetadataString(metadata, "response_posture"),
     score: match.score
   };
+}
+
+function mergeScoredRecords(records: Array<MemoryRecord & { score: number }>, limit: number): Array<MemoryRecord & { score: number }> {
+  const byId = new Map<string, MemoryRecord & { score: number }>();
+  for (const record of records) {
+    const existing = byId.get(record.id);
+    if (!existing || record.score > existing.score) {
+      byId.set(record.id, record);
+    }
+  }
+  return [...byId.values()]
+    .sort((a, b) => b.score + b.importance * 0.05 - (a.score + a.importance * 0.05))
+    .slice(0, limit);
+}
+
+function averageTension(records: Array<MemoryRecord & { score: number }>): number | null {
+  const values = records.flatMap((record): number[] =>
+    typeof record.tension_score === "number" && Number.isFinite(record.tension_score) ? [record.tension_score] : []
+  );
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function dominantValue(records: Array<MemoryRecord & { score: number }>, field: "risk_level" | "urgency_level"): string | null {
+  const counts = new Map<string, number>();
+  for (const record of records) {
+    const value = record[field];
+    if (!value) continue;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
 async function queryVectorize(
@@ -235,6 +285,23 @@ export async function searchMemories(
       types: input.types,
       limit: Math.max(topK, 50)
     });
+  }
+
+  if (records.length > 0) {
+    const relationRecords = await listRelationExpandedMemories(env.DB, {
+      namespace: input.namespace,
+      baseIds: records.map((record) => record.id),
+      limit: topK
+    });
+    const experienceRecords = await listExperienceSimilarMemories(env.DB, {
+      namespace: input.namespace,
+      riskLevel: dominantValue(records, "risk_level"),
+      urgencyLevel: dominantValue(records, "urgency_level"),
+      tensionScore: averageTension(records),
+      excludeIds: records.map((record) => record.id),
+      limit: Math.max(5, Math.ceil(topK / 3))
+    });
+    records = mergeScoredRecords([...records, ...relationRecords, ...experienceRecords], topK);
   }
 
   await markMemoriesRecalled(env.DB, {

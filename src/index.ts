@@ -9,6 +9,7 @@ import { handleMcp } from "./api/mcp";
 import { handleModels } from "./api/models";
 import { runDailyMemoryDigest } from "./memory/dailyDigest";
 import { runMemoryRetention } from "./memory/retention";
+import { runXyzemNightlyMaintenance } from "./memory/xyzem";
 import { handleQueueMessage } from "./queue/consumer";
 import type { Env, QueueMessage } from "./types";
 import { openAiError } from "./utils/json";
@@ -121,10 +122,13 @@ export default {
     const namespace = getDailyDigestNamespace(env);
     ctx.waitUntil(
       Promise.all([
-        runDailyMemoryDigestBatches(env, namespace),
+        runDailyMemoryDigestBatches(env, namespace).then(async (digest) => ({
+          digest,
+          xyzem: await runXyzemNightlyMaintenance(env, namespace)
+        })),
         runMemoryRetention(env, namespace)
-      ]).then(([digest, retention]) => {
-        console.log("scheduled daily memory maintenance", { namespace, digest, retention });
+      ]).then(([dream, retention]) => {
+        console.log("scheduled daily memory maintenance", { namespace, dream, retention });
       })
     );
   }

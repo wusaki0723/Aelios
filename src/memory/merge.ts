@@ -1,9 +1,13 @@
-import { createMemory, getMemoryById, updateMemory } from "../db/memories";
+import { getMemoryById, listActiveMemoriesByFactKey } from "../db/memories";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MemoryApiRecord, MemoryRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
-import { deleteMemoryEmbedding, upsertMemoryEmbedding } from "./embedding";
 import type { ExtractedMemory } from "./extract";
-import { searchMemories } from "./search";
+import { searchMemories, toMemoryApiRecord } from "./search";
+import {
+  createSyncedMemory,
+  patchSyncedMemory,
+  supersedeSyncedMemory,
+} from "./state";
 
 const MERGE_CANDIDATE_TOP_K = 5;
 const MERGE_SCORE_THRESHOLD = 0.82;
@@ -213,6 +217,15 @@ async function findMergeCandidates(
   env: Env,
   input: { namespace: string; memory: ExtractedMemory }
 ): Promise<MemoryApiRecord[]> {
+  if (input.memory.fact_key) {
+    const matches = await listActiveMemoriesByFactKey(env.DB, {
+      namespace: input.namespace,
+      factKey: input.memory.fact_key,
+      limit: MERGE_CANDIDATE_TOP_K
+    });
+    if (matches.length > 0) return matches.map((record) => toMemoryApiRecord(record, 1));
+  }
+
   const matches = await searchMemories(env, {
     namespace: input.namespace,
     query: input.memory.content,
@@ -227,8 +240,40 @@ async function findMergeCandidates(
   });
 }
 
+const SINGLE_SLOT_FACT_KEY_PATTERNS = [
+  /^user:preferred_name$/,
+  /^user:timezone$/,
+  /^user:location$/,
+  /^project:[^:]+:current_status$/,
+  /^setting:/,
+  /^user:birthday$/,
+  /^user:pronouns$/,
+  /^user:language$/,
+];
+
+function isSingleSlotFactKey(factKey: string): boolean {
+  return SINGLE_SLOT_FACT_KEY_PATTERNS.some((pattern) => pattern.test(factKey));
+}
+
+function chooseFactKeyDecision(incoming: ExtractedMemory, candidates: MemoryApiRecord[]): MemoryMergeDecision | null {
+  if (!incoming.fact_key) return null;
+  if (!isSingleSlotFactKey(incoming.fact_key)) return null;
+
+  const target = candidates.find((candidate) => candidate.fact_key === incoming.fact_key && !candidate.pinned);
+  if (!target) return null;
+  return {
+    action: "supersede",
+    target_id: target.id,
+    content: incoming.content,
+    type: incoming.type,
+    importance: incoming.importance,
+    confidence: incoming.confidence,
+    tags: incoming.tags
+  };
+}
+
 async function createNewMemory(env: Env, input: PersistMemoryInput): Promise<MemoryRecord> {
-  const created = await createMemory(env.DB, {
+  return createSyncedMemory(env, {
     namespace: input.namespace,
     type: input.memory.type,
     content: input.memory.content,
@@ -236,11 +281,14 @@ async function createNewMemory(env: Env, input: PersistMemoryInput): Promise<Mem
     confidence: input.memory.confidence,
     tags: input.memory.tags,
     source: input.source,
-    sourceMessageIds: input.sourceMessageIds
+    sourceMessageIds: input.sourceMessageIds,
+    factKey: input.memory.fact_key,
+    thread: input.memory.thread,
+    riskLevel: input.memory.risk_level,
+    urgencyLevel: input.memory.urgency_level,
+    tensionScore: input.memory.tension_score,
+    responsePosture: input.memory.response_posture
   });
-
-  await upsertMemoryEmbedding(env, created);
-  return created;
 }
 
 function resolveTarget(decision: MemoryMergeDecision, candidates: MemoryApiRecord[]): MemoryApiRecord | null {
@@ -264,7 +312,7 @@ export async function persistMemoryWithMerge(
 
   if (candidates.length === 0) return createNewMemory(env, input);
 
-  const decision = await decideMemoryMerge(env, input.memory, candidates);
+  const decision = chooseFactKeyDecision(input.memory, candidates) ?? (await decideMemoryMerge(env, input.memory, candidates));
   if ((decision.action === "merge" || decision.action === "supersede") && !decision.target_id) {
     return createNewMemory(env, input);
   }
@@ -282,50 +330,53 @@ export async function persistMemoryWithMerge(
   if (decision.action === "merge") {
     if (!decision.content) return createNewMemory(env, input);
 
-    const merged = await updateMemory(env.DB, {
-      namespace: input.namespace,
-      id: existing.id,
-      patch: {
-        type: decision.type ?? input.memory.type ?? existing.type,
-        content: decision.content,
-        importance: Math.max(existing.importance, clampScore(decision.importance, input.memory.importance)),
-        confidence: Math.max(existing.confidence, clampScore(decision.confidence, input.memory.confidence)),
-        tags: uniqueStrings([...parseJsonArray(existing.tags), ...input.memory.tags, ...(decision.tags ?? [])]),
-        sourceMessageIds: uniqueStrings([...parseJsonArray(existing.source_message_ids), ...input.sourceMessageIds])
-      }
+    return patchSyncedMemory(env, input.namespace, existing.id, {
+      type: decision.type ?? input.memory.type ?? existing.type,
+      content: decision.content,
+      importance: Math.max(existing.importance, clampScore(decision.importance, input.memory.importance)),
+      confidence: Math.max(existing.confidence, clampScore(decision.confidence, input.memory.confidence)),
+      tags: uniqueStrings([...parseJsonArray(existing.tags), ...input.memory.tags, ...(decision.tags ?? [])]),
+      sourceMessageIds: uniqueStrings([...parseJsonArray(existing.source_message_ids), ...input.sourceMessageIds]),
+      factKey: input.memory.fact_key ?? existing.fact_key,
+      thread: input.memory.thread ?? existing.thread,
+      riskLevel: input.memory.risk_level ?? existing.risk_level,
+      urgencyLevel: input.memory.urgency_level ?? existing.urgency_level,
+      tensionScore: input.memory.tension_score ?? existing.tension_score,
+      responsePosture: input.memory.response_posture ?? existing.response_posture
     });
-
-    if (merged) await upsertMemoryEmbedding(env, merged);
-    return merged;
   }
 
   if (decision.action === "supersede") {
-    const superseded = await updateMemory(env.DB, {
-      namespace: input.namespace,
-      id: existing.id,
-      patch: { status: "superseded" }
-    });
-    if (superseded) {
-      try {
-        await deleteMemoryEmbedding(env, superseded);
-      } catch (error) {
-        // D1 status is already superseded, and search filters inactive D1 records.
-        // A stale vector is annoying but should not block writing the corrected memory.
-        console.error("failed to delete superseded memory embedding", error);
-      }
-    }
-
-    return createNewMemory(env, {
-      ...input,
-      memory: {
-        ...input.memory,
+    const result = await supersedeSyncedMemory(
+      env,
+      input.namespace,
+      existing.id,
+      {
+        namespace: input.namespace,
         type: decision.type ?? input.memory.type,
         content: decision.content ?? input.memory.content,
         importance: clampScore(decision.importance, input.memory.importance),
         confidence: clampScore(decision.confidence, input.memory.confidence),
-        tags: uniqueStrings([...input.memory.tags, ...(decision.tags ?? [])])
+        tags: uniqueStrings([...input.memory.tags, ...(decision.tags ?? [])]),
+        source: input.source,
+        sourceMessageIds: input.sourceMessageIds,
+        factKey: input.memory.fact_key,
+        thread: input.memory.thread,
+        riskLevel: input.memory.risk_level,
+        urgencyLevel: input.memory.urgency_level,
+        tensionScore: input.memory.tension_score,
+        responsePosture: input.memory.response_posture
+      },
+      {
+        action: "supersede",
+        old_memory_id: existing.id,
+        incoming_fact_key: input.memory.fact_key ?? existing.fact_key,
+        old_content: existing.content,
+        new_content: decision.content ?? input.memory.content,
+        reason: input.memory.fact_key ? "fact_key_match" : "merge_decision"
       }
-    });
+    );
+    return result.created;
   }
 
   return createNewMemory(env, input);

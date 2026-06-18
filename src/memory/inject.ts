@@ -2,7 +2,6 @@ import { listMemories } from "../db/memories";
 import type { Env, InjectionMode, KeyProfile, MemoryApiRecord, OpenAIChatMessage, OpenAIChatRequest } from "../types";
 import { filterAndCompressMemories } from "./filter";
 import { searchMemories, toMemoryApiRecord } from "./search";
-import { listVectorMemories, searchVectorMemories } from "./vectorStore";
 
 function contentToText(content: OpenAIChatMessage["content"]): string {
   if (typeof content === "string") return content;
@@ -41,15 +40,7 @@ async function searchMemoriesForInjection(
   input: { namespace: string; query: string; topK: number }
 ): Promise<MemoryApiRecord[]> {
   try {
-    if (env.MEMORY_BACKEND === "d1") {
-      return await searchMemories(env, {
-        namespace: input.namespace,
-        query: input.query,
-        topK: input.topK
-      });
-    }
-
-    return await searchVectorMemories(env, {
+    return await searchMemories(env, {
       namespace: input.namespace,
       query: input.query,
       topK: input.topK
@@ -64,21 +55,13 @@ async function listMemoriesForInjection(
   env: Env,
   input: { namespace: string; limit: number }
 ): Promise<MemoryApiRecord[]> {
-  if (env.MEMORY_BACKEND === "d1") {
+  try {
     const records = await listMemories(env.DB, {
       namespace: input.namespace,
       status: "active",
       limit: input.limit
     });
     return records.map((record) => toMemoryApiRecord(record));
-  }
-
-  try {
-    const page = await listVectorMemories(env, {
-      namespace: input.namespace,
-      count: Math.min(input.limit, 1000)
-    });
-    return page.data;
   } catch (error) {
     console.error("memory injection list failed", error);
     return [];

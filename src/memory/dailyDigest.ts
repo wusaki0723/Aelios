@@ -1,24 +1,16 @@
 import { listMessagesByNamespaceInRange } from "../db/messages";
-import { getMemoryById, listMemoriesPage } from "../db/memories";
 import { readCursor, writeCursor } from "../db/retention";
 import { upsertSummary } from "../db/summaries";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MemoryApiRecord, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
-import {
-  normalizeFactKey,
-  normalizeResponsePosture,
-  normalizeRiskLevel,
-  normalizeTensionScore,
-  normalizeThread,
-  normalizeUrgencyLevel
-} from "./coordinates";
 import type { ExtractedMemory } from "./extract";
-import { toMemoryApiRecord } from "./search";
 import {
-  createSyncedMemory,
-  patchSyncedMemory,
-  deleteSyncedMemory,
-} from "./state";
+  createVectorMemory,
+  deleteVectorMemory,
+  getVectorMemory,
+  listVectorMemories,
+  updateVectorMemory
+} from "./vectorStore";
 
 interface DigestMemoryUpdate {
   target_id: string;
@@ -27,12 +19,6 @@ interface DigestMemoryUpdate {
   importance?: number;
   confidence?: number;
   tags?: string[];
-  fact_key?: string | null;
-  thread?: string | null;
-  risk_level?: string | null;
-  urgency_level?: string | null;
-  tension_score?: number | null;
-  response_posture?: string | null;
 }
 
 interface DigestMemoryDelete {
@@ -311,13 +297,7 @@ function normalizeExtractedMemory(value: unknown): ExtractedMemory | null {
     importance: clampScore(raw.importance, 0.7),
     confidence: clampScore(raw.confidence, 0.82),
     tags: readStringArray(raw.tags),
-    source_message_ids: readStringArray(raw.source_message_ids),
-    fact_key: normalizeFactKey(raw.fact_key),
-    thread: normalizeThread(raw.thread),
-    risk_level: normalizeRiskLevel(raw.risk_level),
-    urgency_level: normalizeUrgencyLevel(raw.urgency_level),
-    tension_score: normalizeTensionScore(raw.tension_score),
-    response_posture: normalizeResponsePosture(raw.response_posture)
+    source_message_ids: readStringArray(raw.source_message_ids)
   };
 }
 
@@ -365,14 +345,7 @@ function normalizeDigestResult(value: unknown): DailyDigestResult {
             type: readString(record.type) ?? undefined,
             importance: typeof record.importance === "number" ? clampScore(record.importance, 0.7) : undefined,
             confidence: typeof record.confidence === "number" ? clampScore(record.confidence, 0.82) : undefined,
-            tags: Array.isArray(record.tags) ? readStringArray(record.tags) : undefined,
-            fact_key: record.fact_key === undefined ? undefined : normalizeFactKey(record.fact_key),
-            thread: record.thread === undefined ? undefined : normalizeThread(record.thread),
-            risk_level: record.risk_level === undefined ? undefined : normalizeRiskLevel(record.risk_level),
-            urgency_level: record.urgency_level === undefined ? undefined : normalizeUrgencyLevel(record.urgency_level),
-            tension_score: record.tension_score === undefined ? undefined : normalizeTensionScore(record.tension_score),
-            response_posture:
-              record.response_posture === undefined ? undefined : normalizeResponsePosture(record.response_posture)
+            tags: Array.isArray(record.tags) ? readStringArray(record.tags) : undefined
           }
         ];
       })
@@ -423,13 +396,7 @@ function formatExistingMemories(memories: MemoryApiRecord[]): string {
       importance: memory.importance,
       confidence: memory.confidence,
       pinned: memory.pinned,
-      tags: memory.tags,
-      fact_key: memory.fact_key,
-      thread: memory.thread,
-      risk_level: memory.risk_level,
-      urgency_level: memory.urgency_level,
-      tension_score: memory.tension_score,
-      response_posture: memory.response_posture
+      tags: memory.tags
     })),
     null,
     2
@@ -478,8 +445,6 @@ function buildDigestPrompt(input: {
     "- memories_to_add 最多 8 条，每条要短、稳定、可复用。",
     "- memories_to_update 只针对给出的旧记忆 id。",
     "- memories_to_delete 只删除空、重复、明显过期或被新信息否定的旧记忆。",
-    "- memories_to_add 可以附带 LMC-5 坐标：fact_key 是稳定事实槽，thread 是主题线，risk_level 只能 normal/medium/high，urgency_level 只能 low/normal/high，tension_score 是 0-1，response_posture 是未来回应姿态。",
-    "- fact_key 不确定就输出 null，不要为了分类硬编事实槽。",
     "- 控制总输出长度，宁可少写也不要输出超长 JSON。",
     "",
     "输出 JSON 结构：",
@@ -503,12 +468,6 @@ function buildDigestPrompt(input: {
           importance: 0.86,
           confidence: 0.92,
           tags: ["project", "aelios"],
-          fact_key: "project:aelios_memory_strategy",
-          thread: "aelios",
-          risk_level: "normal",
-          urgency_level: "normal",
-          tension_score: 0.2,
-          response_posture: "技术讨论中直接推进，优先保持现有功能兼容",
           source_message_ids: ["msg_x"]
         }
       ],
@@ -639,17 +598,17 @@ async function cleanEmptyMemories(
   namespace: string
 ): Promise<number> {
   const minChars = readPositiveInt(env.EMPTY_MEMORY_MIN_CHARS, DEFAULT_EMPTY_MEMORY_MIN_CHARS, 20);
-  let page: Awaited<ReturnType<typeof listMemoriesPage>>;
+  let page: Awaited<ReturnType<typeof listVectorMemories>>;
   try {
-    page = await listMemoriesPage(env.DB, { namespace, status: "active", limit: 1000 });
+    page = await listVectorMemories(env, { namespace, count: 1000 });
   } catch (error) {
     console.error("dream: failed to list memories for cleanup", error);
     return 0;
   }
-  const records = page.records.filter((record) => !record.pinned && record.content.trim().length < minChars);
+  const records = page.data.filter((record) => !record.pinned && record.content.trim().length < minChars);
 
   for (const record of records) {
-    await deleteSyncedMemory(env, namespace, record.id);
+    await deleteVectorMemory(env, record.id);
   }
 
   return records.length;
@@ -659,7 +618,7 @@ async function saveDailySummaryMemory(
   env: Env,
   input: { namespace: string; dateLabel: string; content: string; messageIds: string[] }
 ): Promise<void> {
-  await createSyncedMemory(env, {
+  await createVectorMemory(env, {
     namespace: input.namespace,
     type: "daily_summary",
     content: input.content,
@@ -690,7 +649,7 @@ async function saveImportantExcerpts(
       .filter(Boolean)
       .join("\n");
 
-    await createSyncedMemory(env, {
+    await createVectorMemory(env, {
       namespace: input.namespace,
       type: "excerpt",
       content,
@@ -714,30 +673,24 @@ async function applyMemoryUpdates(
   let deleted = 0;
 
   for (const item of input.updates) {
-    const existing = await getMemoryById(env.DB, { namespace: input.namespace, id: item.target_id });
-    if (!existing || existing.status !== "active") continue;
+    const existing = await getVectorMemory(env, item.target_id);
+    if (!existing || existing.namespace !== input.namespace || existing.status !== "active") continue;
 
-    const next = await patchSyncedMemory(env, input.namespace, item.target_id, {
+    const next = await updateVectorMemory(env, item.target_id, {
       type: item.type,
       content: item.content,
       importance: item.importance,
       confidence: item.confidence,
-      tags: item.tags,
-      factKey: item.fact_key,
-      thread: item.thread,
-      riskLevel: item.risk_level,
-      urgencyLevel: item.urgency_level,
-      tensionScore: item.tension_score,
-      responsePosture: item.response_posture
+      tags: item.tags
     });
 
     if (next) updated += 1;
   }
 
   for (const item of input.deletes) {
-    const existing = await getMemoryById(env.DB, { namespace: input.namespace, id: item.target_id });
+    const existing = await getVectorMemory(env, item.target_id);
     if (!existing || existing.status !== "active" || existing.pinned) continue;
-    await deleteSyncedMemory(env, input.namespace, item.target_id);
+    await deleteVectorMemory(env, item.target_id);
     deleted += 1;
   }
 
@@ -780,13 +733,12 @@ export async function runDailyMemoryDigest(
   const memoryContextLimit = readDreamMemoryContextLimit(env);
   let existingMemories: MemoryApiRecord[] = [];
   try {
-    existingMemories = (await listMemoriesPage(env.DB, {
+    existingMemories = (await listVectorMemories(env, {
       namespace,
-      status: "active",
-      limit: memoryContextLimit
-    })).records.map((record) => toMemoryApiRecord(record));
+      count: memoryContextLimit
+    })).data;
   } catch (error) {
-    console.error("dream: failed to list existing memories", error);
+    console.error("dream: failed to list existing vector memories", error);
   }
   const cleanedEmptyMemories = await cleanEmptyMemories(env, namespace);
 
@@ -853,19 +805,13 @@ export async function runDailyMemoryDigest(
 
   let addedMemories = 0;
   for (const memory of digest.memories_to_add ?? []) {
-    const saved = await createSyncedMemory(env, {
+    const saved = await createVectorMemory(env, {
       namespace,
       type: memory.type,
       content: memory.content,
       importance: memory.importance,
       confidence: memory.confidence,
       tags: memory.tags,
-      factKey: memory.fact_key,
-      thread: memory.thread,
-      riskLevel: memory.risk_level,
-      urgencyLevel: memory.urgency_level,
-      tensionScore: memory.tension_score,
-      responsePosture: memory.response_posture,
       source: "dream",
       sourceMessageIds: memory.source_message_ids.length ? memory.source_message_ids : messageIds
     });

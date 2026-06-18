@@ -1,13 +1,5 @@
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
-import {
-  normalizeFactKey,
-  normalizeResponsePosture,
-  normalizeRiskLevel,
-  normalizeTensionScore,
-  normalizeThread,
-  normalizeUrgencyLevel
-} from "./coordinates";
 
 export interface ExtractedMemory {
   type: string;
@@ -16,12 +8,6 @@ export interface ExtractedMemory {
   confidence: number;
   tags: string[];
   source_message_ids: string[];
-  fact_key?: string | null;
-  thread?: string | null;
-  risk_level?: string | null;
-  urgency_level?: string | null;
-  tension_score?: number | null;
-  response_posture?: string | null;
 }
 
 export interface MemoryExtractionResult {
@@ -111,12 +97,6 @@ function parseExtraction(text: string): MemoryExtractionResult {
         confidence?: unknown;
         tags?: unknown;
         source_message_ids?: unknown;
-        fact_key?: unknown;
-        thread?: unknown;
-        risk_level?: unknown;
-        urgency_level?: unknown;
-        tension_score?: unknown;
-        response_posture?: unknown;
       };
 
       const content = normalizeMemoryContent(record.content);
@@ -127,16 +107,10 @@ function parseExtraction(text: string): MemoryExtractionResult {
           type: typeof record.type === "string" && record.type.trim() ? record.type.trim() : "note",
           content,
           importance: normalizeNumber(record.importance, 0.5),
-        confidence: normalizeNumber(record.confidence, 0.8),
-        tags: normalizeStringArray(record.tags),
-        source_message_ids: normalizeStringArray(record.source_message_ids),
-        fact_key: normalizeFactKey(record.fact_key),
-        thread: normalizeThread(record.thread),
-        risk_level: normalizeRiskLevel(record.risk_level),
-        urgency_level: normalizeUrgencyLevel(record.urgency_level),
-        tension_score: normalizeTensionScore(record.tension_score),
-        response_posture: normalizeResponsePosture(record.response_posture)
-      }
+          confidence: normalizeNumber(record.confidence, 0.8),
+          tags: normalizeStringArray(record.tags),
+          source_message_ids: normalizeStringArray(record.source_message_ids)
+        }
       ];
     })
   };
@@ -168,8 +142,6 @@ function buildExtractionPrompt(messages: MessageRecord[]): string {
     "- 关于我的责任/承诺/互动方式，写成“我……”例如“我需要在回答时更直接”。",
     "- 不要写成第三人称报告腔，例如“用户表示……”“助手应该……”。",
     "- 每条 content 必须是未来对话可直接使用的自然短句。",
-    "- 可以补充 LMC-5 坐标：fact_key 表示同一事实槽，thread 表示主题线，risk_level 只能 normal/medium/high，urgency_level 只能 low/normal/high，tension_score 是 0-1，response_posture 是未来回应姿态。",
-    "- fact_key 只给稳定事实/偏好/项目状态；不确定就给 null，不要硬编。",
     "",
     "不要保存：",
     "- 普通寒暄",
@@ -197,13 +169,7 @@ function buildExtractionPrompt(messages: MessageRecord[]): string {
           importance: 0.86,
           confidence: 0.94,
           tags: ["project", "cloudflare"],
-          source_message_ids: ["msg_x"],
-          fact_key: "project:aelios_memory_proxy",
-          thread: "aelios",
-          risk_level: "normal",
-          urgency_level: "normal",
-          tension_score: 0.2,
-          response_posture: "技术实现时直接、保守、避免破坏现有路径"
+          source_message_ids: ["msg_x"]
         },
         {
           type: "boundary",

@@ -7,8 +7,8 @@ Aelios 是一个跑在 Cloudflare Workers 上的 AI 记忆系统。你把 Chatbo
 它默认用 Cloudflare 这一套免费/低成本基础设施：
 
 - **Worker**：提供 OpenAI-compatible API，可以直接接常见客户端。
-- **D1**：记忆规范存储（所有记忆内容、状态、坐标、关系都在 D1），同时临时保存最近聊天给每日小秘书整理用。
-- **Vectorize**：语义嵌入索引，只存 embedding + ref_id + 最小元数据，支持语义搜索。
+- **D1**：临时保存最近聊天，默认给每日小秘书整理用。
+- **Vectorize**：保存真正的长期记忆，支持语义搜索。
 - **Workers AI / AI Gateway**：调用聊天模型、embedding、小秘书模型。
 - **管理面板**：浏览器打开就能搜索、编辑、删除、重建记忆。
 
@@ -360,7 +360,8 @@ Model:      companion
 | `MEMORY_FILTER_MIN_SCORE` | `0.35` | 进入 reranker 前的最低向量相关度；不填时跟随 `MEMORY_MIN_SCORE` |
 | `MEMORY_FILTER_MAX_CONTENT_CHARS` | `700` | 交给 reranker/压缩模型前，每条候选最多保留多少字 |
 | `MEMORY_MIN_IMPORTANCE` | `0.55` | 记忆写入最低重要性 |
-| `VECTORIZE_INDEX_NAME` | `memo-kb` | Vectorize 索引名；D1 是唯一主存储，Vectorize 只作为向量索引层 |
+| `MEMORY_BACKEND` | `vectorize` | 长期记忆主库。默认 Vectorize；设 `d1` 可回到旧模式 |
+| `VECTORIZE_INDEX_NAME` | `memo-kb` | Vectorize 索引名，给 list-vectors API 使用 |
 | `ENABLE_AUTO_MEMORY` | 空（开启） | 设 `false` 关闭自动记忆 |
 | `ENABLE_INCREMENTAL_MEMORY` | `false` | 设 `true` 才恢复每轮聊天后即时抽取 |
 | `ENABLE_DREAM` | `true` | 夜间 dream 开关 |
@@ -917,124 +918,3 @@ curl "https://<worker>/v1/guide-dog/chat/completions" \
   -H "content-type: application/json" \
   -d '{"model":"companion","stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"请描述这张图。"},{"type":"image_url","image_url":{"url":"https://dummyimage.com/160x80/00ff00/000000.png&text=GREEN"}}]}],"max_tokens":80}'
 ```
-
----
-
-## 架构：D1 规范存储 + Vectorize 语义索引
-
-从 `lmc5-xyzem-memory` 分支起，Aelios 的记忆系统采用 **D1 规范存储 + Vectorize 纯索引** 架构。
-
-### 核心原则
-
-- **D1 是记忆的唯一真相源。** 所有记忆内容、状态、坐标、关系、审计状态都存在 D1。
-- **Vectorize 只是语义嵌入索引。** Vectorize 行只存 embedding + ref_id + 最小过滤元数据（namespace, status, type, fact_key, pinned）。不从 Vectorize 元数据重建记忆内容。
-- **搜索管线：query → embedding → Vectorize topK → 取 D1 规范行 → 过滤 active → 文本兜底 → 关系展开 → E 轴共振 → 分数合并 → 记忆过滤/压缩 → 注入。**
-
-### Cloudflare 绑定
-
-| 绑定 | 用途 |
-|------|------|
-| `DB` (D1) | 记忆规范存储、聊天台账、摘要、事件、游标 |
-| `VECTORIZE` | 语义嵌入索引（memo-kb） |
-| `AI` (Workers AI) | embedding、reranker、小秘书模型 |
-| `MEMORY_QUEUE` | 异步记忆抽取队列 |
-
-### XYZEM 坐标系
-
-| 轴 | 含义 | D1 字段 |
-|----|------|---------|
-| X (事实) | 稳定事实槽 | `fact_key` |
-| Y (关系) | 记忆间关系图 | `memory_relations` 表 |
-| Z (审计) | 冲突审计状态 | `audit_state` |
-| E (体验) | 回应姿态/风险/紧迫 | `risk_level`, `urgency_level`, `tension_score`, `response_posture` |
-| M (元) | 类型/线程/标签 | `type`, `thread`, `tags` |
-
-### 搜索/召回流程
-
-1. 查询文本 → embedding 模型 → 向量
-2. Vectorize 语义 topK（上限 50）→ 取 ref_id 列表
-3. 从 D1 批量取规范行（IN 查询自动分批，90 条/批，避免 D1 参数上限）
-4. 过滤 status='active'（deleted/superseded/expired/review 不注入）
-5. 若 Vectorize 无结果 → D1 文本 LIKE 兜底搜索
-6. 关系展开：从 `memory_relations` 做最多 2 跳扩展，带衰减
-7. E 轴共振：找 risk/urgency/tension 相似的 active 记忆
-8. 分数合并去重，按 score + importance 排序
-9. 可选：reranker 重排 + 压缩模型压短
-10. 注入到聊天上下文
-
-### Dream / 定时整理
-
-每天 UTC 20:10（北京/新加坡 04:10）触发：
-
-1. **Daily Digest**：读取 D1 中当天聊天，调模型产出记忆更新计划（添加/更新/删除），写摘要，推进游标。
-   - 若模型返回无效 JSON，游标不推进，下次重试。
-2. **XYZEM 夜间维护**：
-   - **Z 轴审计**：找同 fact_key 下多个 active 记忆，保留最佳候选（confidence > importance > recency），只标记更弱的为 review。pinned 记忆不受影响。
-   - **M 代谢巡逻**：发现过期、待 review 的记忆，发事件。
-   - **Y 关系构建**：为新记忆建 temporal_sequence / same_topic 等安全关系，contradicts 等风险关系只发 review 事件。
-3. **Retention**：清理过期消息、事件、usage_logs，过期/硬删记忆，同步清理 Vectorize 向量。
-
-### 写入/更新/删除流程
-
-- **创建记忆**：写 D1 规范行 → 生成 embedding → 写入 Vectorize（只存 ref_id + 最小元数据）
-- **更新记忆**：更新 D1 → 若仍 active 则重新 upsert Vectorize；若非 active 则删除 Vectorize 向量
-- **删除记忆**：D1 标记 status='deleted' → 删除 Vectorize 向量
-- **Reindex**：从 D1 所有 active 记忆重建 Vectorize 嵌入
-
-### 冲突/合并策略
-
-- **fact_key 匹配**：同 fact_key 的 active 记忆是潜在冲突，但不盲目 supersede。
-- **模型判断**：新记忆写入时，找语义相似候选，由模型决定 keep_both / merge / supersede。
-- **pinned 保护**：pinned 记忆永远不被 delete、supersede 或静默改写。
-- **Z 审计**：只标记更弱候选为 review，保留最佳候选为 active。
-
-### 重建 Vectorize
-
-```bash
-# 从 D1 重建所有 active 记忆的 Vectorize 嵌入
-npm run vectorize:reindex -- --api-url https://<worker> --api-key <KEY> --namespace default
-
-# dry-run 模式（默认）只看不动
-npm run vectorize:reindex -- --api-url https://<worker> --api-key <KEY> --dry-run
-
-# 实际执行
-npm run vectorize:reindex -- --api-url https://<worker> --api-key <KEY> --namespace default
-```
-
-也可以通过 API 单页操作：
-
-```bash
-curl -X POST "https://<worker>/v1/debug/vector_reindex" \
-  -H "Authorization: Bearer <KEY>" \
-  -H "content-type: application/json" \
-  -d '{"namespace":"default","limit":50,"dry_run":false}'
-```
-
-### 旧 Vectorize-only 记忆迁移（migration-only）
-
-**这只针对已有记忆库的老用户。** 全新安装什么都不用做。
-
-完整迁移步骤见 [MIGRATION.md](MIGRATION.md)。核心顺序：
-
-1. `npm run db:migrate:remote` — 应用 migration
-2. `node scripts/import-vectorize-to-d1.mjs` — 把 Vectorize 灌进 D1（先 dry-run 再审）
-3. `node scripts/backfill-xyzem-memories.mjs` — 补 XYZEM 坐标（先 dry-run）
-4. 视情况 `npm run vectorize:reindex` — 重建嵌入
-
-**迁移期间禁止跑** `vectorize:clean`、`vectorize:clean:llm`、`memory:deep-clean`——它们会删数据。
-
-### 烟雾测试
-
-```bash
-# 运行完整记忆系统烟雾测试
-npm run test:smoke -- --api-url https://<worker> --api-key <KEY> --namespace default
-```
-
-测试覆盖：
-- 创建记忆 → D1 存在 → Vectorize 嵌入存在
-- 搜索记忆 → Vectorize 命中 → 取 D1 规范行
-- 文本兜底搜索
-- 更新记忆 → D1 更新 → Vectorize 重新索引
-- 删除记忆 → D1 状态变更 → 旧向量不影响召回
-- Z 审计不批量禁用同 fact_key 下所有记忆
-- Debug reindex 从 D1 重建 Vectorize

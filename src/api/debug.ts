@@ -1,12 +1,14 @@
 import { authenticate } from "../auth/apiKey";
 import { requireScope } from "../auth/scopes";
-import { getMemoryById, updateMemory } from "../db/memories";
 import { createEmbedding } from "../memory/embedding";
-import { searchMemories, toMemoryApiRecord } from "../memory/search";
-import { createSyncedMemory, deleteSyncedMemory, syncMemoryVector } from "../memory/state";
 import {
-  extractRefIdFromVector,
-  extractStatusFromVector
+  createVectorMemory,
+  deleteVectorMemory,
+  getVectorMemory,
+  listVectorMemories,
+  searchVectorMemories,
+  updateVectorMemory,
+  vectorMetadataToMemoryRecord
 } from "../memory/vectorStore";
 import { json, openAiError } from "../utils/json";
 import type { Env, KeyProfile, MemoryApiRecord } from "../types";
@@ -68,12 +70,15 @@ function readEmbeddingProvider(model: string): string {
 }
 
 function compactMatch(match: VectorizeMatch): Record<string, unknown> {
+  const record = vectorMetadataToMemoryRecord(match, match.score);
   return {
     id: match.id,
     vector_namespace: match.namespace,
     score: match.score,
-    ref_id: extractRefIdFromVector(match),
-    status: extractStatusFromVector(match),
+    namespace: record?.namespace,
+    ref_id: record?.id,
+    type: record?.type,
+    content_preview: record?.content.slice(0, 120)
   };
 }
 
@@ -126,17 +131,17 @@ async function waitForVectorMemory(
   let apiSearch: MemoryApiRecord[] = [];
 
   for (let attempt = 1; attempt <= 8; attempt += 1) {
-    const record = await getMemoryById(env.DB, { namespace, id: memory.id });
-    getByPublicId = record ? toMemoryApiRecord(record) : null;
-    getByVectorId = null;
+    getByPublicId = await getVectorMemory(env, memory.id);
+    getByVectorId = memory.vector_id ? await getVectorMemory(env, memory.vector_id) : null;
     directQuery = await queryVectorize(env, vector, namespace);
-    apiSearch = await searchMemories(env, {
+    apiSearch = await searchVectorMemories(env, {
       namespace,
       query: memory.content,
       topK: 10
     });
 
     const visible =
+      Boolean(getByPublicId || getByVectorId) ||
       directQuery.namespaced.some((match) => match.id === memory.vector_id || match.ref_id === memory.id) ||
       directQuery.legacy.some((match) => match.id === memory.vector_id || match.ref_id === memory.id) ||
       apiSearch.some((item) => item.id === memory.id || item.vector_id === memory.vector_id);
@@ -204,7 +209,7 @@ export async function handleVectorHealth(request: Request, env: Env): Promise<Re
     const beforeQuery = await queryVectorize(env, vector, namespace);
     checks.before_query = beforeQuery;
 
-    const createdRecord = await createSyncedMemory(env, {
+    created = await createVectorMemory(env, {
       namespace,
       type: "debug",
       content: phrase,
@@ -213,7 +218,6 @@ export async function handleVectorHealth(request: Request, env: Env): Promise<Re
       tags: ["vector-health"],
       source: "debug"
     });
-    created = toMemoryApiRecord(createdRecord);
     checks.create = {
       ok: true,
       id: created.id,
@@ -258,7 +262,7 @@ export async function handleVectorHealth(request: Request, env: Env): Promise<Re
   } finally {
     if (created?.id) {
       try {
-        await deleteSyncedMemory(env, namespace, created.id);
+        await deleteVectorMemory(env, created.id);
       } catch (error) {
         console.error("vector_health cleanup failed", error);
       }
@@ -280,72 +284,45 @@ export async function handleVectorReindex(request: Request, env: Env): Promise<R
   const limit = readPositiveInt(body.limit, 50, 100);
   const cursor = readString(body.cursor);
   const dryRun = readBoolean(body.dry_run, true);
-  const force = readBoolean(body.force, false);
-  const syncFilter = readString(body.sync_filter);
   const model = readEmbeddingModel(env);
 
   try {
-    if (!dryRun && !force) {
-      const activeCount = await env.DB
-        .prepare("SELECT COUNT(*) as cnt FROM memories WHERE namespace = ? AND status = 'active'")
-        .bind(namespace)
-        .first<{ cnt: number }>();
-      const count = activeCount?.cnt ?? 0;
-      if (count === 0) {
-        return json({
-          ok: false,
-          error: "SAFETY: D1 has 0 active memories. Run the Vectorize→D1 import script first, or pass force=true to override.",
-          data: { d1_active_count: count }
-        }, { status: 409 });
-      }
-    }
+    const page = await listVectorMemories(env, {
+      namespace,
+      count: limit,
+      cursor
+    });
+    const rewritten: Array<{ id: string; vector_id: string | null; ok: boolean; error?: string }> = [];
 
-    let filterStatus = "active";
-    let sql = "SELECT * FROM memories WHERE namespace = ? AND status = ?";
-    const binds: unknown[] = [namespace, filterStatus];
-
-    if (syncFilter) {
-      sql += " AND (vector_sync_status = ? OR vector_sync_status IS NULL)";
-      binds.push(syncFilter);
-    }
-
-    const offset = cursor ? Number(cursor) || 0 : 0;
-    sql += " ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT ? OFFSET ?";
-    binds.push(limit + 1, offset);
-
-    const result = await env.DB.prepare(sql).bind(...binds).all<import("../types").MemoryRecord>();
-    const rows = result.results ?? [];
-    const records = rows.slice(0, limit);
-    const hasMore = rows.length > limit;
-    const nextOffset = hasMore ? offset + records.length : null;
-
-    const rewritten: Array<{ id: string; vector_id: string | null; ok: boolean; sync_status?: string; error?: string }> = [];
-
-    for (const memory of records) {
+    for (const memory of page.data) {
       if (dryRun) {
         rewritten.push({ id: memory.id, vector_id: memory.vector_id, ok: true });
         continue;
       }
 
       try {
-        const syncStatus = await syncMemoryVector(env, memory);
+        const updated = await updateVectorMemory(env, memory.id, {
+          type: memory.type,
+          content: memory.content,
+          summary: memory.summary,
+          importance: memory.importance,
+          confidence: memory.confidence,
+          pinned: memory.pinned,
+          tags: memory.tags,
+          source: memory.source,
+          sourceMessageIds: memory.source_message_ids,
+          expiresAt: memory.expires_at
+        });
         rewritten.push({
           id: memory.id,
-          vector_id: memory.vector_id,
-          ok: syncStatus === "synced",
-          sync_status: syncStatus,
+          vector_id: updated?.vector_id || memory.vector_id,
+          ok: Boolean(updated)
         });
       } catch (error) {
-        await updateMemory(env.DB, {
-          namespace,
-          id: memory.id,
-          patch: { vectorSyncStatus: "failed" },
-        });
         rewritten.push({
           id: memory.id,
           vector_id: memory.vector_id,
           ok: false,
-          sync_status: "failed",
           error: error instanceof Error ? error.message : String(error)
         });
       }
@@ -359,12 +336,13 @@ export async function handleVectorReindex(request: Request, env: Env): Promise<R
         embedding_model: model,
         dry_run: dryRun,
         requested_limit: limit,
-        listed_ids: records.length,
-        matched_memories: records.length,
+        listed_ids: page.count,
+        matched_memories: page.data.length,
         rewritten_count: rewritten.length - failed.length,
         failed_count: failed.length,
-        cursor: nextOffset === null ? null : String(nextOffset),
-        has_more: hasMore,
+        cursor: page.cursor,
+        has_more: page.hasMore,
+        total_count: page.totalCount,
         rewritten,
         failed
       }
@@ -456,49 +434,5 @@ export async function handleCacheHealth(request: Request, env: Env): Promise<Res
   } catch (error) {
     console.error("cache_health query failed", error);
     return json({ error: "cache_health_query_failed" }, { status: 500 });
-  }
-}
-
-const REVIEW_EVENT_TYPES = new Set(["z_audit", "m_patrol", "y_relation_review", "z_conflict"]);
-
-export async function handleReviewEvents(request: Request, env: Env): Promise<Response> {
-  const auth = await authenticate(request, env);
-  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
-  if (!canReadDebug(auth.profile)) return openAiError("Missing required scope: debug:read", 403);
-
-  const url = new URL(request.url);
-  const namespace = url.searchParams.get("namespace")?.trim() || auth.profile.namespace;
-  const eventType = url.searchParams.get("event_type")?.trim();
-  const limit = readPositiveInt(url.searchParams.get("limit"), 50, 200);
-
-  try {
-    let sql = "SELECT * FROM memory_events WHERE namespace = ?";
-    const binds: unknown[] = [namespace];
-
-    if (eventType) {
-      sql += " AND event_type = ?";
-      binds.push(eventType);
-    } else {
-      const placeholders = [...REVIEW_EVENT_TYPES].map(() => "?").join(", ");
-      sql += ` AND event_type IN (${placeholders})`;
-      binds.push(...REVIEW_EVENT_TYPES);
-    }
-
-    sql += " ORDER BY created_at DESC LIMIT ?";
-    binds.push(limit);
-
-    const result = await env.DB.prepare(sql).bind(...binds).all();
-    const events = (result.results ?? []).map((row: Record<string, unknown>) => ({
-      ...row,
-      payload: typeof row.payload_json === "string" ? JSON.parse(row.payload_json as string) : row.payload_json,
-    }));
-
-    return json({
-      data: events,
-      meta: { namespace, event_type: eventType ?? "all_review", count: events.length }
-    });
-  } catch (error) {
-    console.error("review_events query failed", error);
-    return json({ error: "review_events_query_failed" }, { status: 500 });
   }
 }

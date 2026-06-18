@@ -23,6 +23,7 @@ const apiUrl = flag("api-url") || process.env.AELIOS_URL || "http://localhost:87
 const apiKey = flag("api-key") || process.env.AELIOS_API_KEY || "";
 const namespace = flag("namespace") || process.env.AELIOS_NAMESPACE || "default";
 const dryRun = hasFlag("dry-run");
+const force = hasFlag("force");
 const pageSize = parseInt(flag("page-size") || "50", 10);
 
 if (!apiKey) {
@@ -35,6 +36,7 @@ async function reindexPage(cursor) {
     namespace,
     limit: pageSize,
     dry_run: dryRun,
+    force,
     ...(cursor ? { cursor } : {}),
   };
 

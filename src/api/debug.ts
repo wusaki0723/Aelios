@@ -280,10 +280,26 @@ export async function handleVectorReindex(request: Request, env: Env): Promise<R
   const limit = readPositiveInt(body.limit, 50, 100);
   const cursor = readString(body.cursor);
   const dryRun = readBoolean(body.dry_run, true);
+  const force = readBoolean(body.force, false);
   const syncFilter = readString(body.sync_filter);
   const model = readEmbeddingModel(env);
 
   try {
+    if (!dryRun && !force) {
+      const activeCount = await env.DB
+        .prepare("SELECT COUNT(*) as cnt FROM memories WHERE namespace = ? AND status = 'active'")
+        .bind(namespace)
+        .first<{ cnt: number }>();
+      const count = activeCount?.cnt ?? 0;
+      if (count === 0) {
+        return json({
+          ok: false,
+          error: "SAFETY: D1 has 0 active memories. Run the Vectorize→D1 import script first, or pass force=true to override.",
+          data: { d1_active_count: count }
+        }, { status: 409 });
+      }
+    }
+
     let filterStatus = "active";
     let sql = "SELECT * FROM memories WHERE namespace = ? AND status = ?";
     const binds: unknown[] = [namespace, filterStatus];
@@ -440,5 +456,49 @@ export async function handleCacheHealth(request: Request, env: Env): Promise<Res
   } catch (error) {
     console.error("cache_health query failed", error);
     return json({ error: "cache_health_query_failed" }, { status: 500 });
+  }
+}
+
+const REVIEW_EVENT_TYPES = new Set(["z_audit", "m_patrol", "y_relation_review", "z_conflict"]);
+
+export async function handleReviewEvents(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+  if (!canReadDebug(auth.profile)) return openAiError("Missing required scope: debug:read", 403);
+
+  const url = new URL(request.url);
+  const namespace = url.searchParams.get("namespace")?.trim() || auth.profile.namespace;
+  const eventType = url.searchParams.get("event_type")?.trim();
+  const limit = readPositiveInt(url.searchParams.get("limit"), 50, 200);
+
+  try {
+    let sql = "SELECT * FROM memory_events WHERE namespace = ?";
+    const binds: unknown[] = [namespace];
+
+    if (eventType) {
+      sql += " AND event_type = ?";
+      binds.push(eventType);
+    } else {
+      const placeholders = [...REVIEW_EVENT_TYPES].map(() => "?").join(", ");
+      sql += ` AND event_type IN (${placeholders})`;
+      binds.push(...REVIEW_EVENT_TYPES);
+    }
+
+    sql += " ORDER BY created_at DESC LIMIT ?";
+    binds.push(limit);
+
+    const result = await env.DB.prepare(sql).bind(...binds).all();
+    const events = (result.results ?? []).map((row: Record<string, unknown>) => ({
+      ...row,
+      payload: typeof row.payload_json === "string" ? JSON.parse(row.payload_json as string) : row.payload_json,
+    }));
+
+    return json({
+      data: events,
+      meta: { namespace, event_type: eventType ?? "all_review", count: events.length }
+    });
+  } catch (error) {
+    console.error("review_events query failed", error);
+    return json({ error: "review_events_query_failed" }, { status: 500 });
   }
 }

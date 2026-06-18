@@ -40,12 +40,12 @@ export interface Env {
   ENABLE_DAILY_SUMMARY_MEMORY?: string;
   EMPTY_MEMORY_MIN_CHARS?: string;
   MEMORY_MODE?: string;
+  MEMORY_BACKEND?: string;
   ENABLE_MEMORY_FILTER?: string;
   MEMORY_FILTER_MODEL?: string;
   ENABLE_MEMORY_RERANKER?: string;
   MEMORY_RERANKER_MODEL?: string;
   VISION_MODEL?: string;
-  DEEPSEEK_API_KEY?: string;
   MEMORY_FILTER_MAX_CANDIDATES?: string;
   MEMORY_FILTER_MAX_OUTPUT?: string;
   MEMORY_FILTER_MAX_CONTENT_CHARS?: string;
@@ -201,14 +201,6 @@ export interface MemoryRecord {
   created_at: string;
   updated_at: string;
   expires_at: string | null;
-  fact_key: string | null;
-  thread: string | null;
-  risk_level: string | null;
-  urgency_level: string | null;
-  tension_score: number | null;
-  response_posture: string | null;
-  audit_state: string | null;
-  vector_sync_status: string | null;
 }
 
 export interface MemoryApiRecord {
@@ -230,14 +222,6 @@ export interface MemoryApiRecord {
   created_at: string;
   updated_at: string;
   expires_at: string | null;
-  fact_key: string | null;
-  thread: string | null;
-  risk_level: string | null;
-  urgency_level: string | null;
-  tension_score: number | null;
-  response_posture: string | null;
-  audit_state: string | null;
-  vector_sync_status: string | null;
   score?: number;
 }
 

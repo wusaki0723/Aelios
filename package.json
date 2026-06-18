@@ -13,10 +13,6 @@
     "vectorize:clean": "node scripts/clean-vectorize-memory.mjs",
     "vectorize:clean:llm": "node scripts/llm-clean-vectorize-memory.mjs",
     "memory:deep-clean": "node scripts/deep-clean-memories.mjs",
-    "memory:backfill-xyzem": "node scripts/backfill-xyzem-memories.mjs",
-    "memory:import-from-vectorize": "node scripts/import-vectorize-to-d1.mjs",
-    "vectorize:reindex": "node scripts/reindex-vectorize.mjs",
-    "test:smoke": "node scripts/smoke-test-memory.mjs",
     "cache:test": "node scripts/test-claude-cache.mjs",
     "db:migrate:local": "wrangler d1 migrations apply companion_memory_proxy --local",
     "db:migrate:remote": "wrangler d1 migrations apply companion_memory_proxy --remote"

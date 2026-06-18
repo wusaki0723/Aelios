@@ -181,3 +181,32 @@ export async function removeMemoryVector(
   await updateSyncStatus(env, memory.namespace, memory.id, status);
   return status;
 }
+
+export async function retryStaleVectorSyncs(
+  env: Env,
+  namespace: string,
+  limit = 50
+): Promise<{ scanned: number; retried: number; fixed: number }> {
+  const rows = await env.DB
+    .prepare(
+      `SELECT * FROM memories
+       WHERE namespace = ?
+         AND status = 'active'
+         AND (vector_sync_status = 'failed' OR vector_sync_status = 'pending' OR vector_sync_status IS NULL)
+       ORDER BY updated_at DESC
+       LIMIT ?`
+    )
+    .bind(namespace, Math.min(Math.max(limit, 1), 200))
+    .all<MemoryRecord>();
+
+  const memories = rows.results ?? [];
+  let fixed = 0;
+
+  for (const memory of memories) {
+    const status = await syncVector(env, memory);
+    await updateSyncStatus(env, namespace, memory.id, status);
+    if (status === "synced") fixed += 1;
+  }
+
+  return { scanned: memories.length, retried: memories.length, fixed };
+}

@@ -1,7 +1,7 @@
 import { handleAdmin } from "./api/admin";
 import { handleHealth } from "./api/health";
 import { handleCache } from "./api/cache";
-import { handleCacheHealth, handleVectorHealth, handleVectorReindex } from "./api/debug";
+import { handleCacheHealth, handleVectorHealth, handleVectorReindex, handleReviewEvents } from "./api/debug";
 import { handleChatCompletions } from "./api/chatCompletions";
 import { handleGuideDogChatCompletions } from "./api/guideDog";
 import { handleIngestMessagesApi, handleMemories, handleSearchMemoriesApi } from "./api/memories";
@@ -10,6 +10,7 @@ import { handleModels } from "./api/models";
 import { runDailyMemoryDigest } from "./memory/dailyDigest";
 import { runMemoryRetention } from "./memory/retention";
 import { runXyzemNightlyMaintenance } from "./memory/xyzem";
+import { retryStaleVectorSyncs } from "./memory/state";
 import { handleQueueMessage } from "./queue/consumer";
 import type { Env, QueueMessage } from "./types";
 import { openAiError } from "./utils/json";
@@ -103,6 +104,10 @@ export default {
       return handleVectorReindex(request, env);
     }
 
+    if (request.method === "GET" && url.pathname === "/v1/debug/review_events") {
+      return handleReviewEvents(request, env);
+    }
+
     return openAiError("Not found", 404);
   },
 
@@ -126,9 +131,10 @@ export default {
           digest,
           xyzem: await runXyzemNightlyMaintenance(env, namespace)
         })),
-        runMemoryRetention(env, namespace)
-      ]).then(([dream, retention]) => {
-        console.log("scheduled daily memory maintenance", { namespace, dream, retention });
+        runMemoryRetention(env, namespace),
+        retryStaleVectorSyncs(env, namespace, 50)
+      ]).then(([dream, retention, syncRetry]) => {
+        console.log("scheduled daily memory maintenance", { namespace, dream, retention, syncRetry });
       })
     );
   }

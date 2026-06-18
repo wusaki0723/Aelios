@@ -1010,25 +1010,18 @@ curl -X POST "https://<worker>/v1/debug/vector_reindex" \
   -d '{"namespace":"default","limit":50,"dry_run":false}'
 ```
 
-### 旧 Vectorize-only 记忆迁移
+### 旧 Vectorize-only 记忆迁移（migration-only）
 
-如果你在 lmc5-xyzem-memory 之前就有 Vectorize-only 记忆（没有 D1 行），需要迁移：
+**这只针对已有记忆库的老用户。** 全新安装什么都不用做。
 
-1. **导出旧向量**：通过 Vectorize API 列出所有向量，找到没有对应 D1 行的。
-2. **写回 D1**：为每条旧向量创建 D1 规范行。
-3. **重建 Vectorize**：用 `npm run vectorize:reindex` 从 D1 重建嵌入。
+完整迁移步骤见 [MIGRATION.md](MIGRATION.md)。核心顺序：
 
-脚本辅助：
+1. `npm run db:migrate:remote` — 应用 migration
+2. `node scripts/import-vectorize-to-d1.mjs` — 把 Vectorize 灌进 D1（先 dry-run 再审）
+3. `node scripts/backfill-xyzem-memories.mjs` — 补 XYZEM 坐标（先 dry-run）
+4. 视情况 `npm run vectorize:reindex` — 重建嵌入
 
-```bash
-# 深度清理：找出 Vectorize 中有但 D1 中没有的记忆
-npm run memory:deep-clean -- --api-url https://<worker> --api-key <KEY>
-
-# 迁移后再重建
-npm run vectorize:reindex -- --api-url https://<worker> --api-key <KEY>
-```
-
-日常运行时不需要迁移。只有当你需要确保所有记忆都在 D1 中时才需要。搜索管线的文本兜底会处理 Vectorize 中有但 D1 中没有的旧记忆（这些旧记忆在迁移前仍然可搜索但不会被注入）。
+**迁移期间禁止跑** `vectorize:clean`、`vectorize:clean:llm`、`memory:deep-clean`——它们会删数据。
 
 ### 烟雾测试
 

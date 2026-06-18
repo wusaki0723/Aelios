@@ -94,7 +94,7 @@ Deploy command:     npm run deploy:cloudflare
 **Deploy command 一定要填 `npm run deploy:cloudflare`。**
 
 不要填成 `npm run deploy`，也不要填成 `wrangler deploy`。
-这个命令会自动帮你创建和升级 D1、Vectorize、Queue，然后再部署 Worker。
+这个命令会自动帮你创建和升级 D1、Vectorize、Queue，然后再部署 Worker。不要勾选非生产分支。
 
 填完之后点 Deploy。
 

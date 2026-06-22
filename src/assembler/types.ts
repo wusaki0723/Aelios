@@ -28,10 +28,6 @@ export interface Block {
 // Assembler context — everything a block needs, nothing more
 // ---------------------------------------------------------------------------
 
-export interface SummaryEntry {
-  content: string;
-}
-
 export interface AssemblerContext {
   /** Frontend system messages (role=system from the request). */
   systemMessages: OpenAIChatMessage[];
@@ -42,9 +38,6 @@ export interface AssemblerContext {
    * If null, block 2 falls back to empty.
    */
   pinnedPersonaMemories: MemoryApiRecord[] | null;
-
-  /** Latest summary entry from the summaries table, or null. */
-  summaryEntry: SummaryEntry | null;
 
   /** RAG hits for the current round. */
   ragMemories: MemoryApiRecord[];
@@ -80,13 +73,12 @@ export interface AssembledPrompt {
 }
 
 // ---------------------------------------------------------------------------
-// Global block order (9 blocks, single sequence, no PACK)
+// Global block order (8 blocks, single sequence, no PACK)
 // ---------------------------------------------------------------------------
 
 export const BLOCK_ORDER: readonly string[] = [
   "proxy_static_rules",
   "persona_pinned",
-  "long_term_summary",
   "preset_lite",
   "client_system",
   "dynamic_memory_patch",
@@ -106,9 +98,3 @@ export const CACHE_ANCHOR_AFTER_ID = "client_system";
 // ---------------------------------------------------------------------------
 
 export const PERSONA_MEMORY_TYPES: readonly string[] = ["identity", "persona"] as const;
-
-// ---------------------------------------------------------------------------
-// Summary truncation limit (character proxy for tokens)
-// ---------------------------------------------------------------------------
-
-export const SUMMARY_MAX_CHARS = 2000;

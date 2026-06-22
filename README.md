@@ -364,7 +364,7 @@ GET    /v1/debug/cache_health
 POST /v1/chat/completions
 ```
 
-会做：认证、模型路由、记忆搜索/注入、用户消息保存、助手回复保存、Queue 记忆维护、长期摘要、D1 生命周期清理、Claude cache。
+会做：认证、模型路由、记忆搜索/注入、用户消息保存、助手回复保存、Queue 记忆维护、D1 生命周期清理、Claude cache。
 
 **2. 纯记忆库 MCP**
 
@@ -510,21 +510,20 @@ Embedding
 
 ### Prompt Assembler (v4)
 
-组装顺序（9 个 block，单一线性）：
+组装顺序（8 个 block，单一线性）：
 
 ```
 system_blocks:
   1. proxy_static_rules    (stable)  — 不暴露后端的规则
   2. persona_pinned        (stable)  — identity/persona 记忆
-  3. long_term_summary     (stable)  — 长期对话摘要（≤2000字）
-  4. preset_lite           (stable)  — 输出风格指令
-  5. client_system         (stable)  — 前端 system 消息 [CACHE ANCHOR]
-  6. dynamic_memory_patch  (dynamic) — RAG 命中的记忆
-  7. vision_context        (dynamic) — 视觉描述
+  3. preset_lite           (stable)  — 输出风格指令
+  4. client_system         (stable)  — 前端 system 消息 [CACHE ANCHOR]
+  5. dynamic_memory_patch  (dynamic) — RAG 命中的记忆
+  6. vision_context        (dynamic) — 视觉描述
 
 messages:
-  8. recent_history        — 历史消息（仅 user/assistant）
-  9. current_user          — 当前用户消息（保留原始 content，图片不丢）
+  7. recent_history        — 历史消息（仅 user/assistant）
+  8. current_user          — 当前用户消息（保留原始 content，图片不丢）
 ```
 
 默认会同时使用三层 Claude prompt cache：
@@ -632,7 +631,7 @@ producer:
   不存在 -> fallback handleQueueMessage（本地开发）
 
 consumer (src/index.ts queue handler):
-  memory_maintenance -> runMemoryMaintenance + maybeUpdateLongTermSummary
+  memory_maintenance -> runMemoryMaintenance
   retention -> runMemoryRetention
 ```
 
@@ -672,7 +671,7 @@ npm run typecheck         # TypeScript 类型检查
 npm run dev               # 本地 wrangler dev
 npm run setup:cloudflare  # 创建/升级 D1 + Vectorize + Queue
 npm run deploy:cloudflare # setup + deploy（生产用）
-node scripts/verify-assembler.mjs  # 合约测试（194 项）
+node scripts/verify-assembler.mjs  # 合约测试（170 项）
 ```
 
 ### 验证脚本
@@ -696,8 +695,7 @@ Test 13: Thinking + prompt trim
 Test 14: Regex Pipeline
 Test 15: D1 Lifecycle Retention
 Test 16: Memory Merge / Supersede
-Test 17: Long-Term Summary
-Test 18: Queue Send / Fallback
+Test 17: Queue Send / Fallback
 ```
 
 ### 手工验收命令

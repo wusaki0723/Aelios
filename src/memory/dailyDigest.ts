@@ -1,6 +1,5 @@
 import { listMessagesByNamespaceInRange } from "../db/messages";
 import { readCursor, writeCursor } from "../db/retention";
-import { upsertSummary } from "../db/summaries";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MemoryApiRecord, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 import type { ExtractedMemory } from "./extract";
@@ -401,21 +400,6 @@ function buildDigestPrompt(input: {
   ].join("\n");
 }
 
-function formatDailySummary(result: DailyDigestResult, dateLabel: string, messages: MessageRecord[]): string {
-  const parts = [
-    `# ${result.date || dateLabel} ${result.title || "每日摘要"}`,
-    "",
-    result.summary || `${dateLabel} 共整理 ${messages.length} 条聊天。`
-  ];
-
-  for (const section of result.sections ?? []) {
-    if (!section.heading && !section.content) continue;
-    parts.push("", `## ${section.heading || "要点"}`, section.content || "");
-  }
-
-  return parts.join("\n").trim();
-}
-
 async function callDigestModel(
   env: Env,
   prompt: string
@@ -471,26 +455,6 @@ async function cleanEmptyMemories(
   }
 
   return records.length;
-}
-
-async function saveDailySummaryMemory(
-  env: Env,
-  input: { namespace: string; dateLabel: string; content: string; messageIds: string[] }
-): Promise<void> {
-  await createVectorMemory(env, {
-    namespace: input.namespace,
-    type: "daily_summary",
-    content: input.content,
-    importance: 0.66,
-    confidence: 0.9,
-    tags: ["daily-summary", input.dateLabel],
-    source: "daily_digest",
-    sourceMessageIds: input.messageIds
-  });
-}
-
-function shouldSaveDailySummaryMemory(env: Env): boolean {
-  return env.ENABLE_DAILY_SUMMARY_MEMORY === "true";
 }
 
 async function saveImportantExcerpts(
@@ -616,24 +580,7 @@ export async function runDailyMemoryDigest(
     console.error("daily digest: model did not return valid JSON; cursor not advanced");
     return { ran: false };
   }
-  const summaryContent = formatDailySummary(digest, dateLabel, messages);
   const messageIds = messages.map((message) => message.id);
-
-  await upsertSummary(env.DB, {
-    namespace,
-    content: summaryContent,
-    fromMessageId: messages[0]?.id ?? null,
-    toMessageId: lastMessage.id,
-    messageCount: messages.length
-  });
-  if (shouldSaveDailySummaryMemory(env)) {
-    await saveDailySummaryMemory(env, {
-      namespace,
-      dateLabel,
-      content: summaryContent,
-      messageIds
-    });
-  }
 
   const updates = await applyMemoryUpdates(env, {
     namespace,

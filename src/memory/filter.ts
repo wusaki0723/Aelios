@@ -112,8 +112,8 @@ function getMaxTokens(env: Env): number {
 }
 
 function getFilterMinScore(env: Env): number {
-  const value = Number(env.MEMORY_FILTER_MIN_SCORE || env.MEMORY_MIN_SCORE || 0.35);
-  return Number.isFinite(value) ? clamp(value, 0, 1) : 0.35;
+  const value = Number(env.MEMORY_FILTER_MIN_SCORE || env.MEMORY_MIN_SCORE || 0.15);
+  return Number.isFinite(value) ? clamp(value, 0, 1) : 0.15;
 }
 
 function truncateText(text: string, maxChars: number): string {

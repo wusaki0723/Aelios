@@ -45,8 +45,8 @@ function getTopK(env: Env, requested?: number): number {
 }
 
 function getMinScore(env: Env): number {
-  const value = Number(env.MEMORY_MIN_SCORE || 0.35);
-  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.35;
+  const value = Number(env.MEMORY_MIN_SCORE || 0.15);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.15;
 }
 
 function getRefId(match: VectorizeMatch): string | null {

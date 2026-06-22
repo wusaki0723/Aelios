@@ -156,8 +156,8 @@ function getAccountId(env: Env): string | null {
 }
 
 function getMinScore(env: Env): number {
-  const value = Number(env.MEMORY_MIN_SCORE || 0.35);
-  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.35;
+  const value = Number(env.MEMORY_MIN_SCORE || 0.15);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.15;
 }
 
 async function getVectorsByIdsBatched(

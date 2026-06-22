@@ -268,8 +268,8 @@ https://<你的 Worker 地址>/health
 | `IM_API_KEY` | 空 | 第二把钥匙（IM bot 用） |
 | `DEBUG_API_KEY` | 空 | 调试接口钥匙 |
 | `MEMORY_TOP_K` | `12` | 记忆搜索返回条数 |
-| `MEMORY_MIN_SCORE` | `0.35` | 记忆搜索最低相关度 |
-| `MEMORY_FILTER_MIN_SCORE` | `0.35` | 进入小秘书前的最低相关度；不填时跟随 `MEMORY_MIN_SCORE` |
+| `MEMORY_MIN_SCORE` | `0.15` | 记忆搜索最低相关度（按 embeddinggemma 分数分布调低，避免欠召回） |
+| `MEMORY_FILTER_MIN_SCORE` | `0.15` | 进入小秘书前的最低相关度；不填时跟随 `MEMORY_MIN_SCORE` |
 | `MEMORY_FILTER_MAX_CONTENT_CHARS` | `700` | 交给小秘书前，每条候选最多保留多少字 |
 | `MEMORY_MIN_IMPORTANCE` | `0.55` | 记忆写入最低重要性 |
 | `MEMORY_BACKEND` | `vectorize` | 长期记忆主库。默认 Vectorize；设 `d1` 可回到旧模式 |

@@ -14,7 +14,7 @@ import type {
   OpenAIChatMessage,
   OpenAIChatRequest,
 } from "../types";
-import type { AssembledPrompt, AssemblerContext, SummaryEntry } from "./types";
+import type { AssembledPrompt, AssemblerContext } from "./types";
 import { assemble as assembleBlocks } from "./blocks";
 
 // ---------------------------------------------------------------------------
@@ -32,9 +32,6 @@ export interface AssembleInput {
    */
   pinnedPersonaMemories: MemoryApiRecord[] | null;
 
-  /** Latest summary entry from the summaries table, or null. */
-  summaryEntry: SummaryEntry | null;
-
   /** RAG hits for the current round. */
   ragMemories: MemoryApiRecord[];
 
@@ -51,7 +48,6 @@ export interface AssembleInput {
  *
  * The caller (adapter) is responsible for:
  * - Fetching pinnedPersonaMemories from D1
- * - Fetching summaryEntry from summaries table
  * - Running RAG search for ragMemories
  * - Running vision model for visionOutput
  * - Converting AssembledPrompt to Anthropic/OpenAI wire format
@@ -62,7 +58,6 @@ export function assemble(input: AssembleInput): AssembledPrompt {
   const ctx: AssemblerContext = {
     systemMessages: extractSystemMessages(request.messages),
     pinnedPersonaMemories: input.pinnedPersonaMemories,
-    summaryEntry: input.summaryEntry,
     ragMemories: input.ragMemories,
     visionOutput: input.visionOutput,
     historyMessages: extractHistoryMessages(request.messages),
@@ -119,4 +114,4 @@ function extractLastUserMessage(messages: OpenAIChatMessage[]): OpenAIChatMessag
 
 // Re-export for adapter convenience
 export { assembleBlocks };
-export type { AssembledPrompt, AssemblerContext, SummaryEntry };
+export type { AssembledPrompt, AssemblerContext };

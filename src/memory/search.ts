@@ -44,9 +44,13 @@ function getTopK(env: Env, requested?: number): number {
   return Math.min(Math.max(value, 1), 200);
 }
 
+// Recall floor on the raw embedding score, applied BEFORE the reranker.
+// Kept low on purpose: embeddinggemma under-scores on-topic-but-reworded hits
+// (~0.15–0.20), so a high floor silently drops relevant memories. Precision is
+// owned downstream by the reranker + LLM compressor, not by this gate.
 function getMinScore(env: Env): number {
-  const value = Number(env.MEMORY_MIN_SCORE || 0.35);
-  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.35;
+  const value = Number(env.MEMORY_MIN_SCORE || 0.1);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.1;
 }
 
 function getRefId(match: VectorizeMatch): string | null {

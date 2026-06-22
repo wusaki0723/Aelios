@@ -156,9 +156,13 @@ function getAccountId(env: Env): string | null {
   return env.CLOUDFLARE_ACCOUNT_ID?.trim() || null;
 }
 
+// Recall floor on the raw embedding score from Vectorize, applied BEFORE the
+// reranker. Kept low: embeddinggemma under-scores on-topic-but-reworded hits
+// (~0.15–0.20), so a high floor silently drops relevant memories. The reranker
+// (bge-reranker-base) and the LLM compressor downstream handle precision.
 function getMinScore(env: Env): number {
-  const value = Number(env.MEMORY_MIN_SCORE || 0.35);
-  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.35;
+  const value = Number(env.MEMORY_MIN_SCORE || 0.1);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.1;
 }
 
 async function getVectorsByIdsBatched(

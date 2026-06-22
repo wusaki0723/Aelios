@@ -21,11 +21,16 @@ MEMORY_FILTER_MAX_OUTPUT = "5"
 MEMORY_FILTER_MAX_CONTENT_CHARS = "700"
 MEMORY_FILTER_OUTPUT_CHARS = "300"
 MEMORY_FILTER_MAX_TOKENS = "1400"
-MEMORY_FILTER_MIN_SCORE = "0.35"
+# Recall floor on the raw embedding score, applied BEFORE the reranker. Low on
+# purpose: embeddinggemma under-scores reworded-but-relevant hits (~0.15-0.20).
+# The reranker (bge-reranker-base) + LLM compressor own precision downstream.
+MEMORY_FILTER_MIN_SCORE = "0.1"
 DREAM_MODEL = "deepseek/deepseek-v4-pro"
 VISION_MODEL = "google-ai-studio/gemini-3-flash-preview"
 MEMORY_BACKEND = "vectorize"
-MEMORY_MIN_SCORE = "0.35"
+# Vector recall floor (see MEMORY_FILTER_MIN_SCORE note above). Precision is
+# handled by the reranker + compressor, so keep this as a garbage gate only.
+MEMORY_MIN_SCORE = "0.1"
 MEMORY_TOP_K = "50"
 MEMORY_RERANKER_MODEL = "workers-ai/@cf/baai/bge-reranker-base"
 VECTORIZE_INDEX_NAME = "memo-kb"
@@ -38,7 +43,6 @@ DREAM_MAX_MESSAGES = "40"
 DREAM_MEMORY_CONTEXT_LIMIT = "40"
 DREAM_MAX_RUNS = "10"
 DREAM_MAX_TOKENS = "8000"
-ENABLE_DAILY_SUMMARY_MEMORY = "false"
 ANTHROPIC_THINKING_ENABLED = "false"
 ANTHROPIC_THINKING_BUDGET = "1024"
 ANTHROPIC_CACHE_ENABLED = "true"

@@ -123,9 +123,13 @@ function getMaxTokens(env: Env): number {
   return Number.isFinite(value) ? clamp(Math.floor(value), 200, 4000) : 1400;
 }
 
+// Floor on the raw embedding score for non-pinned candidates, applied BEFORE
+// the reranker runs. Low by design so the reranker (bge-reranker-base) sees a
+// real candidate pool instead of only the handful embeddinggemma happens to
+// score high; pinned memories bypass this gate entirely.
 function getFilterMinScore(env: Env): number {
-  const value = Number(env.MEMORY_FILTER_MIN_SCORE || env.MEMORY_MIN_SCORE || 0.35);
-  return Number.isFinite(value) ? clamp(value, 0, 1) : 0.35;
+  const value = Number(env.MEMORY_FILTER_MIN_SCORE || env.MEMORY_MIN_SCORE || 0.1);
+  return Number.isFinite(value) ? clamp(value, 0, 1) : 0.1;
 }
 
 function truncateText(text: string, maxChars: number): string {

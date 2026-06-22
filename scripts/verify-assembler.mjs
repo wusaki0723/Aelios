@@ -5,9 +5,8 @@
  * can run under `node` without a TS runtime or test framework.
  *
  * Data structures (AssemblerContext, AssembledPrompt) and constants
- * (BLOCK_ORDER, SUMMARY_MAX_CHARS, text literals, simpleHash) MUST
- * match the TypeScript source exactly. When changing the TS source,
- * update this file in lockstep.
+ * (BLOCK_ORDER, text literals, simpleHash) MUST match the TypeScript
+ * source exactly. When changing the TS source, update this file in lockstep.
  *
  * Run:  node scripts/verify-assembler.mjs
  * Exit 0 = all checks passed, exit 1 = failure.
@@ -41,7 +40,6 @@ function simpleHash(text) {
 const BLOCK_ORDER = [
   "proxy_static_rules",
   "persona_pinned",
-  "long_term_summary",
   "preset_lite",
   "client_system",
   "client_volatile_context",
@@ -52,7 +50,6 @@ const BLOCK_ORDER = [
 ];
 
 const PERSONA_MEMORY_TYPES = ["identity", "persona"];
-const SUMMARY_MAX_CHARS = 2000;
 
 // ---------------------------------------------------------------------------
 // Text constants — must match src/assembler/blocks.ts
@@ -190,13 +187,6 @@ function assemble(ctx) {
         );
         text = lines.join("\n") || null;
       }
-    } else if (blockId === "long_term_summary") {
-      const entry = ctx.summaryEntry;
-      if (entry && entry.content) {
-        const c = entry.content;
-        const truncated = c.length <= SUMMARY_MAX_CHARS ? c : c.slice(0, SUMMARY_MAX_CHARS - 3) + "...";
-        text = `长期对话摘要：\n${truncated}`;
-      }
     } else if (blockId === "preset_lite") {
       text = PRESET_LITE_TEXT;
     } else if (blockId === "client_system") {
@@ -294,7 +284,6 @@ function makeBaseCtx() {
       { id: "b-1", type: "persona", content: "性格温柔", importance: 0.9 },
       { id: "a-1", type: "identity", content: "名字是咲咲", importance: 0.95 },
     ],
-    summaryEntry: { content: "这是一段很长的对话摘要，用于测试截断和稳定性。" },
     ragMemories: [
       { type: "note", importance: 0.6, content: "用户喜欢猫" },
     ],
@@ -472,7 +461,7 @@ check("stable blocks come before client_system, dynamic after", () => {
   const result = assemble(ctx);
 
   const csPos = result.meta.block_ids.indexOf("client_system");
-  const stableBefore = ["proxy_static_rules", "persona_pinned", "long_term_summary", "preset_lite"];
+  const stableBefore = ["proxy_static_rules", "persona_pinned", "preset_lite"];
   const dynamicAfter = ["dynamic_memory_patch", "vision_context"];
 
   for (const id of stableBefore) {
@@ -973,7 +962,6 @@ check("assembler output for image request preserves image_url", () => {
   const ctx = {
     systemMessages: body.messages.filter((m) => m.role === "system"),
     pinnedPersonaMemories: null,
-    summaryEntry: null,
     ragMemories: [],
     visionOutput: null,
     historyMessages: [],
@@ -1162,7 +1150,7 @@ check("Anthropic path: full pipeline produces valid system + messages", () => {
   const systemBlocks = assembledToAnthropicSystem(assembled.system_blocks);
   applyCacheOverrides(systemBlocks, {});
 
-  // Should have: proxy_static_rules, persona_pinned(skip), long_term_summary(skip),
+  // Should have: proxy_static_rules, persona_pinned(skip),
   //              preset_lite, client_system, dynamic_memory_patch
   assert.ok(systemBlocks.length >= 3);
   // First block text should contain proxy rules
@@ -3001,246 +2989,6 @@ check("pinned target is never merge/supersede applied", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 17: Long-Term Summary
-// ---------------------------------------------------------------------------
-
-console.log("\n--- Test 17: Long-Term Summary ---");
-
-const SUMMARY_EVERY_N_MESSAGES = 50;
-const SUMMARY_SOURCE_LIMIT = 120;
-const SUMMARY_MAX_CHARS_VERIFY = 2000;
-
-// sanitizeSummary contract mirror
-const SANITIZE_PATTERNS = [
-  [/debug-test/gi, ""],
-  [/自动记忆测试口令/g, "口令"],
-  [/测试口令/g, "口令"],
-  [/根据记忆系统/g, ""],
-  [/根据系统/g, ""],
-  [/记忆系统/g, ""],
-  [/标签为?[^，。；\s]+/g, ""],
-  [/标签[:：]?[^，。；\s]+/g, ""],
-  [/后端实现/g, ""],
-  [/Vectorize/gi, ""],
-  [/D1\b/g, ""],
-  [/[Pp]rompt\s*[Bb]lock/g, ""],
-  [/[Ss]ystem\s*[Bb]lock/g, ""],
-  [/[，,；;：:]\s*([。.!！?？])/g, "$1"],
-  [/\s{2,}/g, " "],
-  [/^[，,；;：:\s]+|[，,；;：:\s]+$/g, ""],
-];
-
-function sanitizeSummary(text) {
-  let result = text;
-  for (const [pattern, replacement] of SANITIZE_PATTERNS) {
-    result = result.replace(pattern, replacement);
-  }
-  return result.trim();
-}
-
-check("summary constants are correct", () => {
-  assert.strictEqual(SUMMARY_EVERY_N_MESSAGES, 50);
-  assert.strictEqual(SUMMARY_SOURCE_LIMIT, 120);
-  assert.strictEqual(SUMMARY_MAX_CHARS_VERIFY, 2000);
-});
-
-check("summary trigger: no previous summary, < 50 messages → skip", () => {
-  const newCount = 30;
-  assert.ok(newCount < SUMMARY_EVERY_N_MESSAGES);
-});
-
-check("summary trigger: no previous summary, >= 50 messages → proceed", () => {
-  const newCount = 50;
-  assert.ok(newCount >= SUMMARY_EVERY_N_MESSAGES);
-});
-
-check("summary trigger: has previous summary, < 50 new messages → skip", () => {
-  const newCount = 20;
-  assert.ok(newCount < SUMMARY_EVERY_N_MESSAGES);
-});
-
-check("summary trigger: has previous summary, >= 50 new messages → proceed", () => {
-  const newCount = 50;
-  assert.ok(newCount >= SUMMARY_EVERY_N_MESSAGES);
-});
-
-check("summary prompt: includes old summary when present", () => {
-  const oldSummary = "用户喜欢猫，住在上海。";
-  assert.ok(oldSummary.length > 0);
-  // Contract: buildSummaryPrompt prepends old summary section
-  const hasOld = oldSummary !== null;
-  assert.strictEqual(hasOld, true);
-});
-
-check("summary prompt: no old summary section when null", () => {
-  const oldSummary = null;
-  assert.strictEqual(oldSummary, null);
-});
-
-check("sanitize: debug-test removed", () => {
-  assert.strictEqual(sanitizeSummary("用户debug-test喜欢猫"), "用户喜欢猫");
-});
-
-check("sanitize: 记忆系统 removed", () => {
-  assert.strictEqual(sanitizeSummary("通过记忆系统发现"), "通过发现");
-});
-
-check("sanitize: 后端实现 removed", () => {
-  assert.strictEqual(sanitizeSummary("用户知道后端实现"), "用户知道");
-});
-
-check("sanitize: Vectorize removed", () => {
-  assert.strictEqual(sanitizeSummary("使用Vectorize存储"), "使用存储");
-});
-
-check("sanitize: D1 removed", () => {
-  assert.strictEqual(sanitizeSummary("数据在D1中"), "数据在中");
-});
-
-check("sanitize: prompt block removed", () => {
-  assert.strictEqual(sanitizeSummary("在prompt block里"), "在里");
-});
-
-check("sanitize: system block removed", () => {
-  assert.strictEqual(sanitizeSummary("在system block里"), "在里");
-});
-
-check("sanitize: 标签 removed", () => {
-  // 标签为?[^，。；\s]+ matches greedily; with delimiter it stops correctly
-  assert.strictEqual(sanitizeSummary("标签为test 用户喜欢猫"), "用户喜欢猫");
-});
-
-check("sanitize: 根据记忆系统 removed", () => {
-  assert.strictEqual(sanitizeSummary("根据记忆系统分析"), "分析");
-});
-
-check("sanitize: preserves clean content", () => {
-  assert.strictEqual(sanitizeSummary("用户喜欢猫，住在上海。"), "用户喜欢猫，住在上海。");
-});
-
-check("sanitize: handles empty result", () => {
-  assert.strictEqual(sanitizeSummary("debug-test记忆系统"), "");
-});
-
-check("summary truncation: content <= 2000 chars preserved", () => {
-  const content = "用户喜欢猫。".repeat(100);
-  assert.ok(content.length <= 2000);
-  const truncated = content.length <= SUMMARY_MAX_CHARS_VERIFY ? content : content.slice(0, SUMMARY_MAX_CHARS_VERIFY - 3) + "...";
-  assert.strictEqual(truncated, content);
-});
-
-check("summary truncation: content > 2000 chars truncated to exactly 2000", () => {
-  const content = "用户喜欢猫，这是一个很长的摘要。".repeat(200);
-  assert.ok(content.length > 2000);
-  const truncated = content.length <= SUMMARY_MAX_CHARS_VERIFY ? content : content.slice(0, SUMMARY_MAX_CHARS_VERIFY - 3) + "...";
-  assert.ok(truncated.length <= SUMMARY_MAX_CHARS_VERIFY, `truncated length ${truncated.length} should be <= ${SUMMARY_MAX_CHARS_VERIFY}`);
-  assert.ok(truncated.endsWith("..."));
-});
-
-check("summary cursor: to_message_id created_at used when available", () => {
-  // Contract: if latest.to_message_id exists and the message is found,
-  // its created_at is used as afterTs instead of updated_at.
-  // This catches messages written concurrently with the summary.
-  const latest = { to_message_id: "msg_100", updated_at: "2026-04-01T00:00:00Z" };
-  const messageCreatedAt = "2026-04-01T12:00:00Z"; // later than updated_at
-  // If message exists, use its created_at
-  const afterTs = latest.to_message_id ? messageCreatedAt : latest.updated_at;
-  assert.strictEqual(afterTs, "2026-04-01T12:00:00Z");
-  assert.ok(afterTs > latest.updated_at, "message created_at can be later than summary updated_at");
-});
-
-check("summary cursor: to_message_id lookup miss falls back to updated_at", () => {
-  // Contract: if getMessageCreatedAt returns null (message deleted/missing),
-  // fallback to latest.updated_at
-  const latest = { to_message_id: "msg_deleted", updated_at: "2026-04-01T00:00:00Z" };
-  const messageCreatedAt = null; // message not found
-  const afterTs = messageCreatedAt ?? latest.updated_at;
-  assert.strictEqual(afterTs, "2026-04-01T00:00:00Z");
-});
-
-check("summary cursor: no previous summary → afterTs is null", () => {
-  // Contract: when latest is null, afterTs is null → countMessagesAfter counts all
-  const latest = null;
-  const afterTs = latest?.updated_at ?? null;
-  assert.strictEqual(afterTs, null);
-});
-
-check("summary cursor: to_message_id is null → fallback to updated_at", () => {
-  // Contract: first summary run might have null to_message_id
-  const latest = { to_message_id: null, updated_at: "2026-04-01T00:00:00Z" };
-  let afterTs = null;
-  if (latest?.to_message_id) {
-    afterTs = "should not reach";
-  }
-  if (!afterTs) {
-    afterTs = latest?.updated_at ?? null;
-  }
-  assert.strictEqual(afterTs, "2026-04-01T00:00:00Z");
-});
-
-check("summary messageCount uses newCount, not messages.length", () => {
-  // Contract: messageCount = previous + newCount (the count used for threshold),
-  // not messages.length (which is capped at SUMMARY_SOURCE_LIMIT=120).
-  // This avoids over-counting when messages.length < newCount due to limit.
-  const previousCount = 100;
-  const newCount = 55; // actual new messages since last summary
-  const messagesLength = 120; // capped by SUMMARY_SOURCE_LIMIT
-  const messageCount = previousCount + newCount;
-  assert.strictEqual(messageCount, 155);
-  assert.notStrictEqual(messageCount, previousCount + messagesLength);
-});
-
-check("assembler: long_term_summary block skipped when summaryEntry is null", () => {
-  const ctx = makeBaseCtx();
-  ctx.summaryEntry = null;
-  const assembled = assemble(ctx);
-  assert.ok(!assembled.meta.block_ids.includes("long_term_summary"));
-});
-
-check("assembler: long_term_summary block present when summaryEntry has content", () => {
-  const ctx = makeBaseCtx();
-  ctx.summaryEntry = { content: "用户喜欢猫，住在上海。" };
-  const assembled = assemble(ctx);
-  const idx = assembled.meta.block_ids.indexOf("long_term_summary");
-  assert.ok(idx >= 0, "long_term_summary should be present");
-  assert.ok(assembled.system_blocks[idx].text.includes("用户喜欢猫"));
-  assert.ok(assembled.system_blocks[idx].text.includes("长期对话摘要"));
-});
-
-check("assembler: long_term_summary content truncated to exactly 2000", () => {
-  const longContent = "很长的摘要内容。".repeat(300);
-  assert.ok(longContent.length > 2000);
-  const ctx = makeBaseCtx();
-  ctx.summaryEntry = { content: longContent };
-  const assembled = assemble(ctx);
-  const idx = assembled.meta.block_ids.indexOf("long_term_summary");
-  assert.ok(idx >= 0);
-  const blockText = assembled.system_blocks[idx].text;
-  // Block text is "长期对话摘要：\n" + truncated content
-  const contentPart = blockText.replace("长期对话摘要：\n", "");
-  assert.ok(contentPart.length <= SUMMARY_MAX_CHARS_VERIFY, `content length ${contentPart.length} should be <= ${SUMMARY_MAX_CHARS_VERIFY}`);
-  assert.ok(contentPart.endsWith("..."));
-});
-
-check("assembler: summaryEntry with empty content skips block", () => {
-  const ctx = makeBaseCtx();
-  ctx.summaryEntry = { content: "" };
-  const assembled = assemble(ctx);
-  assert.ok(!assembled.meta.block_ids.includes("long_term_summary"));
-});
-
-check("assembler: summary block position is after persona_pinned, before preset_lite", () => {
-  const ctx = makeBaseCtx();
-  ctx.summaryEntry = { content: "测试摘要" };
-  const assembled = assemble(ctx);
-  const summaryIdx = assembled.meta.block_ids.indexOf("long_term_summary");
-  const presetIdx = assembled.meta.block_ids.indexOf("preset_lite");
-  assert.ok(summaryIdx >= 0);
-  assert.ok(presetIdx >= 0);
-  assert.ok(summaryIdx < presetIdx, "long_term_summary should come before preset_lite");
-});
-
-// ---------------------------------------------------------------------------
 // Test 18: Queue Send / Fallback
 // ---------------------------------------------------------------------------
 
@@ -3294,14 +3042,13 @@ check("queue: retention message shape is unchanged", () => {
   assert.ok(typeof message.namespace === "string");
 });
 
-check("queue: consumer handles memory_maintenance then summary", () => {
-  // Contract: handleQueueMessage for memory_maintenance calls:
-  //   1. runMemoryMaintenance
-  //   2. maybeUpdateLongTermSummary (in try/catch)
+check("queue: consumer handles memory_maintenance via runMemoryMaintenance only", () => {
+  // Contract: handleQueueMessage for memory_maintenance calls runMemoryMaintenance
+  // and nothing else (the long-term summary step has been removed).
   // This is verified by reading the source; here we document the contract.
-  const executionOrder = ["runMemoryMaintenance", "maybeUpdateLongTermSummary"];
+  const executionOrder = ["runMemoryMaintenance"];
+  assert.strictEqual(executionOrder.length, 1);
   assert.strictEqual(executionOrder[0], "runMemoryMaintenance");
-  assert.strictEqual(executionOrder[1], "maybeUpdateLongTermSummary");
 });
 
 check("queue: consumer handles retention without summary", () => {

@@ -3,7 +3,6 @@ import { requireScope } from "../auth/scopes";
 import { getOrCreateConversation } from "../db/conversations";
 import { listMemories } from "../db/memories";
 import { saveAssistantMessage, saveUserMessages } from "../db/messages";
-import { getLatestSummary } from "../db/summaries";
 import { saveUsageLog } from "../db/usageLogs";
 import { extractLastUserText, injectMemoryPatchAsSystemMessage, selectMemoriesForInjection } from "../memory/inject";
 import { toMemoryApiRecord } from "../memory/search";
@@ -121,8 +120,6 @@ export async function handleChatCompletions(
   });
 
   const pinnedPersonaMemories = await fetchPinnedPersonaMemories(env.DB, auth.profile.namespace);
-  const latestSummary = await getLatestSummary(env.DB, auth.profile.namespace);
-  const summaryEntry = latestSummary ? { content: latestSummary.content } : null;
 
   let upstream: Response;
   let clientSystemHash: string | null = null;
@@ -142,7 +139,6 @@ export async function handleChatCompletions(
         const assembled = assemble({
           request: body,
           pinnedPersonaMemories,
-          summaryEntry,
           ragMemories: memories,
           visionOutput: null,
         });
@@ -163,7 +159,6 @@ export async function handleChatCompletions(
         const assembled = assemble({
           request: body,
           pinnedPersonaMemories,
-          summaryEntry,
           ragMemories: memories,
           visionOutput: null,
         });

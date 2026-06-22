@@ -77,13 +77,13 @@ Aelios 是一个跑在 Cloudflare Workers 上的长期记忆系统。你把 Chat
   用户消息
     │
     ├─ 向量粗召回 top 50（MEMORY_TOP_K）
-    ├─ 最低相关度过滤（MEMORY_MIN_SCORE = 0.35）
-    ├─ reranker 重排，取前 12 条（MEMORY_FILTER_MAX_CANDIDATES）
-    ├─ 压缩模型精简，留 5 条（MEMORY_FILTER_MAX_OUTPUT）
-    └─ 每条压缩到 300 字，注入上下文
+    ├─ 低相关度地板，只挡明显噪音（MEMORY_MIN_SCORE = 0.1）
+    ├─ 取前 12 条候选（MEMORY_FILTER_MAX_CANDIDATES）
+    ├─ reranker 重排，取前 5 条（MEMORY_FILTER_MAX_OUTPUT）
+    └─ 压缩模型精简，每条压到 300 字，注入上下文
 ```
 
-不是一股脑全塞，是先粗筛、再精排、最后压缩，只给模型看最相关的几百字。
+不是一股脑全塞，是先粗筛、再精排、最后压缩，只给模型看最相关的几百字。地板放低是故意的：embeddinggemma 对"换了说法的相关记忆"打分偏低（约 0.15–0.20），地板太高会把它们直接挡掉；精排和压缩交给 reranker 和压缩模型来做。
 
 ---
 
@@ -220,8 +220,8 @@ https://<你的 Worker 地址>/mcp?token=<MEMORY_MCP_API_KEY>
 | 变量名 | 默认值 | 说明 |
 |---|---|---|
 | `MEMORY_TOP_K` | `50` | 向量粗召回条数 |
-| `MEMORY_MIN_SCORE` | `0.35` | 记忆搜索最低相关度 |
-| `MEMORY_FILTER_MIN_SCORE` | `0.35` | 进入 reranker 前最低向量相关度 |
+| `MEMORY_MIN_SCORE` | `0.1` | 向量召回地板，只挡明显噪音；精排交给 reranker |
+| `MEMORY_FILTER_MIN_SCORE` | `0.1` | 进 reranker 前的向量地板，同样保持低 |
 | `MEMORY_FILTER_MAX_CONTENT_CHARS` | `700` | 候选记忆每条最多保留多少字 |
 | `MEMORY_MIN_IMPORTANCE` | `0.55` | 记忆写入最低重要性 |
 | `MEMORY_BACKEND` | `vectorize` | 长期记忆主库（设 `d1` 回旧模式） |
@@ -235,7 +235,6 @@ https://<你的 Worker 地址>/mcp?token=<MEMORY_MCP_API_KEY>
 | `DREAM_MAX_TOKENS` | `8000` | dream 模型最多输出 token |
 | `DREAM_MEMORY_CONTEXT_LIMIT` | `40` | dream 时参考的旧记忆数量 |
 | `DREAM_EXCPTT_LIMIT` | `8` | dream 每天最多保存的重要原文段落 |
-| `ENABLE_DAILY_SUMMARY_MEMORY` | `false` | 设 `true` 把每日摘要也写入 Vectorize |
 | `EMPTY_MEMORY_MIN_CHARS` | `4` | 清理短空记忆的阈值 |
 | `PUBLIC_MODEL_NAME` | `companion` | 客户端看到的模型名 |
 | `IM_API_KEY` | 空 | 第二把钥匙（IM bot 用） |
@@ -283,7 +282,7 @@ Cloudflare Workers 上的 OpenAI-compatible Memory Proxy。帮新用户部署时
 
 ```
 前端负责：角色卡、聊天风格、工具、网页搜索、当前上下文
-Worker 负责：统一 API、记忆注入/写入、摘要、Claude cache、AI Gateway 代理
+Worker 负责：统一 API、记忆注入/写入、Claude cache、AI Gateway 代理
 ```
 
 资源约定：
@@ -329,7 +328,7 @@ workers-ai/@cf/... → env.AI.run（不走 AI Gateway）
   ├─ 按 DREAM_MAX_MESSAGES 分批，最多 DREAM_MAX_RUNS 批
   ├─ 读取旧 active 记忆参考
   ├─ 清理空/短记忆
-  ├─ DREAM_MODEL 生成摘要 + 新增高质量长期记忆
+  ├─ DREAM_MODEL 新增高质量长期记忆 + 保存重要原文摘录
   ├─ 合并重复、替换过时、更新冲突
   └─ 原始 messages 只保留 3 天
 ```
@@ -350,7 +349,7 @@ hard delete: deleted/superseded/expired 超 30 天 → 先删 Vectorize 再删 D
 
 ### 三种模式边界
 
-1. **完整版** `/v1/chat/completions`：认证、模型路由、记忆搜索/注入、消息保存、Queue 维护、长期摘要、D1 清理、Claude cache。
+1. **完整版** `/v1/chat/completions`：认证、模型路由、记忆搜索/注入、消息保存、Queue 维护、D1 清理、Claude cache。
 2. **纯记忆库 MCP** `/mcp`：只暴露记忆工具，不代理聊天。用 D1、Vectorize、Queue，不走 `/v1/chat/completions`。
 3. **无记忆导盲犬** `/v1/guide-dog/chat/completions`：只转发模型，不写记忆、不读记忆、不存聊天。
 

@@ -18,14 +18,14 @@ const vectorizeBinding =
 const vectorizeDimensions = process.env.CMP_VECTORIZE_DIMENSIONS || "768";
 const vectorizeMetric = process.env.CMP_VECTORIZE_METRIC || "cosine";
 const queueName = process.env.CMP_QUEUE_NAME || "companion-memory";
+// Variables that are safe to persist as visible Worker config in wrangler.toml
+// [vars]. Credentials are intentionally excluded — they must be provisioned
+// via `wrangler secret put <NAME>` (or the Cloudflare Dashboard) so plaintext
+// secrets never land in a git-tracked file. Runtime `env.XXX` still resolves
+// secrets the same way regardless of whether they live in [vars] or secrets.
 const visibleVarNames = [
   "AI_GATEWAY_BASE_URL",
-  "CHATBOX_API_KEY",
-  "MEMORY_MCP_API_KEY",
-  "GUIDE_DOG_API_KEY",
-  "CF_AIG_TOKEN",
   "CLOUDFLARE_ACCOUNT_ID",
-  "CLOUDFLARE_API_TOKEN",
   "CHAT_MODEL",
   "MEMORY_BACKEND",
   "VECTORIZE_INDEX_NAME",

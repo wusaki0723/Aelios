@@ -103,13 +103,17 @@ Aelios 是一个跑在 Cloudflare Workers 上的长期记忆系统。你把 Chat
 
 ### 第二步：填最小必填变量
 
-Settings → Variables and Secrets → Add variable：
+> ⚠️ **密钥必须用 Secret 类型（加密、不进 git），不要选成 Variable**。Cloudflare 面板「Variables and Secrets」里两类都列在同一处，但只有 Variable 会被 setup 脚本写进 git-tracked 的 `wrangler.toml`。名字带 `KEY`/`TOKEN` 的都走 Secret。详细列表和迁移步骤见 [SECRETS.md](./SECRETS.md)。
 
-| 变量名 | 填什么 | 用来干嘛 |
-|---|---|---|
-| `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare Account ID | 创建和管理 D1 / Vectorize / Queue |
-| `CLOUDFLARE_API_TOKEN` | 你的 Cloudflare API Token | 部署脚本和 Worker 管理 Vectorize |
-| `CHATBOX_API_KEY` | 自己编一个密码，如 `sk-my-aelios-key` | 客户端和管理面板的访问密钥 |
+Settings → Variables and Secrets → Add：
+
+| 变量名 | 类型 | 填什么 | 用来干嘛 |
+|---|---|---|---|
+| `CLOUDFLARE_ACCOUNT_ID` | Variable | 你的 Cloudflare Account ID | 创建和管理 D1 / Vectorize / Queue |
+| `CLOUDFLARE_API_TOKEN` | **Secret** | 你的 Cloudflare API Token | 部署脚本和 Worker 管理 Vectorize |
+| `CHATBOX_API_KEY` | **Secret** | 自己编一个密码，如 `sk-my-aelios-key` | 客户端和管理面板的访问密钥 |
+
+> 老 fork 已经跑过 `deploy:cloudflare` 的姐妹：你的 git 历史可能已经被写入过明文密钥，必须按 [SECRETS.md 的「老 fork 迁移」](./SECRETS.md#3-老-fork-迁移你已经部署过怎么办) 清理 + rotate。
 
 保存后重新部署。部署成功后你会拿到一个 Worker 地址：`https://companion-memory-proxy.<你的子域>.workers.dev`
 

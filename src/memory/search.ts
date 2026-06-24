@@ -186,8 +186,10 @@ async function searchWithVectorize(
   if (!vector) return null;
 
   let result = await queryVectorize(env, vector, input, true);
+  let usedUnfilteredFallback = false;
   if (result.matches.length === 0) {
     result = await queryVectorize(env, vector, input, false);
+    usedUnfilteredFallback = true;
   }
 
   const minScore = getMinScore(env);
@@ -196,6 +198,19 @@ async function searchWithVectorize(
 
   for (const match of result.matches) {
     if (match.score < minScore) continue;
+
+    // Unfiltered fallback can return vectors from any namespace. Force a
+    // strict metadata filter here so foreign-namespace memories never leak in
+    // via toLegacyMemoryRecord's input.namespace fallback. Vectors without an
+    // explicit namespace field are dropped — we do NOT fall back to
+    // input.namespace (that is the bug this guard prevents).
+    if (usedUnfilteredFallback) {
+      const md = (match.metadata || {}) as Record<string, unknown>;
+      if (typeof md.namespace !== "string" || md.namespace !== input.namespace) continue;
+      const status = md.status;
+      if (status !== undefined && status !== "active") continue;
+    }
+
     const id = getRefId(match);
     if (id) scoredIds.set(id, match.score);
     const legacy = toLegacyMemoryRecord(match, input);

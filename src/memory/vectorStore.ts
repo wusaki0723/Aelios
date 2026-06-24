@@ -406,6 +406,12 @@ export async function searchVectorMemories(
   return [...matchesByVectorId.values()]
     .flatMap((match): MemoryApiRecord[] => {
       if (match.score < getMinScore(env)) return [];
+      // Legacy (unfiltered) query branch is only for migration-era vectors
+      // that may lack a namespace. Require an explicit metadata namespace
+      // matching input.namespace; do not let vectorMetadataToMemoryRecord's
+      // "default" fallback pass through, or a named "default" namespace leaks.
+      const md = (match.metadata || {}) as Record<string, unknown>;
+      if (typeof md.namespace !== "string" || md.namespace !== input.namespace) return [];
       const record = vectorMetadataToMemoryRecord(match, match.score);
       if (!record || record.namespace !== input.namespace) return [];
       if (input.types && input.types.length > 0 && !input.types.includes(record.type)) return [];

@@ -2,8 +2,8 @@
  * assemble — main entry point for the v4 Prompt Assembler.
  *
  * Converts an OpenAIChatRequest into an AssembledPrompt.
- * Adapters (anthropic/openai) will consume the output in P1.3.
- * This module is NOT wired into the adapters yet.
+ * The adapters (anthropic/openai) consume the output via the
+ * buildAnthropicRequestFromAssembled / buildOpenAIRequestFromAssembled helpers.
  *
  * Determinism: given the same request + pre-fetched data, the output is
  * bit-for-bit identical across calls. No timestamps, no request ids.

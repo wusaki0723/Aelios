@@ -8,8 +8,7 @@
  * AssembledPrompt.messages with original content preserved, NOT to system_blocks.
  *
  * This module is self-contained; it does NOT import from memory/inject.ts
- * or the adapters. The adapters will be rewired to consume AssembledPrompt
- * in a later phase (P1.3).
+ * or the adapters.
  */
 
 import type { MemoryApiRecord, OpenAIChatMessage } from "../types";

@@ -51,6 +51,7 @@ export interface Env {
   MEMORY_FILTER_OUTPUT_CHARS?: string;
   MEMORY_FILTER_MAX_TOKENS?: string;
   MEMORY_FILTER_MIN_SCORE?: string;
+  MEMORY_FILTER_FAIL_OPEN?: string;
   MEMORY_EXTRACT_EVERY_N_MESSAGES?: string;
   MEMORY_MIN_IMPORTANCE?: string;
   INJECTION_MODE?: string;

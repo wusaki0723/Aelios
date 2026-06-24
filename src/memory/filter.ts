@@ -23,6 +23,7 @@ export interface MemoryFilterMeta {
   reranker_model?: string;
   reranker_count?: number;
   reranker_reason?: string;
+  fallback_used?: boolean;
 }
 
 const COMPRESSION_RESPONSE_SCHEMA = {
@@ -510,6 +511,21 @@ export async function filterAndCompressMemories(
   return result.data;
 }
 
+// Fail-open path for error branches (gated by MEMORY_FILTER_FAIL_OPEN==="true"):
+// return un-compressed reranker top results instead of []. Keeps status="error"
+// + original reason so operators see fail-open fired; sets fallback_used=true.
+function buildFailOpenResult(
+  reranked: { data: MemoryApiRecord[]; status: "disabled" | "success" | "error"; model: string; reason?: string },
+  maxOutput: number,
+  errorMeta: MemoryFilterMeta
+): { data: MemoryApiRecord[]; meta: MemoryFilterMeta } {
+  const fallbackData = reranked.data.slice(0, maxOutput);
+  return {
+    data: fallbackData,
+    meta: { ...errorMeta, output_count: fallbackData.length, fallback_used: true }
+  };
+}
+
 export async function filterAndCompressMemoriesWithMeta(
   env: Env,
   input: { query: string; memories: MemoryApiRecord[] }
@@ -569,6 +585,7 @@ export async function filterAndCompressMemoriesWithMeta(
     maxOutputChars: getMaxOutputChars(env)
   });
   const maxTokens = getMaxTokens(env);
+  const failOpen = env.MEMORY_FILTER_FAIL_OPEN === "true";
 
   try {
     const output =
@@ -576,52 +593,49 @@ export async function filterAndCompressMemoriesWithMeta(
         ? await callOpenAICompatFilter(env, prompt, model, maxTokens)
         : await callWorkersAiFilter(env, prompt, getWorkersAiModel(env) || model, maxTokens);
     if (!output) {
-      return {
-        data: [],
-        meta: {
-          ...activeMeta,
-          status: "error",
-          reason: "empty_model_output",
-          output_shape: describeModelOutput(output),
-          reranker_status: reranked.status,
-          reranker_model: reranked.model,
-          reranker_count: reranked.data.length,
-          ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
-        }
+      const errorMeta: MemoryFilterMeta = {
+        ...activeMeta,
+        status: "error",
+        reason: "empty_model_output",
+        output_shape: describeModelOutput(output),
+        reranker_status: reranked.status,
+        reranker_model: reranked.model,
+        reranker_count: reranked.data.length,
+        ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
       };
+      if (failOpen) return buildFailOpenResult(reranked, maxOutput, errorMeta);
+      return { data: [], meta: errorMeta };
     }
 
     const items = parseCompressedItems(output);
     if (!items) {
-      return {
-        data: [],
-        meta: {
-          ...activeMeta,
-          status: "error",
-          reason: "invalid_model_output",
-          output_shape: describeModelOutput(output),
-          reranker_status: reranked.status,
-          reranker_model: reranked.model,
-          reranker_count: reranked.data.length,
-          ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
-        }
+      const errorMeta: MemoryFilterMeta = {
+        ...activeMeta,
+        status: "error",
+        reason: "invalid_model_output",
+        output_shape: describeModelOutput(output),
+        reranker_status: reranked.status,
+        reranker_model: reranked.model,
+        reranker_count: reranked.data.length,
+        ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
       };
+      if (failOpen) return buildFailOpenResult(reranked, maxOutput, errorMeta);
+      return { data: [], meta: errorMeta };
     }
 
     if (items.length !== reranked.data.length) {
-      return {
-        data: [],
-        meta: {
-          ...activeMeta,
-          status: "error",
-          reason: "slot_count_mismatch",
-          output_shape: describeModelOutput(output),
-          reranker_status: reranked.status,
-          reranker_model: reranked.model,
-          reranker_count: reranked.data.length,
-          ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
-        }
+      const errorMeta: MemoryFilterMeta = {
+        ...activeMeta,
+        status: "error",
+        reason: "slot_count_mismatch",
+        output_shape: describeModelOutput(output),
+        reranker_status: reranked.status,
+        reranker_model: reranked.model,
+        reranker_count: reranked.data.length,
+        ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
       };
+      if (failOpen) return buildFailOpenResult(reranked, maxOutput, errorMeta);
+      return { data: [], meta: errorMeta };
     }
 
     const filtered = mergeCompressedItems(reranked.data, items).slice(0, maxOutput);
@@ -640,17 +654,16 @@ export async function filterAndCompressMemoriesWithMeta(
     };
   } catch (error) {
     console.error("memory filter failed", error);
-    return {
-      data: [],
-      meta: {
-        ...activeMeta,
-        status: "error",
-        reason: error instanceof Error && error.message ? error.message : "model_error",
-        reranker_status: reranked.status,
-        reranker_model: reranked.model,
-        reranker_count: reranked.data.length,
-        ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
-      }
+    const errorMeta: MemoryFilterMeta = {
+      ...activeMeta,
+      status: "error",
+      reason: error instanceof Error && error.message ? error.message : "model_error",
+      reranker_status: reranked.status,
+      reranker_model: reranked.model,
+      reranker_count: reranked.data.length,
+      ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
     };
+    if (failOpen) return buildFailOpenResult(reranked, maxOutput, errorMeta);
+    return { data: [], meta: errorMeta };
   }
 }

@@ -9,6 +9,13 @@ function contentToText(content: OpenAIChatMessage["content"]): string {
   return JSON.stringify(content);
 }
 
+// Stable-hash normalization: trim + collapse whitespace so retrying the same
+// (conversationId, role, content) yields an identical hash. The DB id stays
+// random; only the hash drops it — that is what makes the hash idempotent.
+function normalizeContent(content: string): string {
+  return content.replace(/\s+/g, " ").trim();
+}
+
 export async function saveUserMessages(
   db: D1Database,
   input: {
@@ -29,7 +36,7 @@ export async function saveUserMessages(
   for (const message of userMessages) {
     const content = contentToText(message.content);
     const id = newId("msg");
-    const hash = await sha256Hex(`${input.conversationId}:${id}:${message.role}:${content}`);
+    const hash = await sha256Hex(`${input.conversationId}:${message.role}:${normalizeContent(content)}`);
     ids.push(id);
 
     await db

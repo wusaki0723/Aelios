@@ -209,7 +209,7 @@ https://<你的 Worker 地址>/mcp?token=<MEMORY_MCP_API_KEY>
 | `ANTHROPIC_THINKING_BUDGET` | `1024` | 思考 token 预算（1024-32000） |
 | `ANTHROPIC_CACHE_ENABLED` | `true` | Claude prompt cache 开关 |
 | `ANTHROPIC_CACHE_TTL` | `5m` | cache 时长（5m 或 1h） |
-| `ANTHROPIC_AUTO_CACHE_ENABLED` | `false` | Anthropic 顶层 automatic cache |
+| `ANTHROPIC_AUTO_CACHE_ENABLED` | `true` | Anthropic 顶层 automatic cache |
 | `ANTHROPIC_ROLLING_CACHE_ENABLED` | `true` | 滚动 cache 打点 |
 | `ANTHROPIC_ROLLING_CACHE_WINDOW_SIZE` | `20` | 前端历史窗口大小 |
 | `FORCE_ANTHROPIC_NATIVE` | 空 | 设 `true` 强制走 Anthropic native |
@@ -234,7 +234,7 @@ https://<你的 Worker 地址>/mcp?token=<MEMORY_MCP_API_KEY>
 | `DREAM_MAX_RUNS` | `10` | 每次定时任务最多连续 dream 批数 |
 | `DREAM_MAX_TOKENS` | `8000` | dream 模型最多输出 token |
 | `DREAM_MEMORY_CONTEXT_LIMIT` | `40` | dream 时参考的旧记忆数量 |
-| `DREAM_EXCPTT_LIMIT` | `8` | dream 每天最多保存的重要原文段落 |
+| `DREAM_EXCERPT_LIMIT` | `8` | dream 每天最多保存的重要原文段落 |
 | `EMPTY_MEMORY_MIN_CHARS` | `4` | 清理短空记忆的阈值 |
 | `PUBLIC_MODEL_NAME` | `companion` | 客户端看到的模型名 |
 | `IM_API_KEY` | 空 | 第二把钥匙（IM bot 用） |

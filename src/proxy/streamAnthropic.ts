@@ -24,15 +24,38 @@ interface StreamAnthropicOptions {
   cacheAnchorBlock?: string | null;
 }
 
+interface ToolCallAccumulator {
+  contentBlockIndex: number;
+  toolCallIndex: number;
+  id: string;
+  name: string;
+  arguments: string;
+}
+
 interface StreamState {
   assistantText: string;
   reasoningText: string;
   finishReason: string | null;
   usage?: TokenUsage;
   thinkingFilter: ThinkingFilterState;
+  /** Maps Anthropic content_block index → tool call index in the OpenAI output */
+  toolCallMap: Map<number, ToolCallAccumulator>;
+  /** Counter for assigned tool call indices */
+  toolCallCounter: number;
 }
 
-function openAIChunk(delta: { content?: string; reasoning_content?: string }): Uint8Array {
+interface StreamDelta {
+  content?: string;
+  reasoning_content?: string;
+  tool_calls?: Array<{
+    index: number;
+    id?: string;
+    type?: string;
+    function?: { name?: string; arguments?: string };
+  }>;
+}
+
+function openAIChunk(delta: StreamDelta): Uint8Array {
   return new TextEncoder().encode(
     `data: ${JSON.stringify({
       choices: [
@@ -50,15 +73,38 @@ function doneChunk(): Uint8Array {
   return new TextEncoder().encode("data: [DONE]\n\n");
 }
 
-function consumeAnthropicData(data: string, state: StreamState): { content?: string; reasoning_content?: string } | null {
+function mapAnthropicStopReason(stopReason: string): string | null {
+  switch (stopReason) {
+    case "end_turn":
+      return "stop";
+    case "tool_use":
+      return "tool_calls";
+    case "max_tokens":
+      return "length";
+    case "stop_sequence":
+      return "stop";
+    default:
+      return stopReason;
+  }
+}
+
+function consumeAnthropicData(data: string, state: StreamState): StreamDelta | null {
   try {
     const parsed = JSON.parse(data) as {
       type?: string;
+      index?: number;
+      content_block?: {
+        type?: string;
+        id?: string;
+        name?: string;
+        input?: unknown;
+      };
       delta?: {
         type?: string;
         text?: string;
         thinking?: string;
         stop_reason?: string | null;
+        partial_json?: string;
       };
       usage?: TokenUsage;
       message?: {
@@ -70,19 +116,58 @@ function consumeAnthropicData(data: string, state: StreamState): { content?: str
       state.usage = normalizeAnthropicUsage(parsed.message.usage);
     }
 
+    // content_block_start with tool_use → emit tool_calls delta with id + name
+    if (parsed.type === "content_block_start" && parsed.content_block?.type === "tool_use") {
+      const contentBlockIndex = parsed.index ?? -1;
+      const toolCallIndex = state.toolCallCounter++;
+      const acc: ToolCallAccumulator = {
+        contentBlockIndex,
+        toolCallIndex,
+        id: parsed.content_block.id ?? `call_${Date.now()}_${toolCallIndex}`,
+        name: parsed.content_block.name ?? "",
+        arguments: "",
+      };
+      state.toolCallMap.set(contentBlockIndex, acc);
+      return {
+        tool_calls: [
+          {
+            index: toolCallIndex,
+            id: acc.id,
+            type: "function",
+            function: { name: acc.name, arguments: "" },
+          },
+        ],
+      };
+    }
+
+    // text_delta → filtered content
     if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta" && parsed.delta.text) {
-      // Filter visible content: strip leaked <thinking>, replace dashes, remove ■.
-      // reasoning_content (thinking_delta) is handled separately and never filtered.
       const filtered = processStreamChunk(parsed.delta.text, state.thinkingFilter);
       if (!filtered) return null;
       state.assistantText += filtered;
       return { content: filtered };
     }
 
+    // thinking_delta → reasoning_content (never filtered)
     if (parsed.type === "content_block_delta" && parsed.delta?.type === "thinking_delta" && parsed.delta.thinking) {
-      // reasoning_content is NEVER filtered — pass through as-is.
       state.reasoningText += parsed.delta.thinking;
       return { reasoning_content: parsed.delta.thinking };
+    }
+
+    // input_json_delta → accumulate tool call arguments
+    if (parsed.type === "content_block_delta" && parsed.delta?.type === "input_json_delta" && parsed.delta.partial_json) {
+      const contentBlockIndex = parsed.index ?? -1;
+      const acc = state.toolCallMap.get(contentBlockIndex);
+      if (!acc) return null;
+      acc.arguments += parsed.delta.partial_json;
+      return {
+        tool_calls: [
+          {
+            index: acc.toolCallIndex,
+            function: { arguments: parsed.delta.partial_json },
+          },
+        ],
+      };
     }
 
     if (parsed.type === "message_delta") {
@@ -156,7 +241,9 @@ export function streamAnthropicToOpenAI(upstream: Response, options: StreamAnthr
     assistantText: "",
     reasoningText: "",
     finishReason: null,
-    thinkingFilter: createThinkingFilterState()
+    thinkingFilter: createThinkingFilterState(),
+    toolCallMap: new Map(),
+    toolCallCounter: 0,
   };
 
   void (async () => {
@@ -189,11 +276,27 @@ export function streamAnthropicToOpenAI(upstream: Response, options: StreamAnthr
         if (delta) await writer.write(openAIChunk(delta));
       }
 
-      // Flush held trailing dash or unclosed <think> text at stream end.
+      // Flush held trailing dash or unclosed advisory text at stream end.
       const trailing = flushStreamFilter(state.thinkingFilter);
       if (trailing) {
         state.assistantText += trailing;
         await writer.write(openAIChunk({ content: trailing }));
+      }
+
+      // Emit finish_reason chunk before [DONE], mapping Anthropic stop_reason → OpenAI finish_reason.
+      if (state.finishReason) {
+        const mappedFinish: string | null = mapAnthropicStopReason(state.finishReason);
+        if (mappedFinish) {
+          await writer.write(
+            new TextEncoder().encode(
+              `data: ${JSON.stringify({
+                choices: [
+                  { index: 0, delta: {}, finish_reason: mappedFinish },
+                ],
+              })}\n\n`
+            )
+          );
+        }
       }
 
       await writer.write(doneChunk());

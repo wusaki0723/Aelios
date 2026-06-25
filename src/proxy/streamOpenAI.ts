@@ -67,6 +67,7 @@ function filterOpenAISSEData(
         delta?: {
           content?: string;
           reasoning_content?: string;
+          tool_calls?: unknown;
         };
         finish_reason?: string | null;
       }>;
@@ -81,6 +82,7 @@ function filterOpenAISSEData(
 
     const hasReasoning = Boolean(choice?.delta?.reasoning_content);
     const hasContent = Boolean(choice?.delta?.content);
+    const hasToolCalls = Boolean(choice?.delta?.tool_calls);
 
     // Filter content if present.
     if (hasContent && choice?.delta) {
@@ -94,8 +96,8 @@ function filterOpenAISSEData(
       }
     }
 
-    // If the delta still has something to send (reasoning or filtered content), emit it.
-    if (hasReasoning || choice?.delta?.content) {
+    // If the delta still has something to send (reasoning, content, or tool_calls), emit it.
+    if (hasReasoning || choice?.delta?.content || hasToolCalls) {
       return new TextEncoder().encode(`data: ${JSON.stringify(parsed)}\n\n`);
     }
 

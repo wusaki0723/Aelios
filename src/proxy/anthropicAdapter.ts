@@ -4,6 +4,15 @@ import { assembledToAnthropicMessages, assembledToAnthropicSystem } from "../ass
 import type { Env, MemoryApiRecord, OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse, TokenUsage } from "../types";
 import { formatMemoryPatch } from "../memory/inject";
 import { normalizeAiGatewayBaseUrl } from "./openaiAdapter";
+import {
+  anthropicToolUseBlocksToOpenAI,
+  isForcedToolChoice,
+  openAIToolChoiceToAnthropic,
+  openAIToolsToAnthropic,
+  safeParseJSON,
+  type AnthropicToolChoice,
+  type AnthropicToolUseBlock,
+} from "./toolAdapters";
 
 interface AnthropicTextBlock {
   type: "text";
@@ -14,9 +23,20 @@ interface AnthropicTextBlock {
   };
 }
 
+type AnthropicContentBlock =
+  | AnthropicTextBlock
+  | AnthropicToolUseBlock
+  | { type: "tool_result"; tool_use_id: string; content: string | Array<{ type: "text"; text: string }> };
+
 interface AnthropicMessage {
   role: "user" | "assistant";
-  content: AnthropicTextBlock[];
+  content: AnthropicContentBlock[];
+}
+
+interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: { type: "object"; [key: string]: unknown };
 }
 
 interface AnthropicRequest {
@@ -35,13 +55,22 @@ interface AnthropicRequest {
   };
   system: AnthropicTextBlock[];
   messages: AnthropicMessage[];
+  tools?: AnthropicTool[];
+  tool_choice?: AnthropicToolChoice;
 }
 
 interface AnthropicResponse {
   id?: string;
   model?: string;
   role?: string;
-  content?: Array<{ type?: string; text?: string; thinking?: string }>;
+  content?: Array<{
+    type?: string;
+    text?: string;
+    thinking?: string;
+    id?: string;
+    name?: string;
+    input?: unknown;
+  }>;
   stop_reason?: string | null;
   usage?: TokenUsage;
 }
@@ -113,7 +142,10 @@ function applyRollingMessageCache(messages: AnthropicMessage[], env: Env): void 
   for (let i = start; i !== end; i += step) {
     const message = messages[i];
     if (message.role !== "user" || message.content.length === 0) continue;
-    message.content[message.content.length - 1].cache_control = cacheControl;
+    const lastBlock = message.content[message.content.length - 1];
+    if (lastBlock.type === "text") {
+      lastBlock.cache_control = cacheControl;
+    }
     return;
   }
 }
@@ -295,6 +327,50 @@ function convertMessages(messages: OpenAIChatMessage[]): AnthropicMessage[] {
 
   for (const message of messages) {
     if (message.role === "system") continue;
+
+    // OpenAI tool result message → Anthropic user message with tool_result block
+    if (message.role === "tool") {
+      const toolUseId = message.tool_call_id ?? "unknown";
+      const text = typeof message.content === "string" ? message.content : contentToText(message.content);
+      const block: AnthropicContentBlock = {
+        type: "tool_result",
+        tool_use_id: toolUseId,
+        content: text,
+      };
+
+      const previous = result[result.length - 1];
+      if (previous?.role === "user") {
+        previous.content.push(block);
+      } else {
+        result.push({ role: "user", content: [block] });
+      }
+      continue;
+    }
+
+    // assistant with tool_calls → Anthropic assistant message with tool_use blocks
+    if (message.role === "assistant" && message.tool_calls != null) {
+      const blocks: AnthropicContentBlock[] = [];
+      const text = contentToText(message.content);
+      if (text) blocks.push({ type: "text", text });
+
+      const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      for (const tc of toolCalls) {
+        const call = tc as { id?: string; function?: { name?: string; arguments?: string } };
+        blocks.push({
+          type: "tool_use",
+          id: call.id ?? `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name: call.function?.name ?? "",
+          input: safeParseJSON(call.function?.arguments),
+        });
+      }
+
+      if (blocks.length > 0) {
+        result.push({ role: "assistant", content: blocks });
+      }
+      continue;
+    }
+
+    // regular user or assistant message
     const role = message.role === "assistant" ? "assistant" : "user";
     const text = contentToText(message.content);
     if (!text) continue;
@@ -346,7 +422,14 @@ export async function buildAnthropicNativeRequest(
   req: OpenAIChatRequest,
   input: { env: Env; targetModel: string; namespace: string; memories: MemoryApiRecord[] }
 ): Promise<AnthropicRequest> {
-  const thinking = buildThinkingConfig(input.env, req);
+  let thinking = buildThinkingConfig(input.env, req);
+  const tools = openAIToolsToAnthropic(req.tools);
+  const toolChoice = openAIToolChoiceToAnthropic(req.tool_choice);
+  // Anthropic extended thinking does not support forced tool_choice (any/tool).
+  // Tool priority: disable thinking when forced tool_choice is present.
+  if (thinking && isForcedToolChoice(req.tool_choice)) {
+    thinking = undefined;
+  }
   const stableMemoryPack = await buildStableMemoryPack(input.env, input.namespace);
   const stableBlock: AnthropicTextBlock = {
     type: "text",
@@ -383,7 +466,9 @@ export async function buildAnthropicNativeRequest(
     stream: Boolean(req.stream),
     thinking,
     system,
-    messages
+    messages,
+    ...(tools ? { tools } : {}),
+    ...(toolChoice ? { tool_choice: toolChoice } : {}),
   };
 }
 
@@ -405,7 +490,13 @@ export function buildAnthropicRequestFromAssembled(
   assembled: AssembledPrompt,
   env: Env
 ): AnthropicRequest {
-  const thinking = buildThinkingConfig(env, req);
+  let thinking = buildThinkingConfig(env, req);
+  const tools = openAIToolsToAnthropic(req.tools);
+  const toolChoice = openAIToolChoiceToAnthropic(req.tool_choice);
+  // Tool priority: disable thinking when forced tool_choice is present.
+  if (thinking && isForcedToolChoice(req.tool_choice)) {
+    thinking = undefined;
+  }
   const { systemBlocks, dynamicMemoryPatch } = splitDynamicMemorySystemBlock(assembled);
   const system = assembledToAnthropicSystem(systemBlocks);
   const messages = assembledToAnthropicMessages(assembled.messages);
@@ -422,6 +513,8 @@ export function buildAnthropicRequestFromAssembled(
     thinking,
     system,
     messages,
+    ...(tools ? { tools } : {}),
+    ...(toolChoice ? { tool_choice: toolChoice } : {}),
   };
 }
 
@@ -461,11 +554,34 @@ export function parseAnthropicNonStream(response: AnthropicResponse): {
     .map((block) => block.thinking)
     .join("");
 
+  // Collect tool_use blocks and convert to OpenAI tool_calls
+  const toolUseBlocks: AnthropicToolUseBlock[] = (response.content ?? [])
+    .filter((block): block is AnthropicToolUseBlock =>
+      block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string")
+    .map((block) => ({
+      type: "tool_use" as const,
+      id: block.id!,
+      name: block.name!,
+      input: block.input ?? {},
+    }));
+
+  const toolCalls = anthropicToolUseBlocksToOpenAI(toolUseBlocks);
+
   const usage = normalizeAnthropicUsage(response.usage);
+
+  const message = {
+    role: "assistant" as const,
+    content: toolCalls.length > 0 ? (content || null) : content,
+    ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+    ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+  };
+
+  // Map Anthropic stop_reason → OpenAI finish_reason for tool calls
+  const mappedFinishReason = mapAnthropicToOpenAIFinishReason(response.stop_reason);
 
   return {
     content,
-    finishReason: response.stop_reason ?? null,
+    finishReason: mappedFinishReason,
     usage,
     openai: {
       id: response.id,
@@ -475,17 +591,29 @@ export function parseAnthropicNonStream(response: AnthropicResponse): {
       choices: [
         {
           index: 0,
-          message: {
-            role: "assistant",
-            content,
-            ...(reasoningContent ? { reasoning_content: reasoningContent } : {})
-          },
-          finish_reason: response.stop_reason ?? null
+          message,
+          finish_reason: mappedFinishReason
         }
       ],
       usage
     }
   };
+}
+
+function mapAnthropicToOpenAIFinishReason(stopReason: string | null | undefined): string | null {
+  if (!stopReason) return null;
+  switch (stopReason) {
+    case "end_turn":
+      return "stop";
+    case "tool_use":
+      return "tool_calls";
+    case "max_tokens":
+      return "length";
+    case "stop_sequence":
+      return "stop";
+    default:
+      return stopReason;
+  }
 }
 
 export function normalizeAnthropicUsage(usage: TokenUsage | undefined): TokenUsage | undefined {

@@ -1,52 +1,39 @@
 import { buildStableMemoryPack } from "../memory/stablePack";
 import type { AssembledPrompt } from "../assembler/types";
-import { assembledToAnthropicMessages, assembledToAnthropicSystem } from "../assembler/toAnthropic";
+import {
+  assembledToAnthropicMessages,
+  assembledToAnthropicSystem,
+  applyMessageCacheBreakpoints,
+  openAIToolsToAnthropic,
+  openAIToolChoiceToAnthropic,
+  isForcedToolChoice,
+  anthropicToolUseBlocksToOpenAI,
+  safeParseJSON,
+  stableStringify,
+  type AnthropicTextBlock,
+  type AnthropicWireMessage,
+  type AnthropicTool,
+  type AnthropicToolChoice,
+  type AnthropicToolUseBlock,
+  type AnthropicContentBlock,
+} from "../assembler/toAnthropic";
 import type { Env, OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse, TokenUsage } from "../types";
 import type { BootPackage } from "../memory/v2/recall";
 import { formatBootStable, formatRecallPatch } from "../assembler/types";
 import { normalizeAiGatewayBaseUrl } from "./openaiAdapter";
-import {
-  anthropicToolUseBlocksToOpenAI,
-  isForcedToolChoice,
-  openAIToolChoiceToAnthropic,
-  openAIToolsToAnthropic,
-  safeParseJSON,
-  type AnthropicToolChoice,
-  type AnthropicToolUseBlock,
-} from "./toolAdapters";
 
-interface AnthropicTextBlock {
-  type: "text";
-  text: string;
-  cache_control?: {
-    type: "ephemeral";
-    ttl?: "5m" | "1h";
-  };
-}
-
-type AnthropicContentBlock =
-  | AnthropicTextBlock
-  | AnthropicToolUseBlock
-  | { type: "tool_result"; tool_use_id: string; content: string | Array<{ type: "text"; text: string }> };
+// ---------------------------------------------------------------------------
+// Anthropic wire types (request-level)
+// ---------------------------------------------------------------------------
 
 interface AnthropicMessage {
   role: "user" | "assistant";
   content: AnthropicContentBlock[];
 }
 
-interface AnthropicTool {
-  name: string;
-  description: string;
-  input_schema: { type: "object"; [key: string]: unknown };
-}
-
 interface AnthropicRequest {
   model: string;
   max_tokens: number;
-  cache_control?: {
-    type: "ephemeral";
-    ttl?: "5m" | "1h";
-  };
   temperature?: number;
   stream?: boolean;
   thinking?: {
@@ -76,6 +63,10 @@ interface AnthropicResponse {
   usage?: TokenUsage;
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function contentToText(content: OpenAIChatMessage["content"]): string {
   if (typeof content === "string") return content;
   if (content == null) return "";
@@ -89,10 +80,7 @@ function stripAnthropicProviderPrefix(model: string): string {
 function parseCustomProviderModel(model: string): { slug: string; model: string } | null {
   const match = model.match(/^custom-([a-z0-9-]+)\/(.+)$/i);
   if (!match) return null;
-  return {
-    slug: match[1],
-    model: match[2]
-  };
+  return { slug: match[1], model: match[2] };
 }
 
 function stripAnthropicModelPrefix(model: string): string {
@@ -103,17 +91,59 @@ function getCustomAnthropicMessagesPath(env: Env): string {
   return (env.CUSTOM_ANTHROPIC_MESSAGES_PATH || "messages").replace(/^\/+/, "");
 }
 
-function buildCacheControl(env: Env): AnthropicTextBlock["cache_control"] | undefined {
+// ---------------------------------------------------------------------------
+// Cache helpers
+// ---------------------------------------------------------------------------
+
+function buildCacheControl(env: Env): { type: "ephemeral"; ttl?: "5m" | "1h" } | undefined {
   if (env.ANTHROPIC_CACHE_ENABLED === "false") return undefined;
   const ttl = env.ANTHROPIC_CACHE_TTL === "1h" ? "1h" : "5m";
   return ttl === "1h" ? { type: "ephemeral", ttl } : { type: "ephemeral" };
 }
 
-function buildAutomaticCacheControl(env: Env): AnthropicRequest["cache_control"] | undefined {
-  if (env.ANTHROPIC_CACHE_ENABLED === "false") return undefined;
-  if (env.ANTHROPIC_AUTO_CACHE_ENABLED !== "true") return undefined;
-  return buildCacheControl(env);
+export function getAnthropicCacheMode(env: Env): string | null {
+  if (env.ANTHROPIC_CACHE_ENABLED === "false") return null;
+  const parts = ["anthropic", "explicit"];
+  // auto (top-level) is now off by default
+  if (env.ANTHROPIC_AUTO_CACHE_ENABLED === "true") parts.push("auto");
+  return parts.join("_");
 }
+
+/**
+ * Apply explicit cache breakpoints from the assembler to system blocks
+ * and wire messages.
+ *
+ * System breakpoint (history_read_anchor) is already applied by the
+ * assembler via SystemBlock.cache_control. This function handles
+ * message-level breakpoints (forward_write_anchor).
+ */
+function applyExplicitCacheBreakpoints(
+  systemBlocks: AnthropicTextBlock[],
+  messages: AnthropicWireMessage[],
+  assembled: AssembledPrompt,
+  env: Env
+): void {
+  const cc = buildCacheControl(env);
+  if (!cc) {
+    // Cache disabled: strip all cache_control
+    for (const b of systemBlocks) delete b.cache_control;
+    return;
+  }
+
+  // Normalize TTL on system blocks that already have cache_control from assembler
+  for (const b of systemBlocks) {
+    if (b.cache_control) {
+      b.cache_control = { type: "ephemeral", ...(cc.ttl ? { ttl: cc.ttl } : {}) };
+    }
+  }
+
+  // Apply message-level breakpoints
+  applyMessageCacheBreakpoints(messages, assembled.meta.cache_breakpoints, cc);
+}
+
+// ---------------------------------------------------------------------------
+// Rolling cache (legacy, opt-in via ANTHROPIC_ROLLING_CACHE_ENABLED=true)
+// ---------------------------------------------------------------------------
 
 function getRollingCacheWindowSize(env: Env): number {
   const value = Number(env.ANTHROPIC_ROLLING_CACHE_WINDOW_SIZE || 20);
@@ -121,19 +151,10 @@ function getRollingCacheWindowSize(env: Env): number {
   return Math.max(Math.floor(value), 1);
 }
 
-export function getAnthropicCacheMode(env: Env): string | null {
-  if (env.ANTHROPIC_CACHE_ENABLED === "false") return null;
-  const parts = ["anthropic"];
-  parts.push("explicit");
-  if (env.ANTHROPIC_AUTO_CACHE_ENABLED === "true") parts.push("auto");
-  if (env.ANTHROPIC_ROLLING_CACHE_ENABLED !== "false") parts.push("rolling");
-  return parts.join("_");
-}
-
-function applyRollingMessageCache(messages: AnthropicMessage[], env: Env): void {
+function applyRollingMessageCache(messages: AnthropicWireMessage[], env: Env): void {
   const cacheControl = buildCacheControl(env);
   if (!cacheControl) return;
-  if (env.ANTHROPIC_ROLLING_CACHE_ENABLED === "false") return;
+  if (env.ANTHROPIC_ROLLING_CACHE_ENABLED !== "true") return; // default off now
 
   const isFullWindow = messages.length >= getRollingCacheWindowSize(env);
   const start = isFullWindow ? 0 : messages.length - 1;
@@ -151,7 +172,14 @@ function applyRollingMessageCache(messages: AnthropicMessage[], env: Env): void 
   }
 }
 
-function appendUncachedUserContext(messages: AnthropicMessage[], text: string | null | undefined): void {
+// ---------------------------------------------------------------------------
+// dynamic_memory_patch → append as uncached user context
+// ---------------------------------------------------------------------------
+
+function appendUncachedUserContext(
+  messages: AnthropicWireMessage[],
+  text: string | null | undefined
+): void {
   const trimmed = text?.trim();
   if (!trimmed) return;
 
@@ -181,6 +209,10 @@ function splitDynamicMemorySystemBlock(
     dynamicMemoryPatch: assembled.system_blocks[idx].text,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Thinking config (unchanged)
+// ---------------------------------------------------------------------------
 
 function getMaxTokens(req: OpenAIChatRequest): number {
   const value = typeof req.max_tokens === "number" ? req.max_tokens : 1024;
@@ -231,7 +263,7 @@ function readThinkingDirective(source: Record<string, unknown>): { enabled?: boo
   if (enableThinking !== null) {
     return {
       enabled: enableThinking,
-      budget: clampThinkingBudget(source.thinking_budget ?? source.reasoning_budget ?? source.budget_tokens) ?? undefined
+      budget: clampThinkingBudget(source.thinking_budget ?? source.reasoning_budget ?? source.budget_tokens) ?? undefined,
     };
   }
 
@@ -240,7 +272,7 @@ function readThinkingDirective(source: Record<string, unknown>): { enabled?: boo
     const enabled = parseBooleanLike(thinking);
     return {
       enabled: enabled ?? undefined,
-      budget: clampThinkingBudget(source.thinking_budget ?? source.reasoning_budget ?? source.budget_tokens) ?? undefined
+      budget: clampThinkingBudget(source.thinking_budget ?? source.reasoning_budget ?? source.budget_tokens) ?? undefined,
     };
   }
 
@@ -256,7 +288,7 @@ function readThinkingDirective(source: Record<string, unknown>): { enabled?: boo
     const enabled = parseBooleanLike(reasoning);
     return {
       enabled: enabled ?? undefined,
-      budget: clampThinkingBudget(source.reasoning_budget ?? source.budget_tokens) ?? undefined
+      budget: clampThinkingBudget(source.reasoning_budget ?? source.budget_tokens) ?? undefined,
     };
   }
 
@@ -281,7 +313,6 @@ function getRequestThinkingDirective(req: OpenAIChatRequest): { enabled?: boolea
     const directive = readThinkingDirective(source);
     if (directive.enabled !== undefined || directive.budget !== undefined) return directive;
   }
-
   return {};
 }
 
@@ -293,7 +324,7 @@ function buildThinkingConfig(env: Env, req: OpenAIChatRequest): AnthropicRequest
     return {
       type: "enabled",
       budget_tokens: requestDirective.budget ?? getEnvThinkingBudget(env),
-      display: "summarized"
+      display: "summarized",
     };
   }
 
@@ -301,7 +332,7 @@ function buildThinkingConfig(env: Env, req: OpenAIChatRequest): AnthropicRequest
   return {
     type: "enabled",
     budget_tokens: getEnvThinkingBudget(env),
-    display: "summarized"
+    display: "summarized",
   };
 }
 
@@ -315,16 +346,20 @@ function getAnthropicMaxTokens(
   return Math.max(maxTokens, thinking.budget_tokens + Math.min(Math.max(maxTokens, 256), 4096));
 }
 
+// ---------------------------------------------------------------------------
+// Message conversion (OpenAI → Anthropic wire)
+// ---------------------------------------------------------------------------
+
 function extractSystemBlocks(messages: OpenAIChatMessage[]): AnthropicTextBlock[] {
   return messages
     .filter((message) => message.role === "system")
     .map((message) => contentToText(message.content).trim())
     .filter(Boolean)
-    .map((text) => ({ type: "text", text }));
+    .map((text) => ({ type: "text" as const, text }));
 }
 
-function convertMessages(messages: OpenAIChatMessage[]): AnthropicMessage[] {
-  const result: AnthropicMessage[] = [];
+function convertMessages(messages: OpenAIChatMessage[]): AnthropicWireMessage[] {
+  const result: AnthropicWireMessage[] = [];
 
   for (const message of messages) {
     if (message.role === "system") continue;
@@ -384,7 +419,7 @@ function convertMessages(messages: OpenAIChatMessage[]): AnthropicMessage[] {
 
     result.push({
       role,
-      content: [{ type: "text", text }]
+      content: [{ type: "text", text }],
     });
   }
 
@@ -394,6 +429,10 @@ function convertMessages(messages: OpenAIChatMessage[]): AnthropicMessage[] {
 
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// URL + headers
+// ---------------------------------------------------------------------------
 
 export function getAnthropicNativeUrl(env: Env): string {
   return `${normalizeAiGatewayBaseUrl(env)}/anthropic/v1/messages`;
@@ -409,7 +448,7 @@ export function buildAnthropicHeaders(env: Env): Headers {
   const headers = new Headers({
     "content-type": "application/json",
     "anthropic-version": "2023-06-01",
-    "cf-aig-skip-cache": "true"
+    "cf-aig-skip-cache": "true",
   });
 
   if (env.CF_AIG_TOKEN) {
@@ -419,9 +458,19 @@ export function buildAnthropicHeaders(env: Env): Headers {
   return headers;
 }
 
+// ---------------------------------------------------------------------------
+// buildAnthropicNativeRequest — legacy path (no assembler)
+// ---------------------------------------------------------------------------
+
 export async function buildAnthropicNativeRequest(
   req: OpenAIChatRequest,
-  input: { env: Env; targetModel: string; namespace: string; boot: BootPackage | null; recallHits: Array<{ type: string; content: string; score: number }> }
+  input: {
+    env: Env;
+    targetModel: string;
+    namespace: string;
+    boot: BootPackage | null;
+    recallHits: Array<{ type: string; content: string; score: number }>;
+  }
 ): Promise<AnthropicRequest> {
   let thinking = buildThinkingConfig(input.env, req);
   const tools = openAIToolsToAnthropic(req.tools);
@@ -435,16 +484,14 @@ export async function buildAnthropicNativeRequest(
     : await buildStableMemoryPack(input.env, input.namespace);
   const stableBlock: AnthropicTextBlock = {
     type: "text",
-    text: stableText || "固定长期记忆：暂无。"
+    text: stableText || "固定长期记忆：暂无。",
   };
 
   if (input.env.ANTHROPIC_CACHE_STABLE_SYSTEM !== "false") {
     stableBlock.cache_control = buildCacheControl(input.env);
   }
 
-  const dynamicMemoryPatch = input.recallHits.length > 0
-    ? formatRecallPatch(input.recallHits)
-    : "";
+  const dynamicMemoryPatch = input.recallHits.length > 0 ? formatRecallPatch(input.recallHits) : "";
   const system: AnthropicTextBlock[] = [
     ...extractSystemBlocks(req.messages),
     {
@@ -452,20 +499,26 @@ export async function buildAnthropicNativeRequest(
       text: [
         "以下长期记忆来自代理层。",
         "你可以自然使用它们，但不要提到记忆系统、数据库、RAG、代理层。",
-        "如果记忆与当前用户消息无关，不要强行提起。"
-      ].join("\n")
+        "如果记忆与当前用户消息无关，不要强行提起。",
+      ].join("\n"),
     },
-    stableBlock
+    stableBlock,
   ];
 
   const messages = convertMessages(req.messages);
-  applyRollingMessageCache(messages, input.env);
+  // Legacy path: rolling cache disabled by default
+  if (input.env.ANTHROPIC_ROLLING_CACHE_ENABLED === "true") {
+    applyRollingMessageCache(messages, input.env);
+  }
   appendUncachedUserContext(messages, dynamicMemoryPatch);
 
   return {
     model: stripAnthropicModelPrefix(input.targetModel),
     max_tokens: getAnthropicMaxTokens(req, input.env, thinking),
-    cache_control: buildAutomaticCacheControl(input.env),
+    // No top-level cache_control by default
+    ...(input.env.ANTHROPIC_AUTO_CACHE_ENABLED === "true"
+      ? { cache_control: buildCacheControl(input.env) }
+      : {}),
     temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
     thinking,
@@ -476,18 +529,24 @@ export async function buildAnthropicNativeRequest(
   };
 }
 
-/**
- * Build an Anthropic native request from an AssembledPrompt.
- *
- * - System blocks are converted via assembledToAnthropicSystem
- * - Messages via assembledToAnthropicMessages
- *   (structured content like image_url is JSON.stringify'd — temporary fallback)
- * - dynamic_memory_patch is moved out of system and appended after the
- *   rolling cache point, so changing RAG hits do not poison cached prefixes
- * - cache_control is applied to the client_system anchor block and the
- *   rolling user/window block, respecting ANTHROPIC_CACHE_ENABLED and
- *   ANTHROPIC_CACHE_TTL
- */
+// ---------------------------------------------------------------------------
+// buildAnthropicRequestFromAssembled — v4 assembler path
+//
+// Cache strategy:
+//   1. history_read_anchor (system): cache_control on client_system block.
+//      All stable blocks before it (proxy_static_rules, persona_pinned,
+//      preset_lite, boot_stable) stay cached across rounds.
+//   2. forward_write_anchor (message): cache_control on the last content
+//      block of the last history message, so R1→R2 appends keep the
+//      R1 prefix warm.
+//   3. dynamic_memory_patch is extracted from system and appended as
+//      uncached user context AFTER both breakpoints, so changing RAG
+//      hits never invalidate cached prefixes.
+//   4. Top-level cache_control (automatic) is OFF by default to avoid
+//      competing with explicit breakpoints.
+//   5. Rolling cache is OFF by default (opt-in via env).
+// ---------------------------------------------------------------------------
+
 export function buildAnthropicRequestFromAssembled(
   req: OpenAIChatRequest,
   targetModel: string,
@@ -501,45 +560,57 @@ export function buildAnthropicRequestFromAssembled(
   if (thinking && isForcedToolChoice(req.tool_choice)) {
     thinking = undefined;
   }
+
   const { systemBlocks, dynamicMemoryPatch } = splitDynamicMemorySystemBlock(assembled);
   const system = assembledToAnthropicSystem(systemBlocks);
   const messages = assembledToAnthropicMessages(assembled.messages);
-  applyCacheOverrides(system, env);
-  applyRollingMessageCache(messages, env);
+
+  // Apply explicit cache breakpoints (history_read_anchor + forward_write_anchor)
+  applyExplicitCacheBreakpoints(system, messages, assembled, env);
+
+  // Rolling cache: off by default, opt-in
+  if (env.ANTHROPIC_ROLLING_CACHE_ENABLED === "true") {
+    applyRollingMessageCache(messages, env);
+  }
+
+  // dynamic_memory_patch goes AFTER all cache breakpoints as uncached user context
   appendUncachedUserContext(messages, dynamicMemoryPatch);
+
+  // Stable tools JSON: keys sorted, so Anthropic's cache sees identical bytes
+  const stableToolsJson = tools
+    ? JSON.parse(stableStringify(tools)) as AnthropicTool[]
+    : undefined;
 
   return {
     model: stripAnthropicModelPrefix(targetModel),
     max_tokens: getAnthropicMaxTokens(req, env, thinking),
-    cache_control: buildAutomaticCacheControl(env),
+    // No top-level cache_control by default
+    ...(env.ANTHROPIC_AUTO_CACHE_ENABLED === "true"
+      ? { cache_control: buildCacheControl(env) }
+      : {}),
     temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
     thinking,
     system,
     messages,
-    ...(tools ? { tools } : {}),
+    ...(stableToolsJson ? { tools: stableToolsJson } : {}),
     ...(toolChoice ? { tool_choice: toolChoice } : {}),
   };
 }
 
-function applyCacheOverrides(systemBlocks: AnthropicTextBlock[], env: Env): void {
-  if (env.ANTHROPIC_CACHE_ENABLED === "false") {
-    for (const b of systemBlocks) delete b.cache_control;
-    return;
-  }
-  const ttl = env.ANTHROPIC_CACHE_TTL === "1h" ? "1h" : "5m";
-  for (const b of systemBlocks) {
-    if (b.cache_control) {
-      b.cache_control = { type: "ephemeral", ttl };
-    }
-  }
-}
+// ---------------------------------------------------------------------------
+// HTTP call + response parsing
+// ---------------------------------------------------------------------------
 
-export async function callAnthropicNative(env: Env, body: AnthropicRequest, targetModel?: string): Promise<Response> {
+export async function callAnthropicNative(
+  env: Env,
+  body: AnthropicRequest,
+  targetModel?: string
+): Promise<Response> {
   return fetch(getAnthropicUrlForModel(env, targetModel || body.model), {
     method: "POST",
     headers: buildAnthropicHeaders(env),
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 }
 
@@ -551,17 +622,19 @@ export function parseAnthropicNonStream(response: AnthropicResponse): {
 } {
   const content = (response.content ?? [])
     .filter((block) => block.type === "text" && typeof block.text === "string")
-    .map((block) => block.text)
+    .map((block) => block.text!)
     .join("");
   const reasoningContent = (response.content ?? [])
     .filter((block) => block.type === "thinking" && typeof block.thinking === "string")
-    .map((block) => block.thinking)
+    .map((block) => block.thinking!)
     .join("");
 
   // Collect tool_use blocks and convert to OpenAI tool_calls
   const toolUseBlocks: AnthropicToolUseBlock[] = (response.content ?? [])
-    .filter((block): block is AnthropicToolUseBlock =>
-      block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string")
+    .filter(
+      (block): block is AnthropicToolUseBlock =>
+        block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string"
+    )
     .map((block) => ({
       type: "tool_use" as const,
       id: block.id!,
@@ -570,17 +643,15 @@ export function parseAnthropicNonStream(response: AnthropicResponse): {
     }));
 
   const toolCalls = anthropicToolUseBlocksToOpenAI(toolUseBlocks);
-
   const usage = normalizeAnthropicUsage(response.usage);
 
   const message = {
     role: "assistant" as const,
-    content: toolCalls.length > 0 ? (content || null) : content,
+    content: toolCalls.length > 0 ? content || null : content,
     ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
     ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
   };
 
-  // Map Anthropic stop_reason → OpenAI finish_reason for tool calls
   const mappedFinishReason = mapAnthropicToOpenAIFinishReason(response.stop_reason);
 
   return {
@@ -596,11 +667,11 @@ export function parseAnthropicNonStream(response: AnthropicResponse): {
         {
           index: 0,
           message,
-          finish_reason: mappedFinishReason
-        }
+          finish_reason: mappedFinishReason,
+        },
       ],
-      usage
-    }
+      usage,
+    },
   };
 }
 
@@ -630,6 +701,7 @@ export function normalizeAnthropicUsage(usage: TokenUsage | undefined): TokenUsa
     ...usage,
     prompt_tokens: input,
     completion_tokens: output,
-    total_tokens: typeof input === "number" && typeof output === "number" ? input + output : usage.total_tokens
+    total_tokens:
+      typeof input === "number" && typeof output === "number" ? input + output : usage.total_tokens,
   };
 }

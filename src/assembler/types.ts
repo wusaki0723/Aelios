@@ -66,6 +66,21 @@ export interface SystemBlock {
   cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" };
 }
 
+/**
+ * Explicit cache breakpoint for Anthropic prompt caching.
+ *
+ * target: where cache_control lands
+ *   - "system" → system_blocks[system_block_index]
+ *   - "message" → messages[message_index].content[last block]
+ * reason: human-readable tag for debug/logging
+ */
+export interface CacheBreakpoint {
+  target: "system" | "message";
+  system_block_index?: number;
+  message_index?: number;
+  reason: string;
+}
+
 export interface AssembledPrompt {
   system_blocks: SystemBlock[];
   messages: Array<{ role: "user" | "assistant"; content: string | unknown[] | null }>;
@@ -73,6 +88,7 @@ export interface AssembledPrompt {
     anchor_index: number;
     block_ids: string[];
     client_system_hash: string;
+    cache_breakpoints: CacheBreakpoint[];
   };
 }
 

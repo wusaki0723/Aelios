@@ -17,6 +17,7 @@ import type {
   AssembledPrompt,
   AssemblerContext,
   Block,
+  CacheBreakpoint,
   SystemBlock,
 } from "./types";
 import { BLOCK_ORDER, formatBootStable } from "./types";
@@ -464,6 +465,34 @@ export function assemble(ctx: AssemblerContext): AssembledPrompt {
     }
   }
 
+  // --- Cache breakpoints ---
+  // A: history_read_anchor — last stable system block (client_system anchor).
+  //    Everything up to and including this block is cache-warm across rounds.
+  // B: forward_write_anchor — last content block of the last history message
+  //    (the message just before current_user). If the next round appends a new
+  //    user+assistant pair, this prefix stays cached. Only set when there are
+  //    at least 2 messages (some history + current user).
+  const breakpoints: CacheBreakpoint[] = [];
+
+  if (anchorIndex >= 0) {
+    breakpoints.push({
+      target: "system",
+      system_block_index: anchorIndex,
+      reason: "history_read_anchor",
+    });
+  }
+
+  // forward_write_anchor: last history message (index = messages.length - 2,
+  // because the last message is current_user).
+  if (messages.length >= 2) {
+    const fwdIdx = messages.length - 2;
+    breakpoints.push({
+      target: "message",
+      message_index: fwdIdx,
+      reason: "forward_write_anchor",
+    });
+  }
+
   return {
     system_blocks: systemBlocks,
     messages,
@@ -471,6 +500,7 @@ export function assemble(ctx: AssemblerContext): AssembledPrompt {
       anchor_index: anchorIndex,
       block_ids: enabledBlockIds,
       client_system_hash: clientSystemHash,
+      cache_breakpoints: breakpoints,
     },
   };
 }

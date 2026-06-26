@@ -85,24 +85,25 @@ function assemble(ctx) {
   systemBlocks.push({ role: "system", text: PROXY_STATIC_RULES });
   blockIds.push("proxy_static_rules");
 
-  // Block 2: persona_pinned (stable, cache_anchor = true)
+  // Block 2: persona_pinned (stable, NO cache_control)
   if (ctx.personaText) {
-    systemBlocks.push({
-      role: "system",
-      text: ctx.personaText,
-      cache_control: { type: "ephemeral", ttl: "5m" },
-    });
-    anchorIndex = systemBlocks.length - 1;
+    systemBlocks.push({ role: "system", text: ctx.personaText });
     blockIds.push("persona_pinned");
   }
 
-  // Block 3: preset_lite (stable, NO cache_control — outside prefix)
+  // Block 3: preset_lite (stable)
   systemBlocks.push({ role: "system", text: PRESET_LITE });
   blockIds.push("preset_lite");
 
-  // Block 4: client_system (NO cache_control)
+  // Block 4: client_system (stable, cache_anchor = true)
+  // This is the long persona/system text — big enough for 4096 token minimum.
   if (ctx.clientSystem) {
-    systemBlocks.push({ role: "system", text: ctx.clientSystem });
+    systemBlocks.push({
+      role: "system",
+      text: ctx.clientSystem,
+      cache_control: { type: "ephemeral", ttl: "5m" },
+    });
+    anchorIndex = systemBlocks.length - 1;
     blockIds.push("client_system");
   }
 
@@ -287,8 +288,8 @@ test("T1: resend → identical breakpoints", () => {
   assert.deepStrictEqual(a1.meta.cache_breakpoints, a2.meta.cache_breakpoints);
 });
 
-// T2: system anchor is on persona_pinned, NOT client_system
-test("T2: system anchor on persona_pinned (not client_system)", () => {
+// T2: system anchor is on client_system (long persona text, 4096+ tokens)
+test("T2: system anchor on client_system", () => {
   const ctx = {
     ...BASE_CTX,
     history: [userMsg("h1"), assistantMsg("a1")],
@@ -300,14 +301,8 @@ test("T2: system anchor on persona_pinned (not client_system)", () => {
   const sysBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "system");
   assert.ok(sysBP, "has system breakpoint");
 
-  // It should be on persona_pinned, not client_system
   const anchorId = assembled.meta.block_ids[sysBP.system_block_index];
-  assert.strictEqual(anchorId, "persona_pinned");
-
-  // client_system should NOT have cache_control
-  const csIdx = assembled.meta.block_ids.indexOf("client_system");
-  assert.ok(csIdx >= 0);
-  assert.ok(!assembled.system_blocks[csIdx].cache_control, "client_system has no cache_control");
+  assert.strictEqual(anchorId, "client_system");
 });
 
 // T3: change current user → system anchor unchanged

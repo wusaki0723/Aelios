@@ -126,8 +126,8 @@ export const BLOCK_ORDER: readonly string[] = [
   "proxy_static_rules",
   "persona_pinned",
   "preset_lite",
-  "boot_stable",
   "client_system",
+  "boot_stable",
   "client_volatile_context",
   "dynamic_memory_patch",
   "vision_context",
@@ -136,14 +136,16 @@ export const BLOCK_ORDER: readonly string[] = [
 ] as const;
 
 /**
- * The cache anchor falls after persona_pinned (index 1).
- * This is the most stable content: proxy_static_rules + persona/identity.
- * Blocks after it (preset_lite, boot_stable, client_system, dynamic blocks)
- * are NOT in the cache prefix — they can change freely without invalidating
- * cached history. boot_stable (glossary, digest) changes daily, so keeping
- * it outside the cache prefix prevents unnecessary invalidation.
+ * The cache anchor falls after client_system (index 3).
+ * Cache prefix = proxy_static_rules + persona_pinned + preset_lite + client_system.
+ * This includes the long persona/system prompt (4096+ tokens for Haiku threshold).
+ *
+ * boot_stable (glossary, digest, yesterday_log) is AFTER the anchor.
+ * It changes daily but does NOT invalidate the cached system prefix.
+ * client_volatile_context (time), dynamic_memory_patch (RAG), vision_context
+ * are also after the anchor — fully dynamic, never cached.
  */
-export const CACHE_ANCHOR_AFTER_ID = "persona_pinned";
+export const CACHE_ANCHOR_AFTER_ID = "client_system";
 
 // ---------------------------------------------------------------------------
 // Allowed memory types for persona_pinned (block 2)

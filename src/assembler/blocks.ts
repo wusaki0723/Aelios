@@ -105,7 +105,7 @@ const personaPinnedBlock: Block = {
   id: "persona_pinned",
   kind: "stable",
   role: "system",
-  cache_anchor: true,
+  cache_anchor: false,
   content_fn: (ctx: AssemblerContext): string | null => {
     const personaMemories = ctx.pinnedPersonaMemories ?? [];
     const preciousMemories = ctx.boot?.precious.map((p) => ({
@@ -253,7 +253,7 @@ const clientSystemBlock: Block = {
   id: "client_system",
   kind: "stable",
   role: "system",
-  cache_anchor: false,
+  cache_anchor: true,
   content_fn: (ctx: AssemblerContext): string | null => {
     const { stable } = splitClientSystemTexts(extractSystemTexts(ctx.systemMessages));
     if (stable.length === 0) return null;

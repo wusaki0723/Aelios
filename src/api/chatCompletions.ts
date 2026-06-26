@@ -153,7 +153,7 @@ export async function handleChatCompletions(
         visionOutput: null,
       });
       clientSystemHash = assembled.meta.client_system_hash;
-      cacheAnchorBlock = assembled.meta.anchor_index >= 0 ? "persona_pinned" : null;
+      cacheAnchorBlock = assembled.meta.anchor_index >= 0 ? "client_system" : null;
       upstream = await callAnthropicNative(env, buildAnthropicRequestFromAssembled(body, targetModel, assembled, env), targetModel);
     } else {
       // OpenAI-compatible: always use assembler path

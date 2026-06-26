@@ -80,7 +80,9 @@ async function handleListMemories(request: Request, env: Env, profile: KeyProfil
   const page = await listVectorMemories(env, {
     namespace,
     count: limit,
-    cursor: readString(url.searchParams.get("cursor"))
+    cursor: readString(url.searchParams.get("cursor")),
+    type: readString(url.searchParams.get("type")) ?? undefined,
+    status: readString(url.searchParams.get("status")) ?? undefined
   });
 
   return json({

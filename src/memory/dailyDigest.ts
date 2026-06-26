@@ -609,14 +609,15 @@ async function saveImportantExcerpts(
     const quote = readString(excerpt.quote);
     if (!quote) continue;
     const reason = readString(excerpt.reason);
-    const content = [`【${input.dateLabel} 重要原文】`, quote, reason ? `保存原因：${reason}` : ""]
+    const summary = [`【${input.dateLabel} 重要原文】`, reason ? `保存原因：${reason}` : ""]
       .filter(Boolean)
-      .join("\n");
+      .join("｜");
 
     await createVectorMemory(env, {
       namespace: input.namespace,
       type: "excerpt",
-      content,
+      content: quote,
+      summary,
       importance: 0.72,
       confidence: 0.9,
       tags: uniqueStrings(["important-excerpt", input.dateLabel, ...(excerpt.tags ?? [])]),

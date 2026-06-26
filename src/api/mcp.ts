@@ -235,7 +235,9 @@ async function callTool(
       const page = await listVectorMemories(env, {
         namespace: resolveNamespace(profile, args.namespace),
         count: limit,
-        cursor: readString(args.cursor)
+        cursor: readString(args.cursor),
+        type: readString(args.type) ?? undefined,
+        status: readString(args.status) ?? undefined
       });
       return textToolResult({
         data: page.data,

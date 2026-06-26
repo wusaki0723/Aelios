@@ -532,21 +532,56 @@ export async function buildAnthropicNativeRequest(
 
 // ---------------------------------------------------------------------------
 // buildAnthropicRequestFromAssembled — v4 assembler path
-//
-// Cache strategy:
-//   1. history_read_anchor (system): cache_control on client_system block.
-//      All stable blocks before it (proxy_static_rules, persona_pinned,
-//      preset_lite, boot_stable) stay cached across rounds.
-//   2. forward_write_anchor (message): cache_control on the last content
-//      block of the last history message, so R1→R2 appends keep the
-//      R1 prefix warm.
-//   3. dynamic_memory_patch is extracted from system and appended as
-//      uncached user context AFTER both breakpoints, so changing RAG
-//      hits never invalidate cached prefixes.
-//   4. Top-level cache_control (automatic) is OFF by default to avoid
-//      competing with explicit breakpoints.
-//   5. Rolling cache is OFF by default (opt-in via env).
 // ---------------------------------------------------------------------------
+// Cache strategy — 4 explicit breakpoints (Anthropic prompt caching)
+//
+// Anthropic caches the full prefix: tools → system → messages.
+// Up to 4 explicit cache_control breakpoints. Each looks back up to
+// 20 content blocks for a previous cache entry.
+//
+//   1. tools (last tool): cache_control on the last tool definition.
+//      Tool definitions must be stable (no dates, no timestamps).
+//   2. system (persona_pinned): cache_control on persona_pinned block.
+//      This is the most stable content. boot_stable (glossary, digest)
+//      is OUTSIDE the cache prefix — it changes daily.
+//   3. bridge (message): for long conversations (>16 message blocks),
+//      a mid-history anchor so the tail's 20-block lookback doesn't
+//      lose older cached prefix.
+//   4. tail (message): last stable block before dynamic content.
+//      Default mode A: last block of the message before current_user.
+//      Opt-in mode B: first text block of current_user.
+//
+// Dynamic content (dynamic_memory_patch, time reminders, current user
+// memories) is appended AFTER all breakpoints — never cached.
+//
+// Top-level cache_control (automatic) is NEVER set.
+// Rolling cache is OFF by default (opt-in via env).
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply cache_control to the last tool definition if tools are present.
+ * Returns the tools array with cache_control on the last tool, or
+ * undefined if no tools.
+ */
+function applyToolsCacheBreakpoint(
+  tools: AnthropicTool[] | undefined,
+  env: Env
+): AnthropicTool[] | undefined {
+  if (!tools || tools.length === 0) return undefined;
+  if (env.ANTHROPIC_CACHE_ENABLED === "false") return tools;
+  // Don't cache tools if they contain volatile content (date patterns)
+  const cc = buildCacheControl(env);
+  if (!cc) return tools;
+
+  // Tag the last tool with cache_control
+  const result = tools.map((t, i) => {
+    if (i === tools.length - 1) {
+      return { ...t, cache_control: cc };
+    }
+    return t;
+  });
+  return result;
+}
 
 export function buildAnthropicRequestFromAssembled(
   req: OpenAIChatRequest,
@@ -566,35 +601,30 @@ export function buildAnthropicRequestFromAssembled(
   const system = assembledToAnthropicSystem(systemBlocks);
   const { wire: messages, indexMap } = assembledToAnthropicMessages(assembled.messages);
 
-  // Apply explicit cache breakpoints (history_read_anchor + forward_write_anchor)
+  // Apply explicit cache breakpoints (system + message level)
   applyExplicitCacheBreakpoints(system, messages, indexMap, assembled, env);
-
-  // Rolling cache: off by default, opt-in
-  if (env.ANTHROPIC_ROLLING_CACHE_ENABLED === "true") {
-    applyRollingMessageCache(messages, env);
-  }
 
   // dynamic_memory_patch goes AFTER all cache breakpoints as uncached user context
   appendUncachedUserContext(messages, dynamicMemoryPatch);
 
   // Stable tools JSON: keys sorted, so Anthropic's cache sees identical bytes
   const stableToolsJson = tools
-    ? JSON.parse(stableStringify(tools)) as AnthropicTool[]
+    ? (JSON.parse(stableStringify(tools)) as AnthropicTool[])
     : undefined;
+
+  // Breakpoint 1: tools — cache on last tool if definitions are stable
+  const cachedTools = applyToolsCacheBreakpoint(stableToolsJson, env);
 
   return {
     model: stripAnthropicModelPrefix(targetModel),
     max_tokens: getAnthropicMaxTokens(req, env, thinking),
-    // No top-level cache_control by default
-    ...(env.ANTHROPIC_AUTO_CACHE_ENABLED === "true"
-      ? { cache_control: buildCacheControl(env) }
-      : {}),
+    // Top-level cache_control is NEVER set (was competing with explicit breakpoints)
     temperature: thinking ? undefined : typeof req.temperature === "number" ? req.temperature : undefined,
     stream: Boolean(req.stream),
     thinking,
     system,
     messages,
-    ...(stableToolsJson ? { tools: stableToolsJson } : {}),
+    ...(cachedTools ? { tools: cachedTools } : {}),
     ...(toolChoice ? { tool_choice: toolChoice } : {}),
   };
 }

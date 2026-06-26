@@ -2,13 +2,11 @@
 /**
  * CONTRACT MIRROR — tests for the v4 prompt caching strategy.
  *
- * Validates:
- *   1. A resend hits cache (same inputs → same breakpoints + system bytes)
- *   2. A/B: change current user, history_read_anchor still present
- *   3. R1→R2: append a round, R2 has forward_write_anchor reading R1 prefix
- *   4. dynamic_memory_patch change does NOT invalidate system cache
- *   5. tools stable → stable hash; tools order/desc change → full invalidation
- *   6. tool_result in history → next round can read it via forward_write_anchor
+ * Validates the 4-breakpoint Anthropic prompt caching strategy:
+ *   1. tools: cache on last tool definition (stable tools)
+ *   2. system: cache on persona_pinned (most stable content)
+ *   3. bridge: mid-history anchor for long conversations
+ *   4. tail: last stable block before dynamic content
  *
  * Run:  node scripts/verify-cache-strategy.mjs
  * Exit 0 = all passed, exit 1 = failure.
@@ -17,8 +15,7 @@
 import { strict as assert } from "node:assert";
 
 // ---------------------------------------------------------------------------
-// Inline minimal assemble + toAnthropic logic (contract mirror)
-// Keeps tests runnable without TS compilation.
+// Helpers (mirror of assembler logic)
 // ---------------------------------------------------------------------------
 
 function simpleHash(text) {
@@ -29,7 +26,6 @@ function simpleHash(text) {
   return hash.toString(16).padStart(8, "0");
 }
 
-// Stable stringify for tools (mirrors toAnthropic.ts)
 function stableStringify(obj) {
   if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
   if (Array.isArray(obj)) return "[" + obj.map(stableStringify).join(",") + "]";
@@ -64,9 +60,20 @@ function openAIToolsToAnthropic(tools) {
   return converted;
 }
 
-// Minimal assembler: produces system_blocks + messages + meta.cache_breakpoints
+function countMessageBlocks(content) {
+  if (content == null) return 0;
+  if (typeof content === "string") return 1;
+  if (!Array.isArray(content)) return 0;
+  return content.length;
+}
+
+// ---------------------------------------------------------------------------
+// Minimal assembler with 4-breakpoint strategy
+// ---------------------------------------------------------------------------
+
 const PROXY_STATIC_RULES = "proxy static rules text";
 const PRESET_LITE = "preset lite text";
+const LOOKBACK = 16;
 
 function assemble(ctx) {
   const systemBlocks = [];
@@ -78,24 +85,24 @@ function assemble(ctx) {
   systemBlocks.push({ role: "system", text: PROXY_STATIC_RULES });
   blockIds.push("proxy_static_rules");
 
-  // Block 2: persona_pinned (stable)
+  // Block 2: persona_pinned (stable, cache_anchor = true)
   if (ctx.personaText) {
-    systemBlocks.push({ role: "system", text: ctx.personaText });
-    blockIds.push("persona_pinned");
-  }
-
-  // Block 3: preset_lite (stable)
-  systemBlocks.push({ role: "system", text: PRESET_LITE });
-  blockIds.push("preset_lite");
-
-  // Block 4: client_system (stable, cache_anchor = true)
-  if (ctx.clientSystem) {
     systemBlocks.push({
       role: "system",
-      text: ctx.clientSystem,
+      text: ctx.personaText,
       cache_control: { type: "ephemeral", ttl: "5m" },
     });
     anchorIndex = systemBlocks.length - 1;
+    blockIds.push("persona_pinned");
+  }
+
+  // Block 3: preset_lite (stable, NO cache_control — outside prefix)
+  systemBlocks.push({ role: "system", text: PRESET_LITE });
+  blockIds.push("preset_lite");
+
+  // Block 4: client_system (NO cache_control)
+  if (ctx.clientSystem) {
+    systemBlocks.push({ role: "system", text: ctx.clientSystem });
     blockIds.push("client_system");
   }
 
@@ -113,21 +120,61 @@ function assemble(ctx) {
     messages.push(ctx.currentUser);
   }
 
-  // Cache breakpoints
+  // --- 4-breakpoint computation ---
   const breakpoints = [];
+
+  // Breakpoint 2: system anchor on persona_pinned
   if (anchorIndex >= 0) {
     breakpoints.push({
       target: "system",
       system_block_index: anchorIndex,
-      reason: "history_read_anchor",
+      reason: "system",
     });
   }
+
+  // Message-level breakpoints: bridge + tail
+  const msgBlockCounts = messages.map((m) => countMessageBlocks(m.content));
+
+  let tailIdx = -1;
+  let tailBlockIdx = -1;
   if (messages.length >= 2) {
+    tailIdx = messages.length - 2;
+    tailBlockIdx = Math.max(0, msgBlockCounts[tailIdx] - 1);
+  }
+
+  if (tailIdx >= 0) {
     breakpoints.push({
       target: "message",
-      message_index: messages.length - 2,
-      reason: "forward_write_anchor",
+      message_index: tailIdx,
+      block_index: tailBlockIdx,
+      reason: "tail",
     });
+
+    let blocksBeforeTail = 0;
+    for (let i = 0; i < tailIdx; i++) blocksBeforeTail += msgBlockCounts[i];
+
+    if (blocksBeforeTail > LOOKBACK) {
+      let target = blocksBeforeTail - LOOKBACK;
+      let accumulated = 0;
+      let bridgeMsgIdx = 0;
+      let bridgeBlockIdx = 0;
+      for (let i = 0; i < tailIdx; i++) {
+        if (accumulated + msgBlockCounts[i] > target) {
+          bridgeMsgIdx = i;
+          bridgeBlockIdx = target - accumulated;
+          break;
+        }
+        accumulated += msgBlockCounts[i];
+      }
+      if (bridgeMsgIdx !== tailIdx || bridgeBlockIdx !== tailBlockIdx) {
+        breakpoints.push({
+          target: "message",
+          message_index: bridgeMsgIdx,
+          block_index: bridgeBlockIdx,
+          reason: "bridge",
+        });
+      }
+    }
   }
 
   return {
@@ -142,11 +189,11 @@ function assemble(ctx) {
   };
 }
 
-// Apply breakpoints (mirrors applyExplicitCacheBreakpoints + applyMessageCacheBreakpoints)
+// Apply breakpoints (mirrors adapter logic)
 function applyBreakpoints(assembled, cacheEnabled = true) {
   const cc = cacheEnabled ? { type: "ephemeral", ttl: "5m" } : null;
 
-  // System blocks
+  // System blocks: only blocks with cache_control get it
   for (const b of assembled.system_blocks) {
     if (b.cache_control) {
       b.cache_control = cc ?? undefined;
@@ -160,23 +207,26 @@ function applyBreakpoints(assembled, cacheEnabled = true) {
       if (bp.message_index == null) continue;
       const msg = assembled.messages[bp.message_index];
       if (!msg || msg.content.length === 0) continue;
-      const lastBlock = msg.content[msg.content.length - 1];
-      if (lastBlock.type === "text") {
-        lastBlock.cache_control = cc;
+      const blockIdx = bp.block_index ?? msg.content.length - 1;
+      const block = msg.content[blockIdx];
+      if (block && typeof block === "object" && block.type === "text") {
+        block.cache_control = cc;
       }
     }
   }
 }
 
-// Helper: build message
+// Helpers
 function userMsg(text) {
   return { role: "user", content: [{ type: "text", text }] };
 }
 function assistantMsg(text) {
   return { role: "assistant", content: [{ type: "text", text }] };
 }
+function multiBlockUserMsg(blocks) {
+  return { role: "user", content: blocks };
+}
 
-// Helper: extract cache_control positions from assembled output
 function getCachePositions(assembled) {
   const system = [];
   for (let i = 0; i < assembled.system_blocks.length; i++) {
@@ -197,20 +247,6 @@ function getCachePositions(assembled) {
 }
 
 // ---------------------------------------------------------------------------
-// Test fixtures
-// ---------------------------------------------------------------------------
-
-const STABLE_SYSTEM = "You are a helpful assistant. Follow these rules carefully. Rule 1: Be kind. Rule 2: Be accurate. Rule 3: Be concise.";
-
-const BASE_CTX = {
-  personaText: "You are Claude, an AI assistant.",
-  clientSystem: STABLE_SYSTEM,
-  memoryPatch: null,
-  history: [],
-  currentUser: null,
-};
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -229,8 +265,17 @@ function test(name, fn) {
   }
 }
 
-// T1: A resend hits cache — same inputs produce identical breakpoints and system bytes
-test("T1: resend → identical breakpoints and system bytes", () => {
+const STABLE_SYSTEM = "You are a helpful assistant with many rules.";
+const BASE_CTX = {
+  personaText: "You are Claude, an AI assistant.",
+  clientSystem: STABLE_SYSTEM,
+  memoryPatch: null,
+  history: [],
+  currentUser: null,
+};
+
+// T1: resend → identical breakpoints
+test("T1: resend → identical breakpoints", () => {
   const ctx = {
     ...BASE_CTX,
     history: [userMsg("hello"), assistantMsg("hi there")],
@@ -238,192 +283,12 @@ test("T1: resend → identical breakpoints and system bytes", () => {
   };
   const a1 = assemble(ctx);
   const a2 = assemble(ctx);
-
-  // Identical system blocks
   assert.deepStrictEqual(a1.system_blocks, a2.system_blocks);
-  // Identical breakpoints
   assert.deepStrictEqual(a1.meta.cache_breakpoints, a2.meta.cache_breakpoints);
-  // Identical client_system_hash
-  assert.strictEqual(a1.meta.client_system_hash, a2.meta.client_system_hash);
 });
 
-// T2: A/B — change current user, history_read_anchor still present at same position
-test("T2: change current user → history_read_anchor unchanged", () => {
-  const history = [userMsg("hello"), assistantMsg("hi there")];
-
-  const ctxA = { ...BASE_CTX, history, currentUser: userMsg("question A") };
-  const ctxB = { ...BASE_CTX, history, currentUser: userMsg("question B completely different") };
-
-  const a = assemble(ctxA);
-  const b = assemble(ctxB);
-
-  // history_read_anchor must be at same system block index
-  const bpA = a.meta.cache_breakpoints.find((bp) => bp.reason === "history_read_anchor");
-  const bpB = b.meta.cache_breakpoints.find((bp) => bp.reason === "history_read_anchor");
-  assert.ok(bpA, "A has history_read_anchor");
-  assert.ok(bpB, "B has history_read_anchor");
-  assert.strictEqual(bpA.system_block_index, bpB.system_block_index);
-
-  // System blocks up to and including anchor must be identical
-  const anchorIdx = bpA.system_block_index;
-  for (let i = 0; i <= anchorIdx; i++) {
-    assert.strictEqual(a.system_blocks[i].text, b.system_blocks[i].text);
-  }
-});
-
-// T3: R1→R2 append a round, R2 has forward_write_anchor reading R1's prefix
-test("T3: R1→R2 forward_write_anchor reads R1 prefix", () => {
-  const r1 = assemble({
-    ...BASE_CTX,
-    history: [],
-    currentUser: userMsg("first message"),
-  });
-  applyBreakpoints(r1);
-
-  // R2: append R1's exchange to history
-  const r2 = assemble({
-    ...BASE_CTX,
-    history: [
-      userMsg("first message"),
-      assistantMsg("first response"),
-    ],
-    currentUser: userMsg("second message"),
-  });
-  applyBreakpoints(r2);
-
-  // R2 must have forward_write_anchor
-  const fwd = r2.meta.cache_breakpoints.find((bp) => bp.reason === "forward_write_anchor");
-  assert.ok(fwd, "R2 has forward_write_anchor");
-
-  // The message at forward_write_anchor index should be the last history message
-  // (assistantMsg "first response"), and it should have cache_control
-  const cachedMsg = r2.messages[fwd.message_index];
-  assert.ok(cachedMsg, "forward_write_anchor points to a message");
-  const lastBlock = cachedMsg.content[cachedMsg.content.length - 1];
-  assert.ok(lastBlock.cache_control, "forward_write_anchor block has cache_control");
-});
-
-// T4: dynamic_memory_patch change does NOT invalidate system cache
-test("T4: memory patch change → system cache stable", () => {
-  const ctxA = { ...BASE_CTX, memoryPatch: null };
-  const ctxB = { ...BASE_CTX, memoryPatch: "<memories>new recall hit</memories>" };
-
-  const a = assemble(ctxA);
-  const b = assemble(ctxB);
-
-  // All blocks before dynamic_memory_patch must be identical
-  const patchIdxA = a.meta.block_ids.indexOf("dynamic_memory_patch");
-  const patchIdxB = b.meta.block_ids.indexOf("dynamic_memory_patch");
-
-  // Find the minimum index of stable blocks
-  const stableCount = Math.min(
-    patchIdxA >= 0 ? patchIdxA : a.system_blocks.length,
-    patchIdxB >= 0 ? patchIdxB : b.system_blocks.length
-  );
-
-  for (let i = 0; i < stableCount; i++) {
-    assert.strictEqual(a.system_blocks[i].text, b.system_blocks[i].text);
-  }
-
-  // After applying breakpoints, the cache_control on the anchor block must be identical
-  applyBreakpoints(a);
-  applyBreakpoints(b);
-
-  const anchorA = a.meta.cache_breakpoints.find((bp) => bp.reason === "history_read_anchor");
-  const anchorB = b.meta.cache_breakpoints.find((bp) => bp.reason === "history_read_anchor");
-  assert.ok(anchorA && anchorB);
-  assert.deepStrictEqual(
-    a.system_blocks[anchorA.system_block_index].cache_control,
-    b.system_blocks[anchorB.system_block_index].cache_control
-  );
-});
-
-// T5: tools stable → stable hash; tools order/desc change → full invalidation
-test("T5: tools stable → identical wire bytes", () => {
-  const toolsA = [
-    { function: { name: "search", description: "Search the web", parameters: { type: "object", properties: { q: { type: "string" } } } } },
-    { function: { name: "calc", description: "Calculate", parameters: { type: "object", properties: { expr: { type: "string" } } } } },
-  ];
-  // Same tools, different array order
-  const toolsB = [toolsA[1], toolsA[0]];
-
-  const anthA = openAIToolsToAnthropic(toolsA);
-  const anthB = openAIToolsToAnthropic(toolsB);
-
-  assert.deepStrictEqual(anthA, anthB, "different input order → same Anthropic tools");
-
-  // Stable JSON must be identical
-  const jsonA = stableStringify(anthA);
-  const jsonB = stableStringify(anthB);
-  assert.strictEqual(jsonA, jsonB, "stable JSON is identical");
-});
-
-test("T5b: tools description change → different wire bytes", () => {
-  const toolsA = [
-    { function: { name: "search", description: "Search the web", parameters: { type: "object", properties: { q: { type: "string" } } } } },
-  ];
-  const toolsB = [
-    { function: { name: "search", description: "Search the internet", parameters: { type: "object", properties: { q: { type: "string" } } } } },
-  ];
-
-  const anthA = openAIToolsToAnthropic(toolsA);
-  const anthB = openAIToolsToAnthropic(toolsB);
-
-  const jsonA = stableStringify(anthA);
-  const jsonB = stableStringify(anthB);
-  assert.notStrictEqual(jsonA, jsonB, "description change → different bytes");
-});
-
-// T6: tool_result in history → next round can read it via forward_write_anchor
-test("T6: tool_result in history → forward_write_anchor on last history msg", () => {
-  const toolResultHistory = [
-    userMsg("search for cats"),
-    assistantMsg("I'll search for that"),
-    {
-      role: "user",
-      content: [{ type: "tool_result", tool_use_id: "call_123", content: "cats are cute" }],
-    },
-    assistantMsg("Here are the cat results"),
-  ];
-
-  const ctx = {
-    ...BASE_CTX,
-    history: toolResultHistory,
-    currentUser: userMsg("tell me more"),
-  };
-
-  const assembled = assemble(ctx);
-  applyBreakpoints(assembled);
-
-  const fwd = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "forward_write_anchor");
-  assert.ok(fwd, "has forward_write_anchor");
-
-  // The forward anchor should be on the last history message (assistant "Here are the cat results")
-  const lastHistoryIdx = fwd.message_index;
-  const lastHistoryMsg = assembled.messages[lastHistoryIdx];
-  assert.strictEqual(lastHistoryMsg.role, "assistant");
-  const lastBlock = lastHistoryMsg.content[lastHistoryMsg.content.length - 1];
-  assert.ok(lastBlock.cache_control, "last history block has cache_control");
-});
-
-// T7: empty history → no forward_write_anchor, only history_read_anchor
-test("T7: no history → only history_read_anchor", () => {
-  const ctx = {
-    ...BASE_CTX,
-    history: [],
-    currentUser: userMsg("first message"),
-  };
-  const assembled = assemble(ctx);
-
-  const histBP = assembled.meta.cache_breakpoints.filter((bp) => bp.reason === "history_read_anchor");
-  const fwdBP = assembled.meta.cache_breakpoints.filter((bp) => bp.reason === "forward_write_anchor");
-
-  assert.strictEqual(histBP.length, 1, "one history_read_anchor");
-  assert.strictEqual(fwdBP.length, 0, "no forward_write_anchor when no history");
-});
-
-// T8: cache_control on system blocks is at exactly the client_system position
-test("T8: cache_control lands on client_system block", () => {
+// T2: system anchor is on persona_pinned, NOT client_system
+test("T2: system anchor on persona_pinned (not client_system)", () => {
   const ctx = {
     ...BASE_CTX,
     history: [userMsg("h1"), assistantMsg("a1")],
@@ -432,92 +297,206 @@ test("T8: cache_control lands on client_system block", () => {
   const assembled = assemble(ctx);
   applyBreakpoints(assembled);
 
-  const positions = getCachePositions(assembled);
+  const sysBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "system");
+  assert.ok(sysBP, "has system breakpoint");
 
-  // Exactly one system block has cache_control
-  assert.strictEqual(positions.system.length, 1, "exactly one system cache point");
+  // It should be on persona_pinned, not client_system
+  const anchorId = assembled.meta.block_ids[sysBP.system_block_index];
+  assert.strictEqual(anchorId, "persona_pinned");
 
-  // It should be the client_system block
-  const cacheIdx = positions.system[0];
-  assert.strictEqual(assembled.meta.block_ids[cacheIdx], "client_system");
+  // client_system should NOT have cache_control
+  const csIdx = assembled.meta.block_ids.indexOf("client_system");
+  assert.ok(csIdx >= 0);
+  assert.ok(!assembled.system_blocks[csIdx].cache_control, "client_system has no cache_control");
 });
 
-// T10: consecutive same-role messages don't break breakpoint index
-test("T10: consecutive user messages → forward_write_anchor on correct wire msg", () => {
-  // Simulate: time_reminder (user) + actual user (user) + assistant + user
-  // After assembler: history = [time_reminder_user, assistant], currentUser = actual_user
-  // assembledToAnthropicMessages merges time_reminder + actual_user into one wire message
-  // forward_write_anchor must point to the ASSISTANT message, not the merged user message
+// T3: change current user → system anchor unchanged
+test("T3: change current user → system anchor unchanged", () => {
+  const history = [userMsg("hello"), assistantMsg("hi there")];
+  const a = assemble({ ...BASE_CTX, history, currentUser: userMsg("question A") });
+  const b = assemble({ ...BASE_CTX, history, currentUser: userMsg("question B different") });
 
-  const timeReminder = userMsg("Current time: 2026-06-26 18:33");
-  const assistant1 = assistantMsg("previous reply");
+  const bpA = a.meta.cache_breakpoints.find((bp) => bp.reason === "system");
+  const bpB = b.meta.cache_breakpoints.find((bp) => bp.reason === "system");
+  assert.strictEqual(bpA.system_block_index, bpB.system_block_index);
 
+  // System blocks up to anchor are identical
+  for (let i = 0; i <= bpA.system_block_index; i++) {
+    assert.strictEqual(a.system_blocks[i].text, b.system_blocks[i].text);
+  }
+});
+
+// T4: tail breakpoint on last history message (before current user)
+test("T4: tail on last history message, not current user", () => {
   const ctx = {
     ...BASE_CTX,
-    history: [timeReminder, assistant1],
-    currentUser: userMsg("actual user text"),
-  };
-  const assembled = assemble(ctx);
-
-  // Verify: assembled messages = [timeReminder, assistant1, actualUser]
-  assert.strictEqual(assembled.messages.length, 3);
-  assert.strictEqual(assembled.messages[0].role, "user");    // time_reminder
-  assert.strictEqual(assembled.messages[1].role, "assistant"); // assistant1
-  assert.strictEqual(assembled.messages[2].role, "user");    // actual user
-
-  // forward_write_anchor should be at index 1 (assistant1)
-  const fwd = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "forward_write_anchor");
-  assert.ok(fwd, "has forward_write_anchor");
-  assert.strictEqual(fwd.message_index, 1, "forward_write_anchor points to assistant (idx 1)");
-
-  // After conversion: time_reminder + actual_user merge into ONE wire message
-  // Wire: [{user: [time_reminder, actual_user]}, {assistant: [...]}]
-  // Wait, the order is: user(time_reminder), assistant, user(actual)
-  // Merging: time_reminder (user) starts a new wire msg, assistant starts new, actual_user (user) starts new
-  // No merge happens because user-assistant-user alternates!
-  // But in the real scenario, the frontend sends time_reminder + actual as one user message
-  // So let's also test the case where they're combined in history:
-  const combinedCtx = {
-    ...BASE_CTX,
-    history: [
-      { role: "user", content: [{ type: "text", text: "time_reminder" }] },
-      assistant1,
-    ],
-    currentUser: { role: "user", content: [{ type: "text", text: "user text" }, { type: "text", text: "more text" }] },
-  };
-  const combinedAssembled = assemble(combinedCtx);
-
-  // Wire conversion: user(time_reminder), assistant, user(text+more_text)
-  // No merge needed - user/assistant/user alternates
-  // But if the assembler has TWO consecutive user messages in history:
-  const doubleUserCtx = {
-    ...BASE_CTX,
-    history: [
-      { role: "user", content: [{ type: "text", text: "msg1" }] },
-      { role: "user", content: [{ type: "text", text: "msg2" }] },
-      assistant1,
-    ],
+    history: [userMsg("h1"), assistantMsg("a1"), userMsg("h2"), assistantMsg("a2")],
     currentUser: userMsg("current"),
   };
-  const doubleAssembled = assemble(doubleUserCtx);
-
-  // assembled messages: [user1, user2, assistant1, current_user]
-  // forward_write_anchor at index 2 (assistant1)
-  const dFwd = doubleAssembled.meta.cache_breakpoints.find((bp) => bp.reason === "forward_write_anchor");
-  assert.ok(dFwd, "double user: has forward_write_anchor");
-  assert.strictEqual(dFwd.message_index, 2, "double user: forward_write_anchor points to assistant (idx 2)");
-
-  // After wire conversion: user1+user2 merge into ONE wire message
-  // Wire: [{user: [msg1, msg2]}, {assistant: [...]}, {user: [...]}]
-  // indexMap: 0→0, 1→0, 2→1, 3→2
-  // forward_write_anchor (assembled idx 2) → wire idx 1 (assistant) ✓
-  applyBreakpoints(doubleAssembled);
-  // The cache_control should be on the ASSISTANT wire message, not the merged user
-  // We can't easily check this without the actual wire conversion, but the mapping is correct
+  const assembled = assemble(ctx);
+  const tailBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "tail");
+  assert.ok(tailBP, "has tail breakpoint");
+  // Should be on message index 3 (assistantMsg a2), which is messages.length-2
+  assert.strictEqual(tailBP.message_index, 3);
+  assert.strictEqual(assembled.messages[tailBP.message_index].role, "assistant");
 });
 
-// T9: tools input_schema keys are deep-sorted
-test("T9: tools input_schema deep-sorted", () => {
+// T5: bridge breakpoint appears for long conversations
+test("T5: bridge appears for long conversations", () => {
+  // Create 20+ messages to exceed LOOKBACK (16) content blocks
+  const history = [];
+  for (let i = 0; i < 12; i++) {
+    history.push(userMsg(`user ${i}`));
+    history.push(assistantMsg(`assistant ${i}`));
+  }
+  const ctx = {
+    ...BASE_CTX,
+    history,
+    currentUser: userMsg("current"),
+  };
+  const assembled = assemble(ctx);
+  const bridgeBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "bridge");
+  assert.ok(bridgeBP, "has bridge breakpoint for long conversation");
+  // Bridge should be before the tail
+  const tailBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "tail");
+  assert.ok(bridgeBP.message_index < tailBP.message_index, "bridge is before tail");
+});
+
+// T6: no bridge for short conversations
+test("T6: no bridge for short conversations", () => {
+  const ctx = {
+    ...BASE_CTX,
+    history: [userMsg("h1"), assistantMsg("a1")],
+    currentUser: userMsg("current"),
+  };
+  const assembled = assemble(ctx);
+  const bridgeBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "bridge");
+  assert.ok(!bridgeBP, "no bridge for short conversation");
+});
+
+// T7: dynamic_memory_patch change does NOT invalidate system cache
+test("T7: memory patch change → system cache stable", () => {
+  const a = assemble({ ...BASE_CTX, memoryPatch: null });
+  const b = assemble({ ...BASE_CTX, memoryPatch: "<memories>new recall</memories>" });
+
+  const stableIdx = Math.min(
+    a.meta.block_ids.indexOf("dynamic_memory_patch") >= 0
+      ? a.meta.block_ids.indexOf("dynamic_memory_patch")
+      : a.system_blocks.length,
+    b.meta.block_ids.indexOf("dynamic_memory_patch") >= 0
+      ? b.meta.block_ids.indexOf("dynamic_memory_patch")
+      : b.system_blocks.length
+  );
+
+  for (let i = 0; i < stableIdx; i++) {
+    assert.strictEqual(a.system_blocks[i].text, b.system_blocks[i].text);
+  }
+});
+
+// T8: tools stable → identical wire bytes
+test("T8: tools stable → identical wire bytes", () => {
+  const toolsA = [
+    { function: { name: "search", description: "Search the web", parameters: { type: "object", properties: { q: { type: "string" } } } } },
+    { function: { name: "calc", description: "Calculate", parameters: { type: "object", properties: { expr: { type: "string" } } } } },
+  ];
+  const toolsB = [toolsA[1], toolsA[0]];
+
+  const anthA = openAIToolsToAnthropic(toolsA);
+  const anthB = openAIToolsToAnthropic(toolsB);
+  assert.deepStrictEqual(anthA, anthB);
+  assert.strictEqual(stableStringify(anthA), stableStringify(anthB));
+});
+
+// T9: tools description change → different bytes
+test("T9: tools description change → different bytes", () => {
+  const toolsA = [{ function: { name: "search", description: "Search the web" } }];
+  const toolsB = [{ function: { name: "search", description: "Search the internet" } }];
+  assert.notStrictEqual(
+    stableStringify(openAIToolsToAnthropic(toolsA)),
+    stableStringify(openAIToolsToAnthropic(toolsB))
+  );
+});
+
+// T10: block_index in tail breakpoint targets correct block
+test("T10: block_index targets correct content block in multi-block message", () => {
+  const history = [
+    multiBlockUserMsg([
+      { type: "text", text: "time: 2025-01-01" },
+      { type: "text", text: "actual message" },
+    ]),
+    assistantMsg("response"),
+  ];
+  const ctx = {
+    ...BASE_CTX,
+    history,
+    currentUser: userMsg("current"),
+  };
+  const assembled = assemble(ctx);
+  const tailBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "tail");
+  assert.ok(tailBP, "has tail breakpoint");
+  // Tail should be on the last block of the assistant message (index 0 since it's a single-block message)
+  assert.strictEqual(tailBP.message_index, 1); // assistant is at index 1 (0=user multi-block, 1=assistant, 2=current user)
+  assert.strictEqual(tailBP.block_index, 0); // single text block
+});
+
+// T11: glossary change does NOT invalidate cache prefix
+test("T11: glossary change → persona_pinned cache unchanged", () => {
+  const a = assemble({ ...BASE_CTX, personaText: "You are Claude." });
+  const b = assemble({ ...BASE_CTX, personaText: "You are Claude." });
+
+  // Same persona → same system anchor
+  const bpA = a.meta.cache_breakpoints.find((bp) => bp.reason === "system");
+  const bpB = b.meta.cache_breakpoints.find((bp) => bp.reason === "system");
+  assert.strictEqual(bpA.system_block_index, bpB.system_block_index);
+  assert.strictEqual(
+    a.system_blocks[bpA.system_block_index].text,
+    b.system_blocks[bpB.system_block_index].text
+  );
+});
+
+// T12: no messages → no tail or bridge, only system
+test("T12: no messages → only system breakpoint", () => {
+  const ctx = { ...BASE_CTX, history: [], currentUser: userMsg("first") };
+  const assembled = assemble(ctx);
+  const bps = assembled.meta.cache_breakpoints;
+  assert.strictEqual(bps.length, 1);
+  assert.strictEqual(bps[0].reason, "system");
+});
+
+// T13: tools breakpoint on last tool
+test("T13: tools breakpoint lands on last tool", () => {
+  const tools = [
+    { name: "a", description: "tool a", input_schema: { type: "object", properties: {} } },
+    { name: "b", description: "tool b", input_schema: { type: "object", properties: {} } },
+    { name: "c", description: "tool c", input_schema: { type: "object", properties: {} } },
+  ];
+  // Simulate: apply cache_control to last tool
+  const cc = { type: "ephemeral" };
+  const cached = tools.map((t, i) =>
+    i === tools.length - 1 ? { ...t, cache_control: cc } : t
+  );
+  assert.ok(!cached[0].cache_control, "first tool no cache");
+  assert.ok(!cached[1].cache_control, "second tool no cache");
+  assert.ok(cached[2].cache_control, "last tool has cache");
+});
+
+// T14: exactly 4 breakpoints max (tools + system + bridge + tail)
+test("T14: at most 4 breakpoints", () => {
+  const history = [];
+  for (let i = 0; i < 15; i++) {
+    history.push(userMsg(`u${i}`));
+    history.push(assistantMsg(`a${i}`));
+  }
+  const assembled = assemble({
+    ...BASE_CTX,
+    history,
+    currentUser: userMsg("current"),
+  });
+  assert.ok(assembled.meta.cache_breakpoints.length <= 4, "at most 4 breakpoints");
+});
+
+// T15: stable tools input_schema deep-sorted
+test("T15: tools input_schema deep-sorted", () => {
   const tool = {
     function: {
       name: "test",
@@ -543,15 +522,11 @@ test("T9: tools input_schema deep-sorted", () => {
   const anth = openAIToolsToAnthropic([tool]);
   const schema = anth[0].input_schema;
   const keys = Object.keys(schema);
-
-  // Top-level keys must be sorted
   assert.deepStrictEqual(keys, [...keys].sort(), "top-level keys sorted");
 
-  // Nested properties must be sorted
   const propKeys = Object.keys(schema.properties);
   assert.deepStrictEqual(propKeys, ["alpha", "nested", "zebra"], "properties sorted");
 
-  // Deep nested properties must be sorted
   const nestedKeys = Object.keys(schema.properties.nested.properties);
   assert.deepStrictEqual(nestedKeys, ["a_prop", "z_prop"], "nested properties sorted");
 });

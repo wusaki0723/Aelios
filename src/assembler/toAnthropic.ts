@@ -49,6 +49,7 @@ export interface AnthropicTool {
   name: string;
   description: string;
   input_schema: { type: "object"; [key: string]: unknown };
+  cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" };
 }
 
 export type AnthropicToolChoice =
@@ -139,9 +140,11 @@ export function assembledToAnthropicMessages(
  *
  * "system" targets are handled by assembledToAnthropicSystem (already in
  * SystemBlock.cache_control). This function handles "message" targets:
- * it stamps cache_control on the last content block of the wire message
- * corresponding to the assembled message at breakpoint.message_index,
+ * it stamps cache_control on the specified content block within the wire
+ * message corresponding to the assembled message at breakpoint.message_index,
  * using the index mapping produced by assembledToAnthropicMessages.
+ *
+ * block_index defaults to the last content block if not specified.
  */
 export function applyMessageCacheBreakpoints(
   wireMessages: AnthropicWireMessage[],
@@ -156,9 +159,11 @@ export function applyMessageCacheBreakpoints(
     if (wireIdx == null) continue;
     const msg = wireMessages[wireIdx];
     if (!msg || msg.content.length === 0) continue;
-    const lastBlock = msg.content[msg.content.length - 1];
-    if (lastBlock.type === "text") {
-      lastBlock.cache_control = cacheControl;
+
+    const blockIdx = bp.block_index ?? msg.content.length - 1;
+    const block = msg.content[blockIdx];
+    if (block && block.type === "text") {
+      block.cache_control = cacheControl;
     }
   }
 }

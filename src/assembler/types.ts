@@ -69,16 +69,42 @@ export interface SystemBlock {
 /**
  * Explicit cache breakpoint for Anthropic prompt caching.
  *
- * target: where cache_control lands
- *   - "system" → system_blocks[system_block_index]
- *   - "message" → messages[message_index].content[last block]
- * reason: human-readable tag for debug/logging
+ * Anthropic supports up to 4 cache_control breakpoints per request.
+ * Each breakpoint marks a prefix: everything up to and including that
+ * point is cached. Breakpoints are applied in request order
+ * (tools → system → messages), and each looks back up to 20 content
+ * blocks for a previous cache entry.
+ *
+ * target:
+ *   - "system"  → system_blocks[system_block_index]
+ *   - "message" → messages[message_index].content[block_index]
+ *       block_index is the 0-based position within the message's
+ *       content array. For text content (string), block_index=0.
+ *       For array content (time_reminder + text + memories),
+ *       block_index points to the specific content part.
+ *
+ * reason: human-readable tag (tools / system / bridge / tail)
  */
 export interface CacheBreakpoint {
   target: "system" | "message";
   system_block_index?: number;
   message_index?: number;
+  block_index?: number;
   reason: string;
+}
+
+/**
+ * Count the number of content blocks in a message.
+ * String content = 1 block. Array content = array.length blocks.
+ * Used for computing 20-block lookback spacing.
+ */
+export function countMessageBlocks(
+  content: string | unknown[] | null
+): number {
+  if (content == null) return 0;
+  if (typeof content === "string") return 1;
+  if (!Array.isArray(content)) return 0;
+  return content.length;
 }
 
 export interface AssembledPrompt {
@@ -110,11 +136,14 @@ export const BLOCK_ORDER: readonly string[] = [
 ] as const;
 
 /**
- * The cache anchor always falls after client_system (index 4).
- * Stable blocks before it stay cached; dynamic/passthrough blocks after do not.
- * boot_stable (index 3) sits before the anchor — digest/yesterday_log/glossary are stable.
+ * The cache anchor falls after persona_pinned (index 1).
+ * This is the most stable content: proxy_static_rules + persona/identity.
+ * Blocks after it (preset_lite, boot_stable, client_system, dynamic blocks)
+ * are NOT in the cache prefix — they can change freely without invalidating
+ * cached history. boot_stable (glossary, digest) changes daily, so keeping
+ * it outside the cache prefix prevents unnecessary invalidation.
  */
-export const CACHE_ANCHOR_AFTER_ID = "client_system";
+export const CACHE_ANCHOR_AFTER_ID = "persona_pinned";
 
 // ---------------------------------------------------------------------------
 // Allowed memory types for persona_pinned (block 2)

@@ -20,7 +20,7 @@ import type {
   CacheBreakpoint,
   SystemBlock,
 } from "./types";
-import { BLOCK_ORDER, formatBootStable } from "./types";
+import { BLOCK_ORDER, countMessageBlocks, formatBootStable } from "./types";
 
 // ---------------------------------------------------------------------------
 // Local helpers (no external imports — keeps assembler self-contained)
@@ -105,7 +105,7 @@ const personaPinnedBlock: Block = {
   id: "persona_pinned",
   kind: "stable",
   role: "system",
-  cache_anchor: false,
+  cache_anchor: true,
   content_fn: (ctx: AssemblerContext): string | null => {
     const personaMemories = ctx.pinnedPersonaMemories ?? [];
     const preciousMemories = ctx.boot?.precious.map((p) => ({
@@ -253,7 +253,7 @@ const clientSystemBlock: Block = {
   id: "client_system",
   kind: "stable",
   role: "system",
-  cache_anchor: true,
+  cache_anchor: false,
   content_fn: (ctx: AssemblerContext): string | null => {
     const { stable } = splitClientSystemTexts(extractSystemTexts(ctx.systemMessages));
     if (stable.length === 0) return null;
@@ -465,32 +465,87 @@ export function assemble(ctx: AssemblerContext): AssembledPrompt {
     }
   }
 
-  // --- Cache breakpoints ---
-  // A: history_read_anchor — last stable system block (client_system anchor).
-  //    Everything up to and including this block is cache-warm across rounds.
-  // B: forward_write_anchor — last content block of the last history message
-  //    (the message just before current_user). If the next round appends a new
-  //    user+assistant pair, this prefix stays cached. Only set when there are
-  //    at least 2 messages (some history + current user).
+  // --- Cache breakpoints (up to 4 for Anthropic) ---
+  //
+  // Anthropic prompt caching works on the full prefix: tools → system → messages.
+  // Each breakpoint marks a position; everything before it is cached.
+  // Each looks back up to 20 content blocks for a previous cache entry.
+  //
+  // Breakpoint 1 (tools): applied in adapter if tool definitions are stable.
+  // Breakpoint 2 (system): persona_pinned — the most stable content.
+  // Breakpoint 3 (bridge): mid-history for long conversations (>16 blocks),
+  //   so the tail anchor's 20-block lookback doesn't lose older cached prefix.
+  // Breakpoint 4 (tail): last stable block before dynamic content.
+  //   Mode A (default): last block of the message before current_user.
+  //   Mode B: first text block of current_user (opt-in).
+  //
+  // Dynamic content (memories, time reminders) is appended AFTER all
+  // breakpoints and never gets cache_control.
+  const LOOKBACK = 16; // Conservative margin (Anthropic allows 20)
   const breakpoints: CacheBreakpoint[] = [];
 
+  // Breakpoint 2: system anchor on persona_pinned
   if (anchorIndex >= 0) {
     breakpoints.push({
       target: "system",
       system_block_index: anchorIndex,
-      reason: "history_read_anchor",
+      reason: "system",
     });
   }
 
-  // forward_write_anchor: last history message (index = messages.length - 2,
-  // because the last message is current_user).
+  // Message-level breakpoints: bridge + tail
+  // Count content blocks in each message for 20-block lookback spacing
+  const msgBlockCounts = messages.map((m) => countMessageBlocks(m.content));
+
+  // tailIdx: message to place the tail breakpoint on.
+  // Default (mode A): second-to-last message (last history msg before current user).
+  // If only 1 message and mode A: no tail (system anchor covers the prefix).
+  let tailIdx = -1;
+  let tailBlockIdx = -1;
   if (messages.length >= 2) {
-    const fwdIdx = messages.length - 2;
+    tailIdx = messages.length - 2;
+    tailBlockIdx = Math.max(0, msgBlockCounts[tailIdx] - 1);
+  }
+
+  if (tailIdx >= 0) {
     breakpoints.push({
       target: "message",
-      message_index: fwdIdx,
-      reason: "forward_write_anchor",
+      message_index: tailIdx,
+      block_index: tailBlockIdx,
+      reason: "tail",
     });
+
+    // bridge: if total message blocks before the tail message is > LOOKBACK,
+    // place a bridge anchor ~LOOKBACK blocks before the tail to keep the
+    // cache chain connected across long conversations.
+    let blocksBeforeTail = 0;
+    for (let i = 0; i < tailIdx; i++) blocksBeforeTail += msgBlockCounts[i];
+
+    if (blocksBeforeTail > LOOKBACK) {
+      // Walk backward from tailIdx to find the message containing
+      // the block at position (blocksBeforeTail - LOOKBACK)
+      let target = blocksBeforeTail - LOOKBACK;
+      let accumulated = 0;
+      let bridgeMsgIdx = 0;
+      let bridgeBlockIdx = 0;
+      for (let i = 0; i < tailIdx; i++) {
+        if (accumulated + msgBlockCounts[i] > target) {
+          bridgeMsgIdx = i;
+          bridgeBlockIdx = target - accumulated;
+          break;
+        }
+        accumulated += msgBlockCounts[i];
+      }
+      // Don't add bridge if it would be the same as tail
+      if (bridgeMsgIdx !== tailIdx || bridgeBlockIdx !== tailBlockIdx) {
+        breakpoints.push({
+          target: "message",
+          message_index: bridgeMsgIdx,
+          block_index: bridgeBlockIdx,
+          reason: "bridge",
+        });
+      }
+    }
   }
 
   return {

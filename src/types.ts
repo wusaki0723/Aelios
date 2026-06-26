@@ -20,12 +20,12 @@ export interface Env {
   ENABLE_AUTO_MEMORY?: string;
   ENABLE_INCREMENTAL_MEMORY?: string;
   ENABLE_DREAM?: string;
-  // --- Aelios 记忆库 v2 opt-in 开关 (母帖 #11 第 0 步) ---
-  // 总开关：全 false 时下面所有 v2 行为都不生效，跟 v1 一致。
+  // --- Aelios 记忆库 v2 行为开关 ---
+  // 默认走 v2；只有显式 false 才回退旧路径。
   MEMORY_LIFECYCLE_ENABLED?: string;
-  // dream 策略：legacy | upsert | review
+  // dream 策略：默认 upsert，可显式 legacy / review。
   DREAM_STRATEGY?: string;
-  // 写入模式：append | upsert
+  // 写入模式：默认 upsert，可显式 append。
   MEMORY_WRITE_MODE?: string;
   // patrol 是否只出提案不自动删
   MEMORY_PATROL_DRY_RUN?: string;
@@ -54,7 +54,6 @@ export interface Env {
   DAILY_DIGEST_TIME_ZONE?: string;
   EMPTY_MEMORY_MIN_CHARS?: string;
   MEMORY_MODE?: string;
-  MEMORY_BACKEND?: string;
   ENABLE_MEMORY_FILTER?: string;
   MEMORY_FILTER_MODEL?: string;
   ENABLE_MEMORY_RERANKER?: string;
@@ -264,4 +263,3 @@ export interface MemoryApiRecord {
   seen_count?: number;
   last_injected_at?: string | null;
 }
-

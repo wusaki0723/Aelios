@@ -116,8 +116,8 @@ function isDreamEnabled(env: Env): boolean {
 
 function readDreamStrategy(env: Env): "legacy" | "upsert" | "review" {
   const raw = env.DREAM_STRATEGY;
-  if (raw === "upsert" || raw === "review") return raw;
-  return "legacy";
+  if (raw === "legacy" || raw === "review") return raw;
+  return "upsert";
 }
 
 function readFirstEnvValue(...values: unknown[]): unknown {

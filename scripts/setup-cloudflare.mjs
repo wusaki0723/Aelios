@@ -25,9 +25,7 @@ const queueName = process.env.CMP_QUEUE_NAME || "companion-memory";
 // secrets the same way regardless of whether they live in [vars] or secrets.
 const visibleVarNames = [
   "AI_GATEWAY_BASE_URL",
-  "CLOUDFLARE_ACCOUNT_ID",
   "CHAT_MODEL",
-  "MEMORY_BACKEND",
   "VECTORIZE_INDEX_NAME",
   "ENABLE_MEMORY_RERANKER",
   "MEMORY_FILTER_MODEL",

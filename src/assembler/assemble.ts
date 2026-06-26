@@ -14,6 +14,7 @@ import type {
   OpenAIChatMessage,
   OpenAIChatRequest,
 } from "../types";
+import type { BootPackage } from "../memory/v2/recall";
 import type { AssembledPrompt, AssemblerContext } from "./types";
 import { assemble as assembleBlocks } from "./blocks";
 
@@ -32,7 +33,10 @@ export interface AssembleInput {
    */
   pinnedPersonaMemories: MemoryApiRecord[] | null;
 
-  /** RAG hits for the current round. */
+  /** v2 boot package (digest + yesterday_log + precious + glossary). null = v1 path. */
+  boot: BootPackage | null;
+
+  /** RAG hits for the current round (v1) or recall hits (v2). */
   ragMemories: MemoryApiRecord[];
 
   /** Vision assistant output (image present + main model non-multimodal). */
@@ -58,6 +62,7 @@ export function assemble(input: AssembleInput): AssembledPrompt {
   const ctx: AssemblerContext = {
     systemMessages: extractSystemMessages(request.messages),
     pinnedPersonaMemories: input.pinnedPersonaMemories,
+    boot: input.boot,
     ragMemories: input.ragMemories,
     visionOutput: input.visionOutput,
     historyMessages: extractHistoryMessages(request.messages),

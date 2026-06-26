@@ -2,7 +2,7 @@
 -- 全部用 CREATE TABLE IF NOT EXISTS，天生幂等。
 -- 不动现有 memories 表 (不加列)——v2 字段进 memory_lifecycle 侧车表，
 -- 靠 memory_id 关联。这样所有 fork 部署都不会因 ALTER ADD COLUMN 重复列炸。
--- 代码层只有 MEMORY_LIFECYCLE_ENABLED=true 才读写这些 (见第 0 步开关)。
+-- 代码层默认读写这些 v2 表；只有 MEMORY_LIFECYCLE_ENABLED=false 才走旧路径。
 --
 -- L2 raw_messages 的口径：复用现有 messages 表 (0001 已建)，ts = created_at。
 -- Vectorize 复用 memo-kb，用 metadata.kind 区分: memory | precious | longtail。

@@ -228,7 +228,6 @@ https://<你的 Worker 地址>/mcp?token=<MEMORY_MCP_API_KEY>
 | `MEMORY_FILTER_MIN_SCORE` | `0.1` | 进 reranker 前的向量地板，同样保持低 |
 | `MEMORY_FILTER_MAX_CONTENT_CHARS` | `700` | 候选记忆每条最多保留多少字 |
 | `MEMORY_MIN_IMPORTANCE` | `0.55` | 记忆写入最低重要性 |
-| `MEMORY_BACKEND` | `vectorize` | 长期记忆主库（设 `d1` 回旧模式） |
 | `VECTORIZE_INDEX_NAME` | `memo-kb` | Vectorize 索引名 |
 | `ENABLE_AUTO_MEMORY` | 空（开启） | 设 `false` 关闭自动记忆 |
 | `ENABLE_INCREMENTAL_MEMORY` | `false` | 设 `true` 恢复每轮即时抽取 |
@@ -245,6 +244,10 @@ https://<你的 Worker 地址>/mcp?token=<MEMORY_MCP_API_KEY>
 | `DEBUG_API_KEY` | 空 | 调试接口钥匙 |
 | `MEMORY_MCP_API_KEY` | 空 | 纯记忆库 MCP 单独钥匙 |
 | `GUIDE_DOG_API_KEY` | 空 | 导盲犬 API 单独钥匙 |
+
+记忆库默认走 v2：冷启动包 + 动态召回 + dream upsert。一般不需要设置
+`MEMORY_LIFECYCLE_ENABLED`、`DREAM_STRATEGY`、`MEMORY_WRITE_MODE`。排障时才用
+`MEMORY_LIFECYCLE_ENABLED=false` 或 `DREAM_STRATEGY=legacy` 临时回退。
 
 ---
 

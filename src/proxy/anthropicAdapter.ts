@@ -1,8 +1,9 @@
 import { buildStableMemoryPack } from "../memory/stablePack";
 import type { AssembledPrompt } from "../assembler/types";
 import { assembledToAnthropicMessages, assembledToAnthropicSystem } from "../assembler/toAnthropic";
-import type { Env, MemoryApiRecord, OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse, TokenUsage } from "../types";
-import { formatMemoryPatch } from "../memory/inject";
+import type { Env, OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse, TokenUsage } from "../types";
+import type { BootPackage } from "../memory/v2/recall";
+import { formatBootStable, formatRecallPatch } from "../assembler/types";
 import { normalizeAiGatewayBaseUrl } from "./openaiAdapter";
 import {
   anthropicToolUseBlocksToOpenAI,
@@ -420,27 +421,30 @@ export function buildAnthropicHeaders(env: Env): Headers {
 
 export async function buildAnthropicNativeRequest(
   req: OpenAIChatRequest,
-  input: { env: Env; targetModel: string; namespace: string; memories: MemoryApiRecord[] }
+  input: { env: Env; targetModel: string; namespace: string; boot: BootPackage | null; recallHits: Array<{ type: string; content: string; score: number }> }
 ): Promise<AnthropicRequest> {
   let thinking = buildThinkingConfig(input.env, req);
   const tools = openAIToolsToAnthropic(req.tools);
   const toolChoice = openAIToolChoiceToAnthropic(req.tool_choice);
-  // Anthropic extended thinking does not support forced tool_choice (any/tool).
-  // Tool priority: disable thinking when forced tool_choice is present.
   if (thinking && isForcedToolChoice(req.tool_choice)) {
     thinking = undefined;
   }
-  const stableMemoryPack = await buildStableMemoryPack(input.env, input.namespace);
+
+  const stableText = input.boot
+    ? formatBootStable(input.boot)
+    : await buildStableMemoryPack(input.env, input.namespace);
   const stableBlock: AnthropicTextBlock = {
     type: "text",
-    text: stableMemoryPack
+    text: stableText || "固定长期记忆：暂无。"
   };
 
   if (input.env.ANTHROPIC_CACHE_STABLE_SYSTEM !== "false") {
     stableBlock.cache_control = buildCacheControl(input.env);
   }
 
-  const dynamicMemoryPatch = formatMemoryPatch(input.memories);
+  const dynamicMemoryPatch = input.recallHits.length > 0
+    ? formatRecallPatch(input.recallHits)
+    : "";
   const system: AnthropicTextBlock[] = [
     ...extractSystemBlocks(req.messages),
     {

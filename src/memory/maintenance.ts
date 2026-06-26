@@ -130,7 +130,7 @@ export async function runMemoryMaintenance(
     }
 
     const extraction = await extractMemoriesFromMessages(env, batch);
-    const writeMode = isV2Enabled(env) ? env.MEMORY_WRITE_MODE || "append" : "append";
+    const writeMode = isV2Enabled(env) ? env.MEMORY_WRITE_MODE || "upsert" : "append";
 
     for (const memory of extraction.memories) {
       if (memory.importance < getMinImportance(env)) continue;

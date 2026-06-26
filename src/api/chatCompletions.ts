@@ -1,14 +1,12 @@
 import { authenticate } from "../auth/apiKey";
 import { requireScope } from "../auth/scopes";
 import { getOrCreateConversation } from "../db/conversations";
-import { listMemories } from "../db/memories";
 import { saveAssistantMessage, saveUserMessages } from "../db/messages";
 import { saveUsageLog } from "../db/usageLogs";
-import { extractLastUserText, formatMemoryPatch, injectMemoryPatchAsSystemMessage, selectMemoriesForInjection } from "../memory/inject";
-import { toMemoryApiRecord } from "../memory/search";
+import { extractLastUserText } from "../memory/inject";
 import { assemble } from "../assembler/assemble";
-import { PERSONA_MEMORY_TYPES } from "../assembler/types";
 import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../queue/producer";
+import { buildBootPackage, isV2Enabled, runRecall } from "../memory/v2/recall";
 import {
   buildAnthropicNativeRequest,
   buildAnthropicRequestFromAssembled,
@@ -16,13 +14,13 @@ import {
   getAnthropicCacheMode,
   parseAnthropicNonStream
 } from "../proxy/anthropicAdapter";
-import { buildOpenAICompatRequest, buildOpenAIRequestFromAssembled, callOpenAICompat } from "../proxy/openaiAdapter";
+import { buildOpenAIRequestFromAssembled, callOpenAICompat } from "../proxy/openaiAdapter";
 import { classifyProvider, resolveTargetModel } from "../proxy/resolveModel";
 import { streamAnthropicToOpenAI } from "../proxy/streamAnthropic";
 import { streamOpenAIWithTee } from "../proxy/streamOpenAI";
 import { CONTENT_RULES } from "../preset/regexRules";
 import { applyRegexRules } from "../preset/regexPipeline";
-import type { Env, MemoryApiRecord, OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse } from "../types";
+import type { Env, OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 import { openAiError } from "../utils/json";
 import { hasImageContent } from "../utils/messages";
 
@@ -48,45 +46,6 @@ export function hasTools(body: OpenAIChatRequest): boolean {
 /** Determine whether this request needs the tool-call passthrough path. */
 export function hasToolRound(body: OpenAIChatRequest): boolean {
   return hasTools(body) || hasToolContent(body);
-}
-
-// Tool-path fallback (assembler not used here yet): inject pinned persona as a
-// leading system message, then the RAG memory patch after the existing system
-// messages. If persona is empty this degrades to injectMemoryPatchAsSystemMessage.
-function injectPersonaAndMemoryPatches(
-  request: OpenAIChatRequest,
-  pinnedPersonaMemories: MemoryApiRecord[],
-  memories: MemoryApiRecord[]
-): OpenAIChatRequest {
-  const personaPatch = formatMemoryPatch(pinnedPersonaMemories);
-  if (!personaPatch) return injectMemoryPatchAsSystemMessage(request, memories);
-
-  const personaMessage: OpenAIChatMessage = { role: "system", content: personaPatch };
-  const withPersona: OpenAIChatRequest = {
-    ...request,
-    messages: [personaMessage, ...request.messages]
-  };
-  return injectMemoryPatchAsSystemMessage(withPersona, memories);
-}
-
-/**
- * Fetch pinned memories whose type is "persona" or "identity" from D1.
- * Returns MemoryApiRecord[] for the assembler's persona_pinned block.
- * Deterministic sort is applied later by the assembler itself.
- */
-async function fetchPinnedPersonaMemories(
-  db: D1Database,
-  namespace: string
-): Promise<MemoryApiRecord[]> {
-  const records = await listMemories(db, {
-    namespace,
-    status: "active",
-    limit: 100,
-  });
-
-  return records
-    .filter((r) => r.pinned && PERSONA_MEMORY_TYPES.includes(r.type))
-    .map((r) => toMemoryApiRecord(r));
 }
 
 export async function handleChatCompletions(
@@ -142,12 +101,42 @@ export async function handleChatCompletions(
   });
   const latestUserMessageId = savedUserMessageIds[savedUserMessageIds.length - 1];
 
-  const memories = await selectMemoriesForInjection(env, {
-    profile: auth.profile,
-    query: extractLastUserText(body.messages)
-  });
+  const namespace = auth.profile.namespace;
+  const lastUserText = extractLastUserText(body.messages);
 
-  const pinnedPersonaMemories = await fetchPinnedPersonaMemories(env.DB, auth.profile.namespace);
+  const boot = isV2Enabled(env) ? await buildBootPackage(env, { namespace }) : null;
+  const recallResult = boot ? await runRecall(env, { namespace, query: lastUserText }) : null;
+  const recallHitsAsMemories = recallResult
+    ? recallResult.hits.map((h) => ({
+        id: h.id,
+        namespace,
+        type: h.type,
+        content: h.content,
+        summary: null,
+        importance: h.score,
+        confidence: 1,
+        status: "active",
+        pinned: false,
+        tags: [],
+        source: h.source_layer,
+        source_message_ids: [],
+        vector_id: null,
+        last_recalled_at: null,
+        recall_count: 0,
+        created_at: "",
+        updated_at: "",
+        expires_at: null,
+        fact_key: null,
+        supersedes_id: null,
+        superseded_by_id: null,
+        review_reason: null,
+        valid_as_of: null,
+        last_seen_at: null,
+        seen_count: 0,
+        last_injected_at: null,
+        score: h.score,
+      }))
+    : [];
 
   let upstream: Response;
   let clientSystemHash: string | null = null;
@@ -155,20 +144,20 @@ export async function handleChatCompletions(
   try {
     if (provider === "anthropic") {
       if (hasToolRound(body)) {
-        // Tool call passthrough: send tools/tool_choice to the model directly.
-        // Native request keeps the stable memory pack; assembler integration is tracked separately.
         const anthropicRequest = await buildAnthropicNativeRequest(body, {
           env,
           targetModel,
-          namespace: auth.profile.namespace,
-          memories
+          namespace,
+          boot,
+          recallHits: recallHitsAsMemories
         });
         upstream = await callAnthropicNative(env, anthropicRequest, targetModel);
       } else {
         const assembled = assemble({
           request: body,
-          pinnedPersonaMemories,
-          ragMemories: memories,
+          pinnedPersonaMemories: null,
+          boot,
+          ragMemories: recallHitsAsMemories,
           visionOutput: null,
         });
         clientSystemHash = assembled.meta.client_system_hash;
@@ -180,16 +169,20 @@ export async function handleChatCompletions(
       }
     } else {
       if (hasToolRound(body)) {
-        // Tool path: assembler not wired here yet; inject persona + RAG patches
-        // directly so pinned persona is not lost on the OpenAI tool fallback.
-        const patchedBody = injectPersonaAndMemoryPatches(body, pinnedPersonaMemories, memories);
-        const upstreamRequest = buildOpenAICompatRequest(patchedBody, targetModel);
-        upstream = await callOpenAICompat(env, upstreamRequest);
+        const assembled = assemble({
+          request: body,
+          pinnedPersonaMemories: null,
+          boot,
+          ragMemories: recallHitsAsMemories,
+          visionOutput: null,
+        });
+        upstream = await callOpenAICompat(env, buildOpenAIRequestFromAssembled(body, targetModel, assembled));
       } else {
         const assembled = assemble({
           request: body,
-          pinnedPersonaMemories,
-          ragMemories: memories,
+          pinnedPersonaMemories: null,
+          boot,
+          ragMemories: recallHitsAsMemories,
           visionOutput: null,
         });
         clientSystemHash = assembled.meta.client_system_hash;

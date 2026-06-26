@@ -19,7 +19,7 @@ import type {
   Block,
   SystemBlock,
 } from "./types";
-import { BLOCK_ORDER } from "./types";
+import { BLOCK_ORDER, formatBootStable } from "./types";
 
 // ---------------------------------------------------------------------------
 // Local helpers (no external imports — keeps assembler self-contained)
@@ -106,11 +106,40 @@ const personaPinnedBlock: Block = {
   role: "system",
   cache_anchor: false,
   content_fn: (ctx: AssemblerContext): string | null => {
-    const memories = ctx.pinnedPersonaMemories;
-    if (!memories || memories.length === 0) return null;
+    const personaMemories = ctx.pinnedPersonaMemories ?? [];
+    const preciousMemories = ctx.boot?.precious.map((p) => ({
+      id: p.id,
+      namespace: "",
+      type: "precious",
+      content: p.content,
+      summary: null,
+      importance: 1,
+      confidence: 1,
+      status: "active",
+      pinned: true,
+      tags: [],
+      source: "precious",
+      source_message_ids: [],
+      vector_id: null,
+      last_recalled_at: null,
+      recall_count: 0,
+      created_at: p.created_at,
+      updated_at: p.created_at,
+      expires_at: null,
+      fact_key: null,
+      supersedes_id: null,
+      superseded_by_id: null,
+      review_reason: null,
+      valid_as_of: null,
+      last_seen_at: null,
+      seen_count: 0,
+      last_injected_at: null,
+      score: undefined,
+    })) ?? [];
+    const all = [...personaMemories, ...preciousMemories];
+    if (all.length === 0) return null;
 
-    // Deterministic sort: type asc → importance desc → id asc
-    const sorted = [...memories].sort((a, b) => {
+    const sorted = [...all].sort((a, b) => {
       const typeCmp = a.type.localeCompare(b.type);
       if (typeCmp !== 0) return typeCmp;
       if (b.importance !== a.importance) return b.importance - a.importance;
@@ -142,6 +171,24 @@ const presetLiteBlock: Block = {
   role: "system",
   cache_anchor: false,
   content_fn: () => PRESET_LITE_TEXT,
+};
+
+// ---------------------------------------------------------------------------
+// Block 3.5: boot_stable (stable)
+// v2 boot package: digest + yesterday_log + glossary.
+// Sits before cache anchor — stable content that rarely changes.
+// ---------------------------------------------------------------------------
+
+const bootStableBlock: Block = {
+  id: "boot_stable",
+  kind: "stable",
+  role: "system",
+  cache_anchor: false,
+  content_fn: (ctx: AssemblerContext): string | null => {
+    if (!ctx.boot) return null;
+    const text = formatBootStable(ctx.boot);
+    return text || null;
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -321,6 +368,7 @@ const BLOCK_MAP = new Map<string, Block>([
   [proxyStaticRulesBlock.id, proxyStaticRulesBlock],
   [personaPinnedBlock.id, personaPinnedBlock],
   [presetLiteBlock.id, presetLiteBlock],
+  [bootStableBlock.id, bootStableBlock],
   [clientSystemBlock.id, clientSystemBlock],
   [clientVolatileContextBlock.id, clientVolatileContextBlock],
   [dynamicMemoryPatchBlock.id, dynamicMemoryPatchBlock],

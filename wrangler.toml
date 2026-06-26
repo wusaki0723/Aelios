@@ -42,7 +42,6 @@ MEMORY_FILTER_MAX_TOKENS = "1400"
 MEMORY_FILTER_MIN_SCORE = "0.1"
 DREAM_MODEL = "deepseek/deepseek-v4-pro"
 VISION_MODEL = "google-ai-studio/gemini-3-flash-preview"
-MEMORY_BACKEND = "vectorize"
 # Vector recall floor (see MEMORY_FILTER_MIN_SCORE note above). Precision is
 # handled by the reranker + compressor, so keep this as a garbage gate only.
 MEMORY_MIN_SCORE = "0.1"
@@ -53,15 +52,6 @@ EMBEDDING_MODEL = "workers-ai/@cf/google/embeddinggemma-300m"
 EMBEDDING_DIMENSIONS = "768"
 ENABLE_INCREMENTAL_MEMORY = "false"
 ENABLE_DREAM = "true"
-
-# --- Aelios 记忆库 v2 opt-in 开关 (母帖 #11 第 0 步) ---
-# 默认全关，行为跟 v1 完全一致；想开 v2 内核手动翻 true / 改 strategy。
-# 不吓 38 个 fork：不开这些开关，下面的新表 / dream 重写 / patrol 都不生效。
-MEMORY_LIFECYCLE_ENABLED = "false"
-# legacy = 跟今天一样通览全局；upsert = 按 fact_key upsert+合并；review = upsert 且只出提案不自动改
-DREAM_STRATEGY = "legacy"
-# append = 跟今天一样只增不改；upsert = 按 fact_key upsert，从源头止增
-MEMORY_WRITE_MODE = "append"
 # true = patrol 只出提案、永不自动删；false = 允许 patrol 自动删
 MEMORY_PATROL_DRY_RUN = "true"
 # false = 自动删总闸锁死（默认，跟 dry_run 双保险）；true = 允许自动删

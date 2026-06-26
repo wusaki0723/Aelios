@@ -26,7 +26,7 @@ import type { Env, MemoryApiRecord } from "../../types";
 // --- 开关 ---
 
 export function isV2Enabled(env: Env): boolean {
-  return env.MEMORY_LIFECYCLE_ENABLED === "true";
+  return env.MEMORY_LIFECYCLE_ENABLED !== "false";
 }
 
 // 闸三: 近期注入过的降权系数。last_injected_at 在窗口内打折扣。
@@ -132,16 +132,11 @@ function isDuplicateWithCore(content: string, core: CoreFingerprint): boolean {
 
 export interface BootPackage {
   digest: { content: string; updated_at: string } | null;
-  // 昨天日志: 母帖第二节"做进 MCP 端点"。第 2 步先占位返回 null，
-  // 第 4 步 dream 生成前一天日志后从 summaries / 专用表取。确定性排序。
   yesterday_log: { date: string; title: string; summary: string } | null;
-  // top pinned 珍贵: 按 created_at 升序取前 N，确定性 (不随 query 变)。
   precious: Array<{ id: string; content: string; created_at: string }>;
-  // glossary 全量: 冷启动把所有黑话定义塞进，词面命中靠客户端。
-  // 稳定 + 确定性 (按 term 升序)。
   glossary: Array<{ term: string; definition: string; aliases: string[] }>;
-  // 序列化版本号: 内容不变则 boot 输出字节稳定，客户端据此判断缓存可吃。
   schema_version: string;
+  cache_prefix_end: true;
 }
 
 const BOOT_SCHEMA_VERSION = "v2-1";
@@ -187,7 +182,8 @@ export async function buildBootPackage(
     yesterday_log: dailyLog ? { date: dailyLog.date, title: dailyLog.title, summary: dailyLog.summary } : null,
     precious,
     glossary: allGlossary,
-    schema_version: BOOT_SCHEMA_VERSION
+    schema_version: BOOT_SCHEMA_VERSION,
+    cache_prefix_end: true
   };
 }
 

@@ -126,6 +126,7 @@ Settings → Variables and Secrets → Add：
 1. Cloudflare → AI → AI Gateway → Create a custom gateway
 2. 复制 Gateway Endpoint
 3. 在 Provider Keys 里添加你的模型 API key
+   *openrouter 调用 claude 模型务必使用第三方 api 方式添加，不要使用官方的 provider 路径，会导致 anthropic 格式和官方的 openai 格式打架。https://dash.cloudflare.com/?to=/:account/ai/ai-gateway/custom-providers*
 4. 回到 Worker → Variables and Secrets，添加：
 
 | 变量名 | 填什么 |

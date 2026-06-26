@@ -20,6 +20,7 @@ import {
   markPreciousInjected
 } from "../../db/v2";
 import { searchMemories } from "../search";
+import { filterAndCompressMemories } from "../filter";
 import { createEmbedding } from "../embedding";
 import type { Env, MemoryApiRecord } from "../../types";
 
@@ -271,11 +272,20 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
   // 2. memories 向量召回 (L4 + L6 world_fact，active only)
   //    闸一: 不查 precious。precious 归 boot 固定供给, 不进每轮 query 召回池。
   const k = Math.min(Math.max(Math.floor(input.k ?? 20), 1), 100);
-  const memories: MemoryApiRecord[] = await searchMemories(env, {
+  const rawMemories: MemoryApiRecord[] = await searchMemories(env, {
     namespace: input.namespace,
     query,
     types: input.types,
     topK: k
+  });
+
+  // 2.5. 三重管线: reranker 重排 + 小模型压缩 (v1 的 filter.ts 现成逻辑)
+  //      prepareCandidates: 去重、sanitize、min score 过滤、按质量排序
+  //      rerankMemories: Workers AI bge-reranker-base 重排
+  //      LLM compress: 小模型把每条压缩成短句，无关的输出 null 剔除
+  const memories = await filterAndCompressMemories(env, {
+    query,
+    memories: rawMemories
   });
 
   // 3. 闸三: last_injected_at 近期注入过的降权 (不动 importance)

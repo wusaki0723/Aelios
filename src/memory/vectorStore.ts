@@ -106,11 +106,12 @@ function toMetadata(input: Required<VectorMemoryInput> & { id: string; vectorId:
 
 export function vectorMetadataToMemoryRecord(
   vector: Pick<VectorizeVector, "id" | "metadata">,
-  score?: number
+  score?: number,
+  options?: { includeInactive?: boolean }
 ): MemoryApiRecord | null {
   const metadata = (vector.metadata || {}) as MetadataMap;
   const status = readString(metadata.status) || "active";
-  if (status !== "active") return null;
+  if (!options?.includeInactive && status !== "active") return null;
 
   const content = readString(metadata.content) || readString(metadata.text) || readString(metadata.memory);
   if (!content) return null;
@@ -475,29 +476,81 @@ async function listVectorIdsViaApi(
   };
 }
 
+const MAX_FILTER_SCAN_PAGES = 5;
+
 export async function listVectorMemories(
   env: Env,
   input: VectorMemoryListInput
 ): Promise<VectorMemoryListPage> {
-  const listed = await listVectorIdsViaApi(env, input);
-  const vectors = listed.ids.length > 0 ? await getVectorsByIdsBatched(requireVectorize(env), listed.ids) : [];
-  const data = vectors
-    .flatMap((vector): MemoryApiRecord[] => {
-      const record = vectorMetadataToMemoryRecord(vector);
-      if (!record) return [];
-      if (input.namespace && record.namespace !== input.namespace) return [];
-      if (input.type && record.type !== input.type) return [];
-      if (input.status && record.status !== input.status) return [];
-      return [record];
-    })
-    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.importance - a.importance || b.updated_at.localeCompare(a.updated_at));
+  const hasFilter = Boolean(input.type || input.status);
+
+  if (!hasFilter) {
+    // No filter: single page, fast path.
+    const listed = await listVectorIdsViaApi(env, input);
+    const vectors = listed.ids.length > 0 ? await getVectorsByIdsBatched(requireVectorize(env), listed.ids) : [];
+    const data = vectors
+      .flatMap((vector): MemoryApiRecord[] => {
+        const record = vectorMetadataToMemoryRecord(vector);
+        if (!record) return [];
+        if (input.namespace && record.namespace !== input.namespace) return [];
+        return [record];
+      })
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.importance - a.importance || b.updated_at.localeCompare(a.updated_at));
+
+    return {
+      data,
+      ids: data.map((record) => record.id),
+      cursor: listed.cursor,
+      hasMore: listed.hasMore,
+      count: data.length,
+      totalCount: listed.totalCount
+    };
+  }
+
+  // Filtered: scan pages until we have enough matches or run out.
+  const includeInactive = Boolean(input.status && input.status !== "active");
+  const filtered: MemoryApiRecord[] = [];
+  let cursor: string | undefined | null = input.cursor;
+  let hasMore = true;
+  let scannedPages = 0;
+  let lastCursor: string | null = null;
+  let rawTotalCount: number | undefined;
+
+  const vectorize = requireVectorize(env);
+
+  while (filtered.length < input.count && hasMore && scannedPages < MAX_FILTER_SCAN_PAGES) {
+    const listed = await listVectorIdsViaApi(env, { ...input, cursor: cursor ?? undefined });
+    const vectors = listed.ids.length > 0 ? await getVectorsByIdsBatched(vectorize, listed.ids) : [];
+
+    if (rawTotalCount === undefined) rawTotalCount = listed.totalCount;
+
+    for (const vector of vectors) {
+      const record = vectorMetadataToMemoryRecord(vector, undefined, { includeInactive });
+      if (!record) continue;
+      if (input.namespace && record.namespace !== input.namespace) continue;
+      if (input.type && record.type !== input.type) continue;
+      if (input.status && record.status !== input.status) continue;
+      filtered.push(record);
+      if (filtered.length >= input.count) break;
+    }
+
+    cursor = listed.cursor;
+    hasMore = listed.hasMore;
+    lastCursor = listed.cursor;
+    scannedPages += 1;
+  }
+
+  const data = filtered.sort(
+    (a, b) => Number(b.pinned) - Number(a.pinned) || b.importance - a.importance || b.updated_at.localeCompare(a.updated_at)
+  );
 
   return {
     data,
     ids: data.map((record) => record.id),
-    cursor: listed.cursor,
-    hasMore: listed.hasMore,
-    count: data.length,
-    totalCount: listed.totalCount
+    cursor: lastCursor,
+    hasMore,
+    count: data.length
+    // Do not return totalCount when filtering — raw Vectorize count
+    // does not reflect the filtered subset and would be misleading.
   };
 }

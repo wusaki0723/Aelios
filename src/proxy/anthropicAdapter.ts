@@ -129,24 +129,29 @@ export function getAnthropicCacheMode(env: Env): string | null {
   return parts.join("_");
 }
 
-function applyRollingMessageCache(messages: AnthropicMessage[], env: Env): void {
+function applyRollingMessageCache(messages: AnthropicMessage[], env: Env, systemCacheCount: number = 0): void {
   const cacheControl = buildCacheControl(env);
   if (!cacheControl) return;
   if (env.ANTHROPIC_ROLLING_CACHE_ENABLED === "false") return;
 
-  const isFullWindow = messages.length >= getRollingCacheWindowSize(env);
-  const start = isFullWindow ? 0 : messages.length - 1;
-  const end = isFullWindow ? messages.length : -1;
-  const step = isFullWindow ? 1 : -1;
+  // Anthropic limits cache_control markers to 4 total; subtract system-level markers.
+  const MAX_MESSAGE_MARKERS = Math.max(1, 4 - systemCacheCount);
 
-  for (let i = start; i !== end; i += step) {
-    const message = messages[i];
-    if (message.role !== "user" || message.content.length === 0) continue;
-    const lastBlock = message.content[message.content.length - 1];
-    if (lastBlock.type === "text") {
-      lastBlock.cache_control = cacheControl;
+  const userIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === "user" && messages[i].content.length > 0) {
+      userIndices.push(i);
     }
-    return;
+  }
+  if (userIndices.length === 0) return;
+
+  const n = userIndices.length;
+  const markers = Math.min(n, MAX_MESSAGE_MARKERS);
+  const gap = Math.max(1, Math.floor(n / markers));
+
+  for (let m = 0; m < markers; m++) {
+    const idx = userIndices[m * gap];
+    messages[idx].content[messages[idx].content.length - 1].cache_control = cacheControl;
   }
 }
 
@@ -469,6 +474,7 @@ export async function buildAnthropicNativeRequest(
     messages,
     ...(tools ? { tools } : {}),
     ...(toolChoice ? { tool_choice: toolChoice } : {}),
+    metadata: { user_id: "operit-user" },
   };
 }
 
@@ -515,6 +521,7 @@ export function buildAnthropicRequestFromAssembled(
     messages,
     ...(tools ? { tools } : {}),
     ...(toolChoice ? { tool_choice: toolChoice } : {}),
+    metadata: { user_id: "operit-user" },
   };
 }
 

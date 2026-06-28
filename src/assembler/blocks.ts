@@ -159,6 +159,10 @@ function extractSystemTexts(messages: OpenAIChatMessage[]): string[] {
 function isVolatileTimeLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;
+  // Multi-line time formats (e.g. Operit injects time as separate lines).
+  if (/^[【\[](?:当前|现在|系统|本地)?(?:时间|日期|日期时间|时间戳)[】\]]$/.test(trimmed)) return true;
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}(\s+\d{1,2}:\d{2}(:\d{2})?)?$/.test(trimmed)) return true;
+  if (/^星期\s*[:：]/.test(trimmed)) return true;
   const normalized = trimmed.replace(/^[>*\-\d.)\s]+/, "").trim();
   const lower = normalized.toLowerCase();
 
@@ -179,6 +183,10 @@ function isVolatileTimeLine(line: string): boolean {
   return hasTimeLabel && (hasDateLikeValue || /\btimezone\b/i.test(normalized) || /时区/.test(normalized));
 }
 
+// Operit 等客户端注入的"动态段"标题白名单
+// 看到这些标题，整段（直到空行）都视为 volatile，避免破坏 Claude prompt cache
+const VOLATILE_SECTION_HEADER = /^[【\[](?:当前时间|相关记忆|动态上下文|当前位置|系统状态)[】\]]$/;
+
 function splitClientSystemTexts(texts: string[]): { stable: string[]; volatile: string[] } {
   const stable: string[] = [];
   const volatile: string[] = [];
@@ -186,10 +194,34 @@ function splitClientSystemTexts(texts: string[]): { stable: string[]; volatile: 
   for (const text of texts) {
     const stableLines: string[] = [];
     const volatileLines: string[] = [];
+    let inVolatileSection = false;
 
     for (const line of text.split(/\r?\n/)) {
-      if (isVolatileTimeLine(line)) volatileLines.push(line.trim());
-      else stableLines.push(line);
+      const trimmed = line.trim();
+
+      // 进入新的 volatile 段
+      if (VOLATILE_SECTION_HEADER.test(trimmed)) {
+        inVolatileSection = true;
+        volatileLines.push(trimmed);
+        continue;
+      }
+
+      // 已经在 volatile 段内
+      if (inVolatileSection) {
+        if (!trimmed) {
+          inVolatileSection = false;
+          continue;
+        }
+        volatileLines.push(trimmed);
+        continue;
+      }
+
+      // 段外按原逻辑逐行判断
+      if (isVolatileTimeLine(line)) {
+        volatileLines.push(line.trim());
+      } else {
+        stableLines.push(line);
+      }
     }
 
     const stableText = stableLines.join("\n").trim();

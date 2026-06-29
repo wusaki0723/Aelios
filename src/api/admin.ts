@@ -104,7 +104,16 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
         <label class="text-xs text-zinc-400">Worker</label>
         <input x-model="workerUrl" @change="savePrefs()" class="mt-2 h-11 w-full rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral" placeholder="Worker URL">
         <label class="mt-3 block text-xs text-zinc-400">Token</label>
-        <input x-model="apiKey" @change="savePrefs()" type="password" class="mt-2 h-11 w-full rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral" placeholder="Bearer token">
+        <div class="mt-2 flex gap-2">
+          <input x-model="apiKey" @keydown.enter.prevent="saveToken()" type="password" class="h-11 min-w-0 flex-1 rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral" placeholder="Bearer token">
+          <button type="button" @click="saveToken()" class="tap grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-coral text-zinc-950 transition duration-150 ease-in-out active:bg-coral/80" aria-label="保存 token" title="保存 token">
+            <i data-lucide="save" class="h-4 w-4"></i>
+          </button>
+          <button type="button" @click="clearToken()" class="tap grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-zinc-800 bg-[#0a0a0b] text-zinc-400 transition duration-150 ease-in-out hover:border-coral hover:text-zinc-100" aria-label="清除 token" title="清除 token">
+            <i data-lucide="trash-2" class="h-4 w-4"></i>
+          </button>
+        </div>
+        <div class="mt-1 text-[11px]" :class="tokenSaved() ? 'text-zinc-500' : 'text-coral'" x-text="tokenSaved() ? 'Token 已保存到本机' : 'Token 尚未保存'"></div>
         <label class="mt-3 block text-xs text-zinc-400">Namespace</label>
         <input x-model="namespace" @change="reloadAll()" class="mt-2 h-11 w-full rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral" placeholder="default">
       </div>
@@ -386,7 +395,16 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
           <label class="text-xs text-zinc-400">Worker</label>
           <input x-model="workerUrl" @change="savePrefs()" class="mt-2 h-11 w-full rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm outline-none focus:border-coral" placeholder="Worker URL">
           <label class="mt-4 block text-xs text-zinc-400">Token</label>
-          <input x-model="apiKey" @change="savePrefs()" type="password" class="mt-2 h-11 w-full rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm outline-none focus:border-coral" placeholder="Bearer token">
+          <div class="mt-2 flex gap-2">
+            <input x-model="apiKey" @keydown.enter.prevent="saveToken()" type="password" class="h-11 min-w-0 flex-1 rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm outline-none focus:border-coral" placeholder="Bearer token">
+            <button type="button" @click="saveToken()" class="tap grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-coral text-zinc-950 active:bg-coral/80" aria-label="保存 token" title="保存 token">
+              <i data-lucide="save" class="h-4 w-4"></i>
+            </button>
+            <button type="button" @click="clearToken()" class="tap grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-zinc-800 bg-[#0a0a0b] text-zinc-400 hover:border-coral hover:text-zinc-100" aria-label="清除 token" title="清除 token">
+              <i data-lucide="trash-2" class="h-4 w-4"></i>
+            </button>
+          </div>
+          <div class="mt-1 text-[11px]" :class="tokenSaved() ? 'text-zinc-500' : 'text-coral'" x-text="tokenSaved() ? 'Token 已保存到本机' : 'Token 尚未保存'"></div>
           <label class="mt-4 block text-xs text-zinc-400">Namespace</label>
           <input x-model="namespace" @change="reloadAll()" class="mt-2 h-11 w-full rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm outline-none focus:border-coral" placeholder="default">
         </article>
@@ -426,6 +444,7 @@ function memoryAdmin() {
     moreView: 'precious',
     workerUrl: localStorage.getItem('aelios.admin.workerUrl') || location.origin,
     apiKey: localStorage.getItem('aelios.admin.apiKey') || '',
+    savedApiKey: localStorage.getItem('aelios.admin.apiKey') || '',
     namespace: localStorage.getItem('aelios.admin.namespace') || 'default',
     theme: localStorage.getItem('aelios.admin.colorMode') || 'light',
     boot: {},
@@ -461,9 +480,21 @@ function memoryAdmin() {
     },
     savePrefs() {
       localStorage.setItem('aelios.admin.workerUrl', this.workerUrl || location.origin);
-      localStorage.setItem('aelios.admin.apiKey', this.apiKey || '');
       localStorage.setItem('aelios.admin.namespace', this.namespace || 'default');
       localStorage.setItem('aelios.admin.colorMode', this.theme || 'light');
+    },
+    tokenSaved() {
+      return (this.apiKey || '') === (this.savedApiKey || '');
+    },
+    saveToken() {
+      this.savePrefs();
+      localStorage.setItem('aelios.admin.apiKey', this.apiKey || '');
+      this.savedApiKey = this.apiKey || '';
+      this.notify(this.apiKey && this.apiKey.trim() ? 'Token 已保存' : 'Token 已清空');
+    },
+    clearToken() {
+      this.apiKey = '';
+      this.saveToken();
     },
     applyTheme() {
       document.documentElement.dataset.theme = this.theme || 'light';

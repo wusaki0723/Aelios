@@ -212,7 +212,9 @@ async function searchWithVectorize(
   if (!vector) return null;
 
   const legacyFallbackLimit = getLegacyFallbackLimit(env, input.topK);
-  const vectorTopK = Math.min(Math.max(input.topK * 3, input.topK + legacyFallbackLimit), 100);
+  // Vectorize 带 returnMetadata:true 时单次 query 的 topK 硬上限是 50，超过会抛异常(worker 1101 → HTTP 500)。
+  // 之前钳到 100，hook 传 top_k≥17 时 vectorTopK 就跨过 50 必崩。钳到 50 根治。
+  const vectorTopK = Math.min(Math.max(input.topK * 3, input.topK + legacyFallbackLimit), 50);
   const vectorInput = { ...input, topK: vectorTopK };
   let result = await queryVectorize(env, vector, vectorInput, true);
   let usedUnfilteredFallback = false;

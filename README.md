@@ -109,6 +109,14 @@ URL:    https://<你的 Worker 地址>/mcp?token=<MEMORY_MCP_API_KEY>
 
 你的官方客户端就有跨设备随身记忆了。
 
+如果你想让 Claude Code 每次发消息前自动召回长期记忆，并把对话批量写回 Aelios，可以使用仓库自带的 Claude Code Hook：
+
+- Hook 文件：[`integrations/claude-code/companion_memory_hook.py`](./integrations/claude-code/companion_memory_hook.py)
+- 安装说明：[`integrations/claude-code/README.md`](./integrations/claude-code/README.md)
+- 示例配置：[`integrations/claude-code/settings.example.json`](./integrations/claude-code/settings.example.json)
+
+Hook 只需要你的 Aelios Worker 地址和 `CHATBOX_API_KEY`，不需要任何 LLM provider key。
+
 ## 看图模式（可选）
 
 纯文本模型看不了图？加 `GUIDE_DOG_API_KEY`，客户端改成：

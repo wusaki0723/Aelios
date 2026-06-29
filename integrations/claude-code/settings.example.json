@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/companion_memory_hook.py",
+              "search"
+            ],
+            "timeout": 20,
+            "statusMessage": "Searching long-term memory..."
+          },
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/companion_memory_hook.py",
+              "ingest-user"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/companion_memory_hook.py",
+              "ingest-assistant"
+            ],
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

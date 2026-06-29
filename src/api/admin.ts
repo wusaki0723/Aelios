@@ -366,7 +366,10 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
           </article>
           <template x-for="item in worldItems" :key="item.id">
             <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
-              <div class="mb-2 flex flex-wrap gap-2 text-xs text-zinc-400"><span x-text="item.type || 'longtail'"></span><span x-text="item.status || item.source || ''"></span><span x-text="item.source || ''"></span></div>
+              <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+                <span x-text="item.type || 'longtail'"></span><span x-text="item.status || item.source || ''"></span><span x-text="item.source || ''"></span>
+                <button x-show="item.type !== 'longtail'" type="button" @click="deleteWorldMemory(item)" class="tap ml-auto rounded-2xl border border-zinc-800 px-3 py-1 text-xs text-zinc-400 hover:border-coral">删除</button>
+              </div>
               <p class="whitespace-pre-wrap text-sm leading-7" x-text="item.content"></p>
             </article>
           </template>
@@ -725,10 +728,14 @@ function memoryAdmin() {
       try {
         await this.request(this.withNamespace('/v1/memory/' + encodeURIComponent(memory.id)), { method: 'DELETE' });
         await Promise.all([this.loadMemories(), this.loadBoot()]);
+        if (this.page === 'more' && this.moreView === 'world') await this.loadWorldFacts();
         this.notify('已删除');
       } catch (error) {
         this.notify(error.message);
       }
+    },
+    async deleteWorldMemory(item) {
+      await this.deleteMemory(item);
     },
     async mergeDuplicate(memory) {
       if (!memory.target_id) {

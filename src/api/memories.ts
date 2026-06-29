@@ -427,7 +427,7 @@ export async function handlePrecious(request: Request, env: Env): Promise<Respon
   const url = new URL(request.url);
   const namespace = resolveNamespace(auth.profile, url.searchParams.get("namespace"));
   const parts = url.pathname.split("/").filter(Boolean);
-  const id = parts[1];
+  const id = parts[2];
 
   if (request.method === "GET" && !id) {
     const scopeError = requireScope(auth.profile, "memory:read");
@@ -469,7 +469,7 @@ export async function handleGlossaryApi(request: Request, env: Env): Promise<Res
   const url = new URL(request.url);
   const namespace = resolveNamespace(auth.profile, url.searchParams.get("namespace"));
   const parts = url.pathname.split("/").filter(Boolean);
-  const id = parts[1];
+  const id = parts[2];
 
   if (request.method === "GET" && !id) {
     const scopeError = requireScope(auth.profile, "memory:read");
@@ -575,8 +575,8 @@ export async function handleMemoryCandidates(request: Request, env: Env): Promis
   const url = new URL(request.url);
   const namespace = resolveNamespace(auth.profile, url.searchParams.get("namespace"));
   const parts = url.pathname.split("/").filter(Boolean);
-  const id = parts[1];
-  const action = parts[2];
+  const id = parts[2];
+  const action = parts[3];
 
   if (request.method === "GET" && !id) {
     const scopeError = requireScope(auth.profile, "memory:read");

@@ -85,8 +85,12 @@ assert.match(searchSource, /const legacySlots = Math\.max\(0, Math\.min\(input\.
 assert.match(searchSource, /score: record\.score \* getLegacyFallbackScoreFactor\(env\)/);
 assert.match(searchSource, /\)\.slice\(0, input\.topK\);/);
 
-assert.match(digestSource, /const summary = \[`【\$\{input\.dateLabel\} 重要原文】`, reason \? `保存原因：\$\{reason\}` : ""\]/);
-assert.match(digestSource, /content: quote,\s+summary,/s);
+assert.match(digestSource, /function shouldArchiveDreamDeletesToLongtail\(env: Env\): boolean \{\s+return readString\(env\.DREAM_ARCHIVE_DELETES_TO_LONGTAIL\) === "true";\s+\}/);
+assert.match(digestSource, /async function queueImportantExcerptsForReview/);
+assert.match(digestSource, /createMemoryCandidate\(env\.DB, \{/);
+assert.match(digestSource, /source: "dream_excerpt"/);
+assert.match(digestSource, /const archiveDeletesToLongtail = shouldArchiveDreamDeletesToLongtail\(env\);/);
+assert.match(digestSource, /if \(archiveDeletesToLongtail\) \{\s+const lt = await createLongtail/s);
 assert.match(digestSource, /if \(v2Enabled && strategy !== "legacy"\) \{\s+const page = await listMemoriesPage\(env\.DB,/s);
 assert.match(digestSource, /modelResult\.reason !== "model_invalid_json" \|\| modelResult\.finishReason !== "length"/);
 assert.match(digestSource, /messages = messages\.slice\(0, nextSize\);/);

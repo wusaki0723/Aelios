@@ -258,18 +258,69 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
             <h1 class="text-2xl font-semibold">重要记忆</h1>
             <p class="mt-1 text-sm text-zinc-400">L4 稳定事实、偏好、边界和决策。</p>
           </div>
-          <button type="button" @click="loadMemories()" class="tap rounded-2xl border border-zinc-800 px-4 text-sm transition duration-150 ease-in-out hover:border-coral">刷新</button>
+          <div class="flex flex-wrap items-center gap-2">
+            <button type="button" @click="openMemoryCreate()" class="tap inline-flex items-center gap-2 rounded-2xl bg-coral px-4 text-sm font-semibold text-zinc-950 transition duration-150 ease-in-out">
+              <i data-lucide="plus" class="h-4 w-4"></i><span>新增</span>
+            </button>
+            <button type="button" @click="loadMemories()" class="tap rounded-2xl border border-zinc-800 px-4 text-sm transition duration-150 ease-in-out hover:border-coral">刷新</button>
+          </div>
         </div>
 
         <div class="flex gap-2 overflow-x-auto pb-1">
           <template x-for="type in memoryTypes" :key="type">
             <button type="button" @click="memoryType = type; loadMemories()" class="choice-tab tap shrink-0 rounded-2xl border px-4 text-sm transition duration-150 ease-in-out hover:border-coral" :class="memoryType === type ? 'is-active' : ''">
-              <span x-text="type"></span>
+              <span x-text="memoryTypeLabel(type)"></span>
               <span class="ml-1 text-xs" x-text="typeCount(type) + '/' + typeLimit(type)"></span>
             </button>
           </template>
         </div>
 
+        <article x-show="memoryCreateOpen" class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <div class="text-sm font-semibold">手工新增记忆</div>
+            <button type="button" @click="memoryCreateOpen = false" class="tap rounded-2xl border border-zinc-800 px-3 text-xs text-zinc-400 transition duration-150 ease-in-out hover:border-coral">关闭</button>
+          </div>
+          <div class="grid gap-3">
+            <div class="grid gap-2 md:grid-cols-[1fr_1fr]">
+              <label class="block">
+                <span class="text-xs text-zinc-400">类型</span>
+                <select x-model="memoryDraft.type" class="mt-1 h-11 w-full rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm outline-none focus:border-coral">
+                  <template x-for="type in memoryTypes" :key="type">
+                    <option x-show="type !== 'all'" :value="type" x-text="type"></option>
+                  </template>
+                </select>
+              </label>
+              <label class="block">
+                <span class="text-xs text-zinc-400">fact_key（留空自动按内容生成）</span>
+                <input x-model="memoryDraft.fact_key" class="mt-1 h-11 w-full rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm outline-none focus:border-coral" placeholder="如 preference:answer-style">
+              </label>
+            </div>
+            <label class="block">
+              <span class="text-xs text-zinc-400">内容</span>
+              <textarea x-model="memoryDraft.content" class="mt-1 min-h-28 w-full resize-y rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3 text-sm leading-7 text-zinc-100 outline-none focus:border-coral" placeholder="一句稳定、可复用的事实"></textarea>
+            </label>
+            <div class="grid gap-3 md:grid-cols-2">
+              <label class="block">
+                <span class="text-xs text-zinc-400">重要性 <span x-text="memoryDraft.importance.toFixed(2)"></span></span>
+                <input type="range" min="0" max="1" step="0.05" x-model.number="memoryDraft.importance" class="mt-2 w-full">
+              </label>
+              <label class="block">
+                <span class="text-xs text-zinc-400">置信度 <span x-text="memoryDraft.confidence.toFixed(2)"></span></span>
+                <input type="range" min="0" max="1" step="0.05" x-model.number="memoryDraft.confidence" class="mt-2 w-full">
+              </label>
+            </div>
+            <div class="flex justify-end gap-2">
+              <button type="button" @click="memoryCreateOpen = false" class="tap rounded-2xl border border-zinc-800 px-4 text-sm text-zinc-400 transition duration-150 ease-in-out hover:border-coral">取消</button>
+              <button type="button" @click="createMemory()" :disabled="saving" class="tap inline-flex items-center gap-2 rounded-2xl bg-coral px-4 text-sm font-semibold text-zinc-950 disabled:opacity-50">
+                <i data-lucide="save" class="h-4 w-4"></i><span>保存</span>
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <template x-if="memories.length === 0">
+          <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 text-sm text-zinc-400">这个类型下还没有记忆。</div>
+        </template>
         <div class="grid gap-3 lg:grid-cols-2">
           <template x-for="memory in memories" :key="memory.id">
             <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
@@ -454,7 +505,7 @@ function memoryAdmin() {
       { id: 'world', label: '世界知识' },
       { id: 'maintenance', label: '维护' }
     ],
-    memoryTypes: ['fact', 'event', 'preference', 'relationship', 'boundary', 'habit', 'decision', 'note'],
+    canonicalMemoryTypes: ['fact', 'event', 'preference', 'relationship', 'boundary', 'habit', 'decision', 'note'],
     limits: { fact: 120, event: 80, preference: 80, relationship: 80, boundary: 80, habit: 80, decision: 80, note: 120 },
     page: 'today',
     moreView: 'precious',
@@ -475,7 +526,9 @@ function memoryAdmin() {
     worldItems: [],
     worldSelection: {},
     worldQuery: '',
-    memoryType: 'fact',
+    memoryType: 'all',
+    memoryCreateOpen: false,
+    memoryDraft: { type: 'fact', content: '', fact_key: '', importance: 0.7, confidence: 0.85 },
     glossaryDraft: { term: '', definition: '', aliasesText: '' },
     debugOutput: '尚未运行维护操作',
     toast: '',
@@ -600,7 +653,8 @@ function memoryAdmin() {
     },
     async loadMemories() {
       try {
-        const path = '/v1/memory?status=active&limit=100&type=' + encodeURIComponent(this.memoryType);
+        const typeParam = this.memoryType && this.memoryType !== 'all' ? '&type=' + encodeURIComponent(this.memoryType) : '';
+        const path = '/v1/memory?status=active&limit=100' + typeParam;
         const data = await this.request(this.withNamespace(path));
         this.memories = (data.data || []).map(function(item) {
           item.editing = false;
@@ -722,6 +776,53 @@ function memoryAdmin() {
       memory.editing = !memory.editing;
       memory.draft = { content: memory.content };
       this.icons();
+    },
+    openMemoryCreate() {
+      const fallback = this.memoryType && this.memoryType !== 'all' ? this.memoryType : 'fact';
+      this.memoryDraft = { type: fallback, content: '', fact_key: '', importance: 0.7, confidence: 0.85 };
+      this.memoryCreateOpen = true;
+      this.icons();
+    },
+    async ensureFactKey(type, content) {
+      const trimmed = (content || '').trim();
+      if (!trimmed) return null;
+      try {
+        const data = new TextEncoder().encode(type + ':' + trimmed);
+        const buf = await crypto.subtle.digest('SHA-1', data);
+        const hex = Array.from(new Uint8Array(buf)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+        return 'manual:' + type + ':' + hex.slice(0, 10);
+      } catch (error) {
+        return 'manual:' + type + ':' + Date.now().toString(36);
+      }
+    },
+    async createMemory() {
+      const content = (this.memoryDraft.content || '').trim();
+      if (!content) { this.notify('内容不能为空'); return; }
+      const type = (this.memoryDraft.type || 'fact').trim() || 'fact';
+      let factKey = (this.memoryDraft.fact_key || '').trim();
+      if (!factKey) factKey = await this.ensureFactKey(type, content);
+      this.saving = true;
+      try {
+        await this.request(this.withNamespace('/v1/memories'), {
+          method: 'POST',
+          body: JSON.stringify({
+            namespace: this.namespace,
+            type: type,
+            content: content,
+            fact_key: factKey,
+            importance: Number(this.memoryDraft.importance),
+            confidence: Number(this.memoryDraft.confidence),
+            source: 'manual'
+          })
+        });
+        this.memoryCreateOpen = false;
+        this.memoryType = type;
+        await Promise.all([this.loadMemories(), this.loadBoot()]);
+        this.notify('已新增记忆');
+      } catch (error) {
+        this.notify(error.message);
+      }
+      this.saving = false;
     },
     async saveMemory(memory) {
       try {
@@ -962,12 +1063,31 @@ function memoryAdmin() {
         return [];
       }
     },
+    get memoryTypes() {
+      const rows = this.stats.memory_type_counts || [];
+      const seen = {};
+      const list = ['all'];
+      this.canonicalMemoryTypes.forEach(function(type) { seen[type] = true; list.push(type); });
+      rows.forEach(function(row) {
+        if (row.type && !seen[row.type]) { seen[row.type] = true; list.push(row.type); }
+      });
+      return list;
+    },
+    memoryTypeLabel(type) {
+      return type === 'all' ? '全部' : type;
+    },
     typeCount(type) {
       const rows = this.stats.memory_type_counts || [];
+      if (type === 'all') {
+        return rows.reduce(function(sum, row) { return sum + Number(row.count || 0); }, 0);
+      }
       const hit = rows.find(function(row) { return row.type === type; });
       return hit ? hit.count : 0;
     },
     typeLimit(type) {
+      if (type === 'all') {
+        return Object.keys(this.limits).reduce(function(sum, key) { return sum + this.limits[key]; }.bind(this), 0);
+      }
       return this.limits[type] || 100;
     },
     capacityLabel() {

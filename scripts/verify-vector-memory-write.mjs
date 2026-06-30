@@ -143,6 +143,16 @@ assert.match(adminSource, /@click="deleteSelectedWorldItems\(\)"/);
 assert.match(adminSource, /:key="worldItemKey\(item\)"/);
 assert.match(adminSource, /Promise\.allSettled\(batch\.map/);
 assert.doesNotMatch(adminSource, /x-show="item\.type !== 'longtail'"/);
+// Memory panel must surface every active type, not just a fixed canonical set,
+// and offer manual creation. Regression guard for "容量涨了但面板看不到" bug.
+assert.match(adminSource, /get memoryTypes\(\)/);
+assert.match(adminSource, /memoryTypeLabel\(type\)/);
+assert.match(adminSource, /memoryType && this\.memoryType !== 'all'/);
+assert.match(adminSource, /if \(type === 'all'\)/);
+assert.match(adminSource, /openMemoryCreate\(\)/);
+assert.match(adminSource, /async createMemory\(\)/);
+assert.match(adminSource, /'\/v1\/memories'\), \{\s+method: 'POST'/s);
+assert.match(adminSource, /await crypto\.subtle\.digest\('SHA-1', data\)/);
 assert.match(digestSource, /v2 首次抽取由每 4 小时 extractor 负责/);
 assert.doesNotMatch(digestSource, /for \(const memory of digest\.memories_to_add \?\? \[\]\) \{\s+const factKey/s);
 assert.doesNotMatch(digestSource, /added \+= 0/);

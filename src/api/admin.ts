@@ -363,10 +363,23 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
               <input x-model="worldQuery" class="h-11 rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm outline-none focus:border-coral" placeholder="搜索兜底大库">
               <button type="button" @click="searchWorld()" class="tap rounded-2xl bg-coral px-4 text-sm font-semibold text-zinc-950">搜索</button>
             </div>
+            <div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+              <span x-text="'已选 ' + selectedWorldCount() + ' / ' + worldItems.length"></span>
+              <button type="button" @click="selectAllWorldItems()" class="tap inline-flex items-center gap-2 rounded-2xl border border-zinc-800 px-3 py-1 text-zinc-400 hover:border-coral hover:text-zinc-100">
+                <i data-lucide="check-square" class="h-3.5 w-3.5"></i><span>全选当前</span>
+              </button>
+              <button type="button" @click="clearWorldSelection()" class="tap inline-flex items-center gap-2 rounded-2xl border border-zinc-800 px-3 py-1 text-zinc-400 hover:border-coral hover:text-zinc-100">
+                <i data-lucide="square" class="h-3.5 w-3.5"></i><span>清空</span>
+              </button>
+              <button type="button" @click="deleteSelectedWorldItems()" :disabled="selectedWorldCount() === 0 || saving" class="tap inline-flex items-center gap-2 rounded-2xl border border-zinc-800 px-3 py-1 text-zinc-400 hover:border-coral hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40">
+                <i data-lucide="trash-2" class="h-3.5 w-3.5"></i><span>删除选中</span>
+              </button>
+            </div>
           </article>
-          <template x-for="item in worldItems" :key="item.id">
+          <template x-for="item in worldItems" :key="worldItemKey(item)">
             <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
               <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+                <input type="checkbox" class="h-4 w-4 shrink-0 accent-[#ff7a66]" :checked="isWorldSelected(item)" @change="toggleWorldItem(item)" aria-label="选择条目">
                 <span x-text="item.type || 'longtail'"></span><span x-text="item.status || item.source || ''"></span><span x-text="item.source || ''"></span>
                 <button type="button" @click="deleteWorldMemory(item)" class="tap ml-auto rounded-2xl border border-zinc-800 px-3 py-1 text-xs text-zinc-400 hover:border-coral">删除</button>
               </div>
@@ -460,6 +473,7 @@ function memoryAdmin() {
     glossary: [],
     longtail: [],
     worldItems: [],
+    worldSelection: {},
     worldQuery: '',
     memoryType: 'fact',
     glossaryDraft: { term: '', definition: '', aliasesText: '' },
@@ -562,7 +576,10 @@ function memoryAdmin() {
         this.longtail = (this.boot.longtail || []).map(function(row) {
           return { id: row.id, type: 'longtail', status: 'v1 longtail', source: row.ts, content: row.content };
         });
-        if (this.moreView === 'world') this.worldItems = this.longtail;
+        if (this.moreView === 'world') {
+          this.worldItems = this.longtail;
+          this.pruneWorldSelection();
+        }
       } catch (error) {
         this.notify(error.message);
       }
@@ -607,8 +624,10 @@ function memoryAdmin() {
       try {
         const data = await this.request(this.withNamespace('/v1/memory?status=active&limit=80&type=world_fact'));
         this.worldItems = (data.data || []).concat(this.longtail);
+        this.pruneWorldSelection();
       } catch (error) {
         this.worldItems = this.longtail;
+        this.pruneWorldSelection();
         this.notify(error.message);
       }
       this.icons();
@@ -735,19 +754,82 @@ function memoryAdmin() {
       }
     },
     async deleteWorldMemory(item) {
-      if (item.type !== 'longtail') {
-        await this.deleteMemory(item);
-        return;
-      }
       if (!window.confirm('确认删除这条兜底大库条目？')) return;
       try {
-        await this.request(this.withNamespace('/v1/longtail/' + encodeURIComponent(item.id)), { method: 'DELETE' });
-        await this.loadBoot();
+        await this.deleteWorldItem(item);
+        delete this.worldSelection[this.worldItemKey(item)];
+        this.worldSelection = Object.assign({}, this.worldSelection);
+        await Promise.all([this.loadMemories(), this.loadBoot()]);
         if (this.moreView === 'world') await this.loadWorldFacts();
         this.notify('兜底条目已删除');
       } catch (error) {
         this.notify(error.message);
       }
+    },
+    worldItemKey(item) {
+      return (item.type === 'longtail' ? 'longtail' : 'memory') + ':' + item.id;
+    },
+    isWorldSelected(item) {
+      return Boolean(this.worldSelection[this.worldItemKey(item)]);
+    },
+    selectedWorldItems() {
+      return this.worldItems.filter(function(item) { return this.isWorldSelected(item); }, this);
+    },
+    selectedWorldCount() {
+      return this.selectedWorldItems().length;
+    },
+    toggleWorldItem(item) {
+      const key = this.worldItemKey(item);
+      const next = Object.assign({}, this.worldSelection);
+      if (next[key]) delete next[key];
+      else next[key] = true;
+      this.worldSelection = next;
+    },
+    selectAllWorldItems() {
+      const next = Object.assign({}, this.worldSelection);
+      for (const item of this.worldItems) next[this.worldItemKey(item)] = true;
+      this.worldSelection = next;
+      this.icons();
+    },
+    clearWorldSelection() {
+      this.worldSelection = {};
+      this.icons();
+    },
+    pruneWorldSelection() {
+      const visible = new Set(this.worldItems.map(function(item) { return this.worldItemKey(item); }, this));
+      const next = {};
+      for (const key of Object.keys(this.worldSelection)) {
+        if (visible.has(key)) next[key] = true;
+      }
+      this.worldSelection = next;
+    },
+    async deleteWorldItem(item) {
+      if (item.type === 'longtail') {
+        await this.request(this.withNamespace('/v1/longtail/' + encodeURIComponent(item.id)), { method: 'DELETE' });
+        return;
+      }
+      await this.request(this.withNamespace('/v1/memory/' + encodeURIComponent(item.id)), { method: 'DELETE' });
+    },
+    async deleteSelectedWorldItems() {
+      const items = this.selectedWorldItems();
+      if (items.length === 0) return;
+      if (!window.confirm('确认删除选中的 ' + items.length + ' 条兜底大库条目？')) return;
+      this.saving = true;
+      let failed = 0;
+      try {
+        for (let index = 0; index < items.length; index += 5) {
+          const batch = items.slice(index, index + 5);
+          const results = await Promise.allSettled(batch.map(function(item) { return this.deleteWorldItem(item); }, this));
+          failed += results.filter(function(result) { return result.status === 'rejected'; }).length;
+        }
+        this.clearWorldSelection();
+        await Promise.all([this.loadMemories(), this.loadBoot()]);
+        if (this.moreView === 'world') await this.loadWorldFacts();
+        this.notify(failed ? ('部分删除失败：' + failed + ' 条') : ('已删除 ' + items.length + ' 条'));
+      } catch (error) {
+        this.notify(error.message);
+      }
+      this.saving = false;
     },
     async mergeDuplicate(memory) {
       if (!memory.target_id) {
@@ -818,6 +900,7 @@ function memoryAdmin() {
           body: JSON.stringify({ namespace: this.namespace, query: this.worldQuery, top_k: 30, filter: false })
         });
         this.worldItems = (data.data || []).concat(this.longtail);
+        this.pruneWorldSelection();
       } catch (error) {
         this.notify(error.message);
       }

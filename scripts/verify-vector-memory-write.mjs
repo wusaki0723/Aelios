@@ -126,6 +126,11 @@ assert.match(dbV2Source, /DELETE FROM longtail WHERE namespace = \? AND id = \?/
 assert.match(memoriesApiSource, /export async function handleLongtailApi/);
 assert.match(memoriesApiSource, /const result = await deleteLongtail\(env, \{ namespace, id \}\);/);
 assert.match(adminSource, /\/v1\/longtail\/' \+ encodeURIComponent\(item\.id\)/);
+assert.match(adminSource, /worldSelection: \{\}/);
+assert.match(adminSource, /@click="selectAllWorldItems\(\)"/);
+assert.match(adminSource, /@click="deleteSelectedWorldItems\(\)"/);
+assert.match(adminSource, /:key="worldItemKey\(item\)"/);
+assert.match(adminSource, /Promise\.allSettled\(batch\.map/);
 assert.doesNotMatch(adminSource, /x-show="item\.type !== 'longtail'"/);
 assert.match(digestSource, /v2 首次抽取由每 4 小时 extractor 负责/);
 assert.doesNotMatch(digestSource, /for \(const memory of digest\.memories_to_add \?\? \[\]\) \{\s+const factKey/s);

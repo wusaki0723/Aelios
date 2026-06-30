@@ -25,6 +25,9 @@ const extractSource = readFileSync(resolve(root, "src/memory/extractPipeline.ts"
 const indexSource = readFileSync(resolve(root, "src/index.ts"), "utf8");
 const wranglerSource = readFileSync(resolve(root, "wrangler.toml"), "utf8");
 const queueProducerSource = readFileSync(resolve(root, "src/queue/producer.ts"), "utf8");
+const dbV2Source = readFileSync(resolve(root, "src/db/v2.ts"), "utf8");
+const memoriesApiSource = readFileSync(resolve(root, "src/api/memories.ts"), "utf8");
+const adminSource = readFileSync(resolve(root, "src/api/admin.ts"), "utf8");
 
 function indexOfOrThrow(haystack, needle) {
   const index = haystack.indexOf(needle);
@@ -103,6 +106,8 @@ assert.match(wranglerSource, /EXTRACT_MODEL = "deepseek\/deepseek-v4-flash"/);
 assert.match(wranglerSource, /DEDUP_COSINE = "0\.9"/);
 assert.match(indexSource, /const EXTRACT_CRON = "0 \*\/4 \* \* \*"/);
 assert.match(indexSource, /runMemoryExtractionBatches\(env, namespace, \{ scheduledTime: controller\.scheduledTime \}\)/);
+assert.match(indexSource, /url\.pathname\.startsWith\("\/v1\/longtail\/"\)/);
+assert.match(indexSource, /handleLongtailApi\(request, env\)/);
 assert.match(queueProducerSource, /if \(isV2Enabled\(env\)\) return;/);
 assert.match(extractSource, /const DEFAULT_EXTRACT_MODEL = "deepseek\/deepseek-v4-flash"/);
 assert.match(extractSource, /const DEFAULT_DEDUP_COSINE = 0\.9/);
@@ -114,7 +119,14 @@ assert.match(extractSource, /getActiveMemoryByFactKey\(env\.DB, \{ namespace: in
 assert.match(extractSource, /await isSameFactByEmbedding\(env, \{/);
 assert.match(extractSource, /await supersedeMemory\(env, \{/);
 assert.match(extractSource, /findEmbeddingDuplicate\(env,/);
-assert.match(readFileSync(resolve(root, "src/db/v2.ts"), "utf8"), /await db\.batch\(\[ensureLifecycle, markSeen\]\);/);
+assert.match(dbV2Source, /await db\.batch\(\[ensureLifecycle, markSeen\]\);/);
+assert.match(dbV2Source, /export async function deleteLongtail/);
+assert.match(dbV2Source, /deleteByIds\(\[`lt_\$\{input\.id\}`\]\)/);
+assert.match(dbV2Source, /DELETE FROM longtail WHERE namespace = \? AND id = \?/);
+assert.match(memoriesApiSource, /export async function handleLongtailApi/);
+assert.match(memoriesApiSource, /const result = await deleteLongtail\(env, \{ namespace, id \}\);/);
+assert.match(adminSource, /\/v1\/longtail\/' \+ encodeURIComponent\(item\.id\)/);
+assert.doesNotMatch(adminSource, /x-show="item\.type !== 'longtail'"/);
 assert.match(digestSource, /v2 首次抽取由每 4 小时 extractor 负责/);
 assert.doesNotMatch(digestSource, /for \(const memory of digest\.memories_to_add \?\? \[\]\) \{\s+const factKey/s);
 assert.doesNotMatch(digestSource, /added \+= 0/);

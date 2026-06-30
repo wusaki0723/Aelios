@@ -14,6 +14,7 @@ import {
   countMemoryCandidates,
   createPrecious,
   deleteGlossary,
+  deleteLongtail,
   deletePrecious,
   fetchMemoryLifecycleRows,
   getDigest,
@@ -523,6 +524,28 @@ export async function handleGlossaryApi(request: Request, env: Env): Promise<Res
   }
 
   return openAiError("Not found", 404);
+}
+
+export async function handleLongtailApi(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+
+  const scopeError = requireScope(auth.profile, "memory:write");
+  if (scopeError) return scopeError;
+
+  const url = new URL(request.url);
+  const namespace = resolveNamespace(auth.profile, url.searchParams.get("namespace"));
+  const parts = url.pathname.split("/").filter(Boolean);
+  const id = parts[2];
+
+  if (request.method !== "DELETE" || !id) return openAiError("Not found", 404);
+
+  const result = await deleteLongtail(env, { namespace, id });
+  if (result === "not_found") return openAiError("Longtail entry not found", 404);
+  if (result === "vector_error") {
+    return openAiError("Longtail vector delete failed", 503, "memory_error");
+  }
+  return json({ data: { id, deleted: true } });
 }
 
 async function createApprovedMemoryFromCandidate(

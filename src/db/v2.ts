@@ -384,6 +384,32 @@ export async function listLongtail(
   return result.results ?? [];
 }
 
+export async function deleteLongtail(
+  env: Env,
+  input: { namespace: string; id: string }
+): Promise<"deleted" | "not_found" | "vector_error"> {
+  const existing = await env.DB
+    .prepare("SELECT id FROM longtail WHERE namespace = ? AND id = ?")
+    .bind(input.namespace, input.id)
+    .first<{ id: string }>();
+  if (!existing) return "not_found";
+
+  if (env.VECTORIZE) {
+    try {
+      await env.VECTORIZE.deleteByIds([`lt_${input.id}`]);
+    } catch (error) {
+      console.error("longtail vector delete failed, keeping D1 row", { id: input.id, error });
+      return "vector_error";
+    }
+  }
+
+  await env.DB
+    .prepare("DELETE FROM longtail WHERE namespace = ? AND id = ?")
+    .bind(input.namespace, input.id)
+    .run();
+  return "deleted";
+}
+
 export interface MemoryTypeCount {
   type: string;
   count: number;

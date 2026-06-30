@@ -10,6 +10,7 @@ import {
   handleMemories,
   handleMemoryBoot,
   handleMemoryCandidates,
+  handleLongtailApi,
   handlePrecious,
   handleSearchMemoriesApi
 } from "./api/memories";
@@ -101,6 +102,10 @@ export default {
 
     if (url.pathname === "/v1/glossary" || url.pathname.startsWith("/v1/glossary/")) {
       return handleGlossaryApi(request, env);
+    }
+
+    if (url.pathname.startsWith("/v1/longtail/")) {
+      return handleLongtailApi(request, env);
     }
 
     if (url.pathname === "/v1/candidates" || url.pathname.startsWith("/v1/candidates/")) {

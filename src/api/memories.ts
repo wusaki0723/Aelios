@@ -10,6 +10,7 @@ import { filterAndCompressMemoriesWithMeta } from "../memory/filter";
 import { formatMemoryPatch } from "../memory/inject";
 import { searchMemories, toMemoryApiRecord } from "../memory/search";
 import { deleteVectorMemory } from "../memory/vectorStore";
+import { clampMemoryType } from "../memory/canonicalTypes";
 import {
   countActiveMemoriesByType,
   countMemoryCandidates,
@@ -78,7 +79,7 @@ async function handleCreateMemory(
   if (!body) return openAiError("Request body must be a JSON object", 400);
 
   const content = readString(body.content);
-  const type = readString(body.type) || "note";
+  const type = clampMemoryType(readString(body.type), "note");
 
   if (!content) {
     return openAiError("content is required", 400);
@@ -621,7 +622,7 @@ export async function handleMemoryCandidates(request: Request, env: Env): Promis
   if (!candidate) return openAiError("Candidate not found", 404);
   const body = (await readJsonObject(request)) ?? {};
   const content = readString(body.content) || candidate.content;
-  const type = readString(body.type) || candidate.type;
+  const type = clampMemoryType(readString(body.type) || candidate.type, "note");
   const factKey = body.fact_key === null ? null : readString(body.fact_key) ?? candidate.fact_key;
   const confidence = readNumber(body.confidence, candidate.confidence);
   const importance = readNumber(body.importance, candidate.importance);

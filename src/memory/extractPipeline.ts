@@ -12,6 +12,7 @@ import type { Env, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "
 import { createEmbedding } from "./embedding";
 import { type ExtractedMemory } from "./extract";
 import { createVectorMemory } from "./vectorStore";
+import { clampMemoryType } from "./canonicalTypes";
 import { isV2Enabled } from "./v2/recall";
 
 const DEFAULT_EXTRACT_MODEL = "deepseek/deepseek-v4-flash";
@@ -168,7 +169,7 @@ function normalizeCandidate(item: unknown): ExtractedMemory | null {
   const content = readString(raw.content);
   if (!content || content.length > 1000) return null;
   return {
-    type: readString(raw.type) || "note",
+    type: clampMemoryType(readString(raw.type)),
     content,
     importance: clampScore(raw.importance, 0.65),
     confidence: clampScore(raw.confidence, 0.82),
@@ -209,14 +210,15 @@ function buildExtractPrompt(messages: MessageRecord[]): string {
     "- 只有用户明确说出、确认、长期表现出的事实，才能写成关于用户的记忆。",
     "- 关于用户的记忆，优先写成“你……”。关于我应遵守的长期方式，写成“我需要……”。",
     "- 每条 content 必须是一句自然短句。",
-    "- 稳定事实必须尽量给 fact_key，格式为小写 ASCII，例如 project:aelios-memory-v2、preference:answer-style、boundary:no-system-records。",
+    "- type 只能从这 8 个里选：fact、event、preference、relationship、boundary、habit、decision、note。绝不输出 project、world_fact、commitment 等其他值；项目进展归 fact，承诺/决定归 decision，习惯归 habit。",
+    "- 稳定事实必须尽量给 fact_key，格式为小写 ASCII，例如 project:aelios-memory-v2、preference:answer-style、boundary:no-system-records。fact_key 是分组键，跟 type 无关，可以带 project: preference: 等前缀。",
     "",
     "输出格式：",
     JSON.stringify({
       memories: [
         {
           content: "你正在把 Aelios v2 记忆写入拆成即时捕获、小批抽取和夜间整理三档。",
-          type: "project",
+          type: "fact",
           fact_key: "project:aelios-memory-v2-write-pipeline",
           importance: 0.86,
           confidence: 0.92,

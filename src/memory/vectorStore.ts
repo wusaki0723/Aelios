@@ -2,6 +2,7 @@ import type { Env, MemoryApiRecord, MemoryRecord } from "../types";
 import { newId } from "../utils/ids";
 import { nowIso } from "../utils/time";
 import { createEmbedding } from "./embedding";
+import { clampMemoryType } from "./canonicalTypes";
 
 type MetadataMap = Record<string, unknown>;
 
@@ -355,7 +356,7 @@ export async function createVectorMemory(env: Env, input: VectorMemoryInput): Pr
   const now = nowIso();
   const normalized = {
     namespace: input.namespace,
-    type: input.type || "note",
+    type: clampMemoryType(input.type, "note"),
     content,
     summary: input.summary ?? null,
     importance: clampScore(input.importance, 0.5),

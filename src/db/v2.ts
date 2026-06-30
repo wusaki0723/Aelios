@@ -7,6 +7,7 @@
 // 同步用 embedding.ts 的 upsertMemoryEmbedding / deleteMemoryEmbedding (已带 kind:"memory")。
 
 import { upsertMemoryEmbedding } from "../memory/embedding";
+import { clampMemoryType } from "../memory/canonicalTypes";
 import type { Env, MemoryLifecycleRow, MemoryRecord } from "../types";
 import { newId } from "../utils/ids";
 import { nowIso } from "../utils/time";
@@ -509,7 +510,7 @@ export async function createMemoryCandidate(
   const record: MemoryCandidateRow = {
     id,
     namespace: input.namespace,
-    type: input.type || "note",
+    type: clampMemoryType(input.type, "note"),
     content: input.content,
     fact_key: input.factKey ?? null,
     confidence: input.confidence ?? 0.5,
@@ -701,7 +702,7 @@ export async function upsertMemoryByFactKey(
       )
       .bind(
         input.content,
-        input.type ?? "fact",
+        clampMemoryType(input.type, "fact"),
         input.importance ?? 0.6,
         input.confidence ?? 0.8,
         JSON.stringify(input.tags ?? []),
@@ -736,7 +737,7 @@ export async function upsertMemoryByFactKey(
     .bind(
       id,
       input.namespace,
-      input.type ?? "fact",
+      clampMemoryType(input.type, "fact"),
       input.content,
       input.importance ?? 0.6,
       input.confidence ?? 0.8,
@@ -879,7 +880,7 @@ export async function supersedeMemory(
     .bind(
       nextId,
       input.namespace,
-      input.newType ?? "world_fact",
+      clampMemoryType(input.newType, "fact"),
       input.newContent,
       input.importance ?? 0.6,
       input.confidence ?? 0.8,

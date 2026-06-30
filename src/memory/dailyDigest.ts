@@ -19,6 +19,7 @@ import {
   archiveMemory,
   upsertDigest,
   createLongtail,
+  createMemoryCandidate,
   upsertDailyLog,
   fetchMemoryLifecycleRows,
   upsertLongtailEmbedding
@@ -120,6 +121,10 @@ function readDreamStrategy(env: Env): "legacy" | "upsert" | "review" {
   const raw = env.DREAM_STRATEGY;
   if (raw === "legacy" || raw === "review") return raw;
   return "upsert";
+}
+
+function shouldArchiveDreamDeletesToLongtail(env: Env): boolean {
+  return readString(env.DREAM_ARCHIVE_DELETES_TO_LONGTAIL) === "true";
 }
 
 function readFirstEnvValue(...values: unknown[]): unknown {
@@ -442,7 +447,7 @@ function buildDigestPrompt(input: {
     "- 合并重复记忆，避免同一事实以多个版本长期存在。",
     "- 发现过时、被新信息否定、互相矛盾的旧记忆，并更新或删除。",
     "- 检查当天小批抽取已经入库的记忆和旧记忆之间是否重复、过时或冲突。",
-    "- 保留关键原文摘录，重写一份简洁的 L1 摘要。",
+    "- 只在极少数必要场景提出关键原文摘录，重写一份简洁的 L1 摘要。",
     "- 形成下一次对话可直接使用的简洁记忆，而不是保存流水账。",
     "",
     "窗口：",
@@ -464,7 +469,8 @@ function buildDigestPrompt(input: {
     "- title 是 12 字以内标题。",
     "- summary 写成一段简短自然中文，描述这次 dream 整理出了什么。",
     "- sections 最多 3 段，每段有 heading 和 content；没有必要可以给空数组。",
-    `- important_excerpts 最多 ${input.excerptLimit} 条，quote 必须是值得保留的原文片段。`,
+    `- important_excerpts 最多 ${input.excerptLimit} 条，quote 必须是值得人工审核的原文片段；不要把普通聊天流水、调试口令、临时玩笑放进来。`,
+    "- v2 下 important_excerpts 只会进入人工审核候选，不会自动写入长期记忆。",
     "- memories_to_add 保留兼容字段，v2 下默认输出空数组。",
     "- memories_to_update 只针对给出的旧记忆 id。",
     "- memories_to_delete 只删除空、重复、明显过期或被新信息否定的旧记忆。",
@@ -656,6 +662,33 @@ async function saveImportantExcerpts(
   return saved;
 }
 
+async function queueImportantExcerptsForReview(
+  env: Env,
+  input: { namespace: string; dateLabel: string; excerpts: ImportantExcerpt[]; fallbackMessageIds: string[] }
+): Promise<number> {
+  let queued = 0;
+  const limit = readDreamExcerptLimit(env);
+
+  for (const excerpt of input.excerpts.slice(0, limit)) {
+    const quote = readString(excerpt.quote);
+    if (!quote) continue;
+    await createMemoryCandidate(env.DB, {
+      namespace: input.namespace,
+      type: "excerpt",
+      content: quote,
+      factKey: null,
+      importance: 0.72,
+      confidence: 0.72,
+      tags: uniqueStrings(["important-excerpt", input.dateLabel, ...(excerpt.tags ?? [])]),
+      sourceMessageIds: excerpt.source_message_ids?.length ? excerpt.source_message_ids : input.fallbackMessageIds,
+      source: "dream_excerpt"
+    });
+    queued += 1;
+  }
+
+  return queued;
+}
+
 async function applyMemoryUpdates(
   env: Env,
   input: { namespace: string; updates: DigestMemoryUpdate[]; deletes: DigestMemoryDelete[] }
@@ -731,6 +764,7 @@ async function applyDreamV2(
   const isReview = strategy === "review";
   const added = 0;
   let updated = 0, deleted = 0, longtailCount = 0;
+  const archiveDeletesToLongtail = shouldArchiveDreamDeletesToLongtail(env);
 
   if (isReview) {
     await recordDreamReviewProposal(env, { namespace, dateLabel, digest, messageIds });
@@ -774,15 +808,17 @@ async function applyDreamV2(
     const existing = await getVectorMemory(env, item.target_id);
     if (!existing || existing.status !== "active" || existing.pinned) continue;
 
-    const lt = await createLongtail(env.DB, { namespace, content: existing.content, sourceMessageIds: messageIds });
-    await upsertLongtailEmbedding(env, { id: lt.id, namespace, content: existing.content });
-    longtailCount++;
+    if (archiveDeletesToLongtail) {
+      const lt = await createLongtail(env.DB, { namespace, content: existing.content, sourceMessageIds: messageIds });
+      await upsertLongtailEmbedding(env, { id: lt.id, namespace, content: existing.content });
+      longtailCount++;
+    }
 
     const retired = await retireMemoryRecord(env, { namespace, id: item.target_id });
     if (retired) deleted++;
   }
 
-  const excerpts = await saveImportantExcerpts(env, {
+  const excerpts = await queueImportantExcerptsForReview(env, {
     namespace,
     dateLabel,
     excerpts: digest.important_excerpts ?? [],

@@ -25,6 +25,8 @@ export interface Env {
   MEMORY_LIFECYCLE_ENABLED?: string;
   // dream 策略：默认 upsert，可显式 legacy / review。
   DREAM_STRATEGY?: string;
+  // 是否把 dream 删除的旧记忆收容进 longtail。默认 false，避免新 v2 内容污染旧大库兜底。
+  DREAM_ARCHIVE_DELETES_TO_LONGTAIL?: string;
   // 写入模式：默认 upsert，可显式 append。
   MEMORY_WRITE_MODE?: string;
   // patrol 是否只出提案不自动删

@@ -77,7 +77,7 @@ assert.match(source, /if \(input\.status && record\.status !== input\.status\) c
 
 assert.match(searchSource, /function getLegacyFallbackLimit\(env: Env, topK: number\): number/);
 assert.match(searchSource, /function getLegacyFallbackScoreFactor\(env: Env\): number/);
-assert.match(searchSource, /const vectorTopK = Math\.min\(Math\.max\(input\.topK \* 3, input\.topK \+ legacyFallbackLimit\), 100\);/);
+assert.match(searchSource, /const vectorTopK = Math\.min\(Math\.max\(input\.topK \* 3, input\.topK \+ legacyFallbackLimit\), 50\);/);
 assert.match(searchSource, /const legacySlots = Math\.max\(0, Math\.min\(input\.topK - d1Records\.length, legacyFallbackLimit\)\);/);
 assert.match(searchSource, /score: record\.score \* getLegacyFallbackScoreFactor\(env\)/);
 assert.match(searchSource, /\)\.slice\(0, input\.topK\);/);
@@ -85,6 +85,8 @@ assert.match(searchSource, /\)\.slice\(0, input\.topK\);/);
 assert.match(digestSource, /const summary = \[`【\$\{input\.dateLabel\} 重要原文】`, reason \? `保存原因：\$\{reason\}` : ""\]/);
 assert.match(digestSource, /content: quote,\s+summary,/s);
 assert.match(digestSource, /if \(v2Enabled && strategy !== "legacy"\) \{\s+const page = await listMemoriesPage\(env\.DB,/s);
+assert.match(digestSource, /modelResult\.reason !== "model_invalid_json" \|\| modelResult\.finishReason !== "length"/);
+assert.match(digestSource, /messages = messages\.slice\(0, nextSize\);/);
 
 assert.match(recallSource, /function readRecallMinScore\(env: Env, override\?: number\): number/);
 assert.match(recallSource, /RECALL_MIN_SCORE \?\? 0\.15/);

@@ -829,20 +829,18 @@ export async function runDailyMemoryDigest(
   }
 
   const maxMessages = readDreamMaxMessages(env);
-  const messages = await listMessagesByNamespaceInRange(env.DB, {
+  const fetchedMessages = await listMessagesByNamespaceInRange(env.DB, {
     namespace,
     startCreatedAt: startIso,
     endCreatedAt: endIso,
     afterCreatedAt: cursorState.after,
     limit: maxMessages
   });
-  if (messages.length === 0) {
+  if (fetchedMessages.length === 0) {
     await writeCursor(env.DB, cursorName, `done:${cursorState.after ?? startIso}`);
     return { ran: false, mode: "dream", date: dateLabel, reason: "no_messages", startIso, endIso, cursor };
   }
 
-  const lastMessage = messages[messages.length - 1];
-  const hasMore = messages.length >= maxMessages;
   const memoryContextLimit = readDreamMemoryContextLimit(env);
   const strategy = readDreamStrategy(env);
   const v2Enabled = isV2Enabled(env);
@@ -866,22 +864,43 @@ export async function runDailyMemoryDigest(
     console.error("dream: failed to list existing memories", error);
   }
   const cleanedEmptyMemories = v2Enabled && strategy === "review" ? 0 : await cleanEmptyMemories(env, namespace);
+  const excerptLimit = readDreamExcerptLimit(env);
+  const fetchedHasMore = fetchedMessages.length >= maxMessages;
 
-  const prompt = buildDigestPrompt({
-    dateLabel,
-    startIso,
-    endIso,
-    messages,
-    existingMemories,
-    excerptLimit: readDreamExcerptLimit(env),
-    hasMore
-  });
-  const modelResult = await callDigestModel(env, prompt, {
-    dateLabel,
-    messageCount: messages.length,
-    memoryCount: existingMemories.length,
-    hasMore
-  });
+  let messages = fetchedMessages;
+  let hasMore = fetchedHasMore;
+  let modelResult: DigestModelCallResult;
+  for (;;) {
+    const prompt = buildDigestPrompt({
+      dateLabel,
+      startIso,
+      endIso,
+      messages,
+      existingMemories,
+      excerptLimit,
+      hasMore
+    });
+    modelResult = await callDigestModel(env, prompt, {
+      dateLabel,
+      messageCount: messages.length,
+      memoryCount: existingMemories.length,
+      hasMore
+    });
+    if (modelResult.digest) break;
+    if (modelResult.reason !== "model_invalid_json" || modelResult.finishReason !== "length" || messages.length <= 1) break;
+
+    const nextSize = Math.max(1, Math.floor(messages.length / 2));
+    if (nextSize >= messages.length) break;
+    console.warn("dream: retrying with smaller batch after length-truncated JSON", {
+      date: dateLabel,
+      previousMessageCount: messages.length,
+      nextMessageCount: nextSize,
+      model: modelResult.model
+    });
+    messages = messages.slice(0, nextSize);
+    hasMore = true;
+  }
+
   const digest = modelResult.digest;
   if (!digest) {
     console.error("dream: model did not return valid JSON; cursor not advanced", {
@@ -903,6 +922,7 @@ export async function runDailyMemoryDigest(
       finishReason: modelResult.finishReason
     };
   }
+  const lastMessage = messages[messages.length - 1];
   const messageIds = messages.map((message) => message.id);
 
   // v2 path: fact_key upsert + L1 digest + longtail + yesterday_log

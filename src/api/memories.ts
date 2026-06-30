@@ -9,6 +9,7 @@ import { exportMemories } from "../memory/export";
 import { filterAndCompressMemoriesWithMeta } from "../memory/filter";
 import { formatMemoryPatch } from "../memory/inject";
 import { searchMemories, toMemoryApiRecord } from "../memory/search";
+import { deleteVectorMemory } from "../memory/vectorStore";
 import {
   countActiveMemoriesByType,
   countMemoryCandidates,
@@ -785,7 +786,11 @@ async function handleDeleteMemory(
   if (scopeError) return scopeError;
 
   const existing = await getMemoryById(env.DB, { namespace: profile.namespace, id });
-  if (!existing || existing.namespace !== profile.namespace) return openAiError("Memory not found", 404);
+  if (!existing || existing.namespace !== profile.namespace) {
+    const deletedLegacyVector = await deleteVectorMemory(env, id);
+    if (deletedLegacyVector) return json({ data: { id, deleted: true, source: "legacy_vectorize" } });
+    return openAiError("Memory not found", 404);
+  }
 
   const deleted = await softDeleteMemory(env.DB, { namespace: profile.namespace, id });
   if (deleted) await deleteMemoryEmbeddingBestEffort(env, deleted);

@@ -1064,14 +1064,9 @@ function memoryAdmin() {
       }
     },
     get memoryTypes() {
-      const rows = this.stats.memory_type_counts || [];
-      const seen = {};
-      const list = ['all'];
-      this.canonicalMemoryTypes.forEach(function(type) { seen[type] = true; list.push(type); });
-      rows.forEach(function(row) {
-        if (row.type && !seen[row.type]) { seen[row.type] = true; list.push(row.type); }
-      });
-      return list;
+      // 固定分类：全部 + 8 个 canonical 类型。类型在写入层已被 clampMemoryType
+      // 收敛，面板不再派生自由类型 tab。全部 用于排查历史脏数据。
+      return ['all'].concat(this.canonicalMemoryTypes);
     },
     memoryTypeLabel(type) {
       return type === 'all' ? '全部' : type;

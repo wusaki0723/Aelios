@@ -384,28 +384,66 @@ export async function listLongtail(
   return result.results ?? [];
 }
 
+export async function fetchLongtailByIds(
+  db: D1Database,
+  input: { namespace: string; ids: string[] }
+): Promise<LongtailRow[]> {
+  const ids = [...new Set(input.ids.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(", ");
+  const result = await db
+    .prepare(
+      `SELECT id, namespace, content, ts, source_message_ids
+       FROM longtail
+       WHERE namespace = ? AND id IN (${placeholders})`
+    )
+    .bind(input.namespace, ...ids)
+    .all<LongtailRow>();
+  return result.results ?? [];
+}
+
+function candidateLongtailRecordIds(id: string): string[] {
+  const trimmed = id.trim();
+  if (!trimmed) return [];
+  const ids = [trimmed];
+  if (trimmed.startsWith("lt_lt_")) ids.push(trimmed.slice("lt_".length));
+  return [...new Set(ids)];
+}
+
+function candidateLongtailVectorIds(id: string): string[] {
+  return [...new Set(candidateLongtailRecordIds(id).flatMap((recordId) => [recordId, `lt_${recordId}`]))];
+}
+
 export async function deleteLongtail(
   env: Env,
   input: { namespace: string; id: string }
 ): Promise<"deleted" | "not_found" | "vector_error"> {
+  const recordIds = candidateLongtailRecordIds(input.id);
+  if (recordIds.length === 0) return "not_found";
+  const placeholders = recordIds.map(() => "?").join(", ");
   const existing = await env.DB
-    .prepare("SELECT id FROM longtail WHERE namespace = ? AND id = ?")
-    .bind(input.namespace, input.id)
+    .prepare(`SELECT id FROM longtail WHERE namespace = ? AND id IN (${placeholders}) LIMIT 1`)
+    .bind(input.namespace, ...recordIds)
     .first<{ id: string }>();
-  if (!existing) return "not_found";
 
   if (env.VECTORIZE) {
     try {
-      await env.VECTORIZE.deleteByIds([`lt_${input.id}`]);
+      const vectorIds = [
+        ...candidateLongtailVectorIds(input.id),
+        ...(existing ? candidateLongtailVectorIds(existing.id) : [])
+      ];
+      await env.VECTORIZE.deleteByIds([...new Set(vectorIds)]);
     } catch (error) {
       console.error("longtail vector delete failed, keeping D1 row", { id: input.id, error });
       return "vector_error";
     }
   }
 
+  if (!existing) return "deleted";
+
   await env.DB
     .prepare("DELETE FROM longtail WHERE namespace = ? AND id = ?")
-    .bind(input.namespace, input.id)
+    .bind(input.namespace, existing.id)
     .run();
   return "deleted";
 }

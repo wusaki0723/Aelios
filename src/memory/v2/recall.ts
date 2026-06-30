@@ -15,6 +15,7 @@ import {
   getDailyLog,
   listPrecious,
   listGlossary,
+  fetchLongtailByIds,
   matchGlossary,
   markMemoriesInjected,
   markPreciousInjected
@@ -410,17 +411,38 @@ async function recallLongtailByVector(
       score: number;
       metadata?: Record<string, unknown>;
     }>;
-    return matches.map((m) => ({
-      id: String(m.metadata?.ref_id ?? m.id),
-      content: String(m.metadata?.content ?? ""),
-      type: "longtail",
-      score: m.score,
-      source_layer: "longtail" as const
-    }));
+    const candidateIds = matches.flatMap((match) => candidateLongtailIds(match));
+    const rows = await fetchLongtailByIds(env.DB, { namespace: input.namespace, ids: candidateIds });
+    const rowById = new Map(rows.map((row) => [row.id, row]));
+    return matches.flatMap((match) => {
+      for (const id of candidateLongtailIds(match)) {
+        const row = rowById.get(id);
+        if (!row) continue;
+        return [{
+          id: row.id,
+          content: row.content,
+          type: "longtail",
+          score: match.score,
+          source_layer: "longtail" as const
+        }];
+      }
+      return [];
+    });
   } catch (error) {
     console.error("v2 longtail vector recall failed", error);
     return [];
   }
+}
+
+function candidateLongtailIds(match: { id: string; metadata?: Record<string, unknown> }): string[] {
+  const ids: string[] = [];
+  const refId = match.metadata?.ref_id;
+  if (typeof refId === "string" && refId.trim()) ids.push(refId.trim());
+  if (match.id.trim()) {
+    ids.push(match.id.trim());
+    if (match.id.startsWith("lt_lt_")) ids.push(match.id.slice("lt_".length));
+  }
+  return [...new Set(ids)];
 }
 
 // LIKE 占位兜底: longtail 表第 2/3 步还没向量索引时, 按 content LIKE 子串匹配。

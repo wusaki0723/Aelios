@@ -166,11 +166,21 @@ export default {
     }
 
     if (shouldRunDailyMaintenance) {
+      // Run dream and retention as independent tasks. Retention is best-effort
+      // cleanup: if it throws (e.g. a transient D1 error), it must NOT take the
+      // dream down with it — otherwise the dream's cursor never advances and
+      // the whole nightly maintenance silently fails. So retention gets its own
+      // .catch that swallows the rejection into a logged result, and dream is
+      // a separate top-level task that settles on its own.
+      tasks.push(runDailyMemoryDigestBatches(env, namespace));
       tasks.push(
-        Promise.all([
-          runDailyMemoryDigestBatches(env, namespace),
-          runMemoryRetention(env, namespace)
-        ]).then(([digest, retention]) => ({ digest, retention }))
+        runMemoryRetention(env, namespace).then(
+          (retention) => ({ ok: true as const, retention }),
+          (error) => {
+            console.error("scheduled memory retention failed", { namespace, error: String(error) });
+            return { ok: false as const, error: String(error) };
+          }
+        )
       );
     }
 

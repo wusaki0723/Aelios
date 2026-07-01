@@ -1,10 +1,14 @@
 import { nowIso } from "../utils/time";
 
 // ---------------------------------------------------------------------------
-// Batch size for SQL IN clauses and Vectorize deleteByIds
+// Batch size for SQL IN clauses and Vectorize deleteByIds.
+// D1 limits each statement to 100 bound variables. Queries here bind an extra
+// leading param (namespace) on top of the id placeholders, so a batch of N ids
+// binds N+1 variables. Keep the batch size below 99 to stay safely under the
+// limit; 90 leaves headroom for any future extra params.
 // ---------------------------------------------------------------------------
 
-export const RETENTION_BATCH_SIZE = 100;
+export const RETENTION_BATCH_SIZE = 90;
 
 // ---------------------------------------------------------------------------
 // messages: delete rows older than cutoff

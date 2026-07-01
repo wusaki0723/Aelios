@@ -156,14 +156,19 @@ export async function markPreciousInjected(
   db: D1Database,
   input: { namespace: string; ids: string[] }
 ): Promise<void> {
-  if (input.ids.length === 0) return;
-  const placeholders = input.ids.map(() => "?").join(", ");
-  await db
-    .prepare(
-      `UPDATE precious SET last_injected_at = ? WHERE namespace = ? AND id IN (${placeholders})`
-    )
-    .bind(nowIso(), input.namespace, ...input.ids)
-    .run();
+  const ids = uniqueStrings(input.ids);
+  if (ids.length === 0) return;
+  const stamp = nowIso();
+  for (let i = 0; i < ids.length; i += SQLITE_BIND_BATCH_SIZE) {
+    const batch = ids.slice(i, i + SQLITE_BIND_BATCH_SIZE);
+    const placeholders = batch.map(() => "?").join(", ");
+    await db
+      .prepare(
+        `UPDATE precious SET last_injected_at = ? WHERE namespace = ? AND id IN (${placeholders})`
+      )
+      .bind(stamp, input.namespace, ...batch)
+      .run();
+  }
 }
 
 // =====================================================================
@@ -643,7 +648,11 @@ export interface MemoryV2Patch {
   validAsOf?: string | null;
 }
 
-const SQLITE_BIND_BATCH_SIZE = 100;
+// D1 limits each statement to 100 bound variables. Some batched queries bind
+// an extra leading param (e.g. last_injected_at) on top of the id placeholders,
+// so N ids bind N+1 variables. Keep the batch size under 99 to stay safe; 90
+// leaves headroom for any future extra params.
+const SQLITE_BIND_BATCH_SIZE = 90;
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter((value) => value.trim()))];

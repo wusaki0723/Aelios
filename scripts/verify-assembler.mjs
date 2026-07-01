@@ -2464,7 +2464,7 @@ const IDEMPOTENCY_KEYS_RETENTION_DAYS = 7;
 const MEMORY_ACTIVE_EXPIRY_DAYS = 180;
 const MEMORY_HARD_DELETE_DAYS = 30;
 const THROTTLE_HOURS = 24;
-const RETENTION_BATCH_SIZE = 100;
+const RETENTION_BATCH_SIZE = 90;
 
 function daysAgo(days) {
   return new Date(Date.now() - days * 86_400_000).toISOString();
@@ -2703,7 +2703,7 @@ check("retention constants are correct", () => {
   assert.strictEqual(MEMORY_ACTIVE_EXPIRY_DAYS, 180);
   assert.strictEqual(MEMORY_HARD_DELETE_DAYS, 30);
   assert.strictEqual(THROTTLE_HOURS, 24);
-  assert.strictEqual(RETENTION_BATCH_SIZE, 100);
+  assert.strictEqual(RETENTION_BATCH_SIZE, 90);
 });
 
 check("full lifecycle: active → expired → hard-deletable chain", () => {
@@ -2869,40 +2869,40 @@ check("legacy fallback: mixed — active D1 returns as d1Record, expired blocks 
 
 // --- Batch processing ---
 
-check("batch: RETENTION_BATCH_SIZE is 100", () => {
-  assert.strictEqual(RETENTION_BATCH_SIZE, 100);
+check("batch: RETENTION_BATCH_SIZE is 90", () => {
+  assert.strictEqual(RETENTION_BATCH_SIZE, 90);
 });
 
-check("batch: 250 ids split into 3 batches (100+100+50)", () => {
+check("batch: 250 ids split into 3 batches (90+90+70)", () => {
   const ids = Array.from({ length: 250 }, (_, i) => `id_${i}`);
   const batches = [];
   for (let i = 0; i < ids.length; i += RETENTION_BATCH_SIZE) {
     batches.push(ids.slice(i, i + RETENTION_BATCH_SIZE));
   }
   assert.strictEqual(batches.length, 3);
-  assert.strictEqual(batches[0].length, 100);
-  assert.strictEqual(batches[1].length, 100);
-  assert.strictEqual(batches[2].length, 50);
+  assert.strictEqual(batches[0].length, 90);
+  assert.strictEqual(batches[1].length, 90);
+  assert.strictEqual(batches[2].length, 70);
 });
 
-check("batch: 100 ids fit in exactly 1 batch", () => {
-  const ids = Array.from({ length: 100 }, (_, i) => `id_${i}`);
+check("batch: 90 ids fit in exactly 1 batch", () => {
+  const ids = Array.from({ length: 90 }, (_, i) => `id_${i}`);
   const batches = [];
   for (let i = 0; i < ids.length; i += RETENTION_BATCH_SIZE) {
     batches.push(ids.slice(i, i + RETENTION_BATCH_SIZE));
   }
   assert.strictEqual(batches.length, 1);
-  assert.strictEqual(batches[0].length, 100);
+  assert.strictEqual(batches[0].length, 90);
 });
 
-check("batch: 101 ids split into 2 batches (100+1)", () => {
-  const ids = Array.from({ length: 101 }, (_, i) => `id_${i}`);
+check("batch: 91 ids split into 2 batches (90+1)", () => {
+  const ids = Array.from({ length: 91 }, (_, i) => `id_${i}`);
   const batches = [];
   for (let i = 0; i < ids.length; i += RETENTION_BATCH_SIZE) {
     batches.push(ids.slice(i, i + RETENTION_BATCH_SIZE));
   }
   assert.strictEqual(batches.length, 2);
-  assert.strictEqual(batches[0].length, 100);
+  assert.strictEqual(batches[0].length, 90);
   assert.strictEqual(batches[1].length, 1);
 });
 
@@ -2917,9 +2917,17 @@ check("batch: empty ids produce 0 batches", () => {
 
 check("batch: stats accumulate across batches", () => {
   // Simulates: each batch returns a count, stats sum them
-  const batchResults = [100, 100, 50];
+  const batchResults = [90, 90, 70];
   const total = batchResults.reduce((sum, n) => sum + n, 0);
   assert.strictEqual(total, 250);
+});
+
+check("batch: D1 bind limit — IN clause + 1 leading param stays <= 100", () => {
+  // D1 limits each statement to 100 bound variables. Queries like
+  //   DELETE FROM memories WHERE namespace = ? AND id IN (?, ?, ...)
+  // bind 1 leading param + N ids. The batch size must keep 1 + N <= 100.
+  assert.ok(RETENTION_BATCH_SIZE + 1 <= 100, "RETENTION_BATCH_SIZE must leave room for the leading namespace param");
+  assert.ok(RETENTION_BATCH_SIZE <= 99, "RETENTION_BATCH_SIZE must be <= 99 to stay under D1's 100-variable limit");
 });
 
 check("batch: expireOldMemories returns expired refs with vector_ids", () => {
@@ -2948,8 +2956,8 @@ check("batch: Vectorize deleteByIds should be batched like hardDeleteMemories", 
     batches.push(vectorIds.slice(i, i + RETENTION_BATCH_SIZE));
   }
   assert.strictEqual(batches.length, 2);
-  assert.strictEqual(batches[0].length, 100);
-  assert.strictEqual(batches[1].length, 50);
+  assert.strictEqual(batches[0].length, 90);
+  assert.strictEqual(batches[1].length, 60);
 });
 
 // ---------------------------------------------------------------------------

@@ -39,6 +39,8 @@ export interface Env {
   MEMORY_INJECT_DECAY_FACTOR?: string;
   // memory_recall 最低分地板，默认 0.15；调用方可用 min_score 临时覆盖。
   RECALL_MIN_SCORE?: string;
+  // true = 丢弃没有有效 D1 记录背书的 Vectorize 命中 (清理 legacy 孤儿向量)，默认 false 保持现状。
+  RECALL_REQUIRE_D1_BACKING?: string;
   ENABLE_DAILY_MEMORY_DIGEST?: string;
   DREAM_NAMESPACE?: string;
   DREAM_MAX_MESSAGES?: string;

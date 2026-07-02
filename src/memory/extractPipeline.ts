@@ -543,6 +543,27 @@ export async function runMemoryExtractionWindow(
   };
 }
 
+// eval 干跑用——走真实抽取 prompt 和归一化，不落库。
+export async function runExtractionDryRun(
+  env: Env,
+  input: { namespace: string; messages: Array<{ role: string; content: string }> }
+): Promise<{ memories: ExtractedMemory[]; model?: string; reason?: string }> {
+  const fixedCreatedAt = "2026-01-01T00:00:00.000Z";
+  const messages: MessageRecord[] = input.messages.map((message, index) => ({
+    id: `eval_${index + 1}`,
+    conversation_id: "eval",
+    namespace: input.namespace,
+    role: message.role === "system" || message.role === "assistant" || message.role === "tool" ? message.role : "user",
+    content: message.content,
+    source: "eval",
+    created_at: fixedCreatedAt
+  }));
+
+  const existingFactKeys = await listActiveFactKeys(env.DB, { namespace: input.namespace });
+  const modelResult = await callExtractModel(env, messages, existingFactKeys);
+  return { memories: modelResult.memories, model: modelResult.model, reason: modelResult.reason };
+}
+
 export async function runMemoryExtractionBatches(
   env: Env,
   namespace: string,

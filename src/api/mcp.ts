@@ -16,6 +16,7 @@ import {
 } from "../db/v2";
 import { filterAndCompressMemories } from "../memory/filter";
 import { exportMemories } from "../memory/export";
+import { runExtractionDryRun } from "../memory/extractPipeline";
 import { buildBootPackage, isV2Enabled, runRecall } from "../memory/v2/recall";
 import { toMemoryApiRecord } from "../memory/search";
 import {
@@ -185,6 +186,31 @@ function getTools(): Array<Record<string, unknown>> {
           conversation_id: { type: "string" },
           source: { type: "string" },
           auto_extract: { type: "boolean" },
+          namespace: { type: "string" }
+        },
+        required: ["messages"]
+      }
+    },
+    {
+      name: "memory_extract_dryrun",
+      description:
+        "Dry-run the real extraction pipeline (same prompt, same model, same normalization) against " +
+        "a synthetic message window. Returns candidate memories WITHOUT persisting, touching cursors, " +
+        "or writing candidates. For eval harnesses.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          messages: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                role: { type: "string" },
+                content: {}
+              },
+              required: ["role", "content"]
+            }
+          },
           namespace: { type: "string" }
         },
         required: ["messages"]
@@ -525,6 +551,21 @@ async function callTool(
         auto_extract: args.auto_extract !== false
       }
     });
+  }
+
+  if (params.name === "memory_extract_dryrun") {
+    if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
+    const messages = readMessages(args.messages);
+    if (messages.length === 0) return toolError("messages must contain at least one message");
+    const namespace = resolveNamespace(profile, args.namespace);
+    const result = await runExtractionDryRun(env, {
+      namespace,
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: typeof message.content === "string" ? message.content : ""
+      }))
+    });
+    return textToolResult({ data: result });
   }
 
   // --- Aelios 记忆库 v2 端点 (母帖 #11 第 2 步) ---

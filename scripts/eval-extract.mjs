@@ -137,7 +137,8 @@ async function callDryRun(endpoint, input) {
   }
 
   const parsed = JSON.parse(text);
-  return Array.isArray(parsed?.memories) ? parsed.memories : [];
+  const memories = parsed?.data?.memories ?? parsed?.memories;
+  return Array.isArray(memories) ? memories : [];
 }
 
 async function loadCases(file) {

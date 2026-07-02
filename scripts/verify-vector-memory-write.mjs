@@ -28,6 +28,7 @@ const queueProducerSource = readFileSync(resolve(root, "src/queue/producer.ts"),
 const dbV2Source = readFileSync(resolve(root, "src/db/v2.ts"), "utf8");
 const memoriesApiSource = readFileSync(resolve(root, "src/api/memories.ts"), "utf8");
 const adminSource = readFileSync(resolve(root, "src/api/admin.ts"), "utf8");
+const candidateJudgeSource = readFileSync(resolve(root, "src/memory/candidateJudge.ts"), "utf8");
 
 function indexOfOrThrow(haystack, needle) {
   const index = haystack.indexOf(needle);
@@ -81,7 +82,10 @@ assert.match(source, /if \(input\.status && record\.status !== input\.status\) c
 assert.match(searchSource, /function getLegacyFallbackLimit\(env: Env, topK: number\): number/);
 assert.match(searchSource, /function getLegacyFallbackScoreFactor\(env: Env\): number/);
 assert.match(searchSource, /const vectorTopK = Math\.min\(Math\.max\(input\.topK \* 3, input\.topK \+ legacyFallbackLimit\), 50\);/);
-assert.match(searchSource, /const legacySlots = Math\.max\(0, Math\.min\(input\.topK - d1Records\.length, legacyFallbackLimit\)\);/);
+assert.match(searchSource, /function isRequireD1Backing\(env: Env\): boolean/);
+assert.match(searchSource, /const legacySlots = requireD1Backing\s+\? 0\s+:\s+Math\.max\(0, Math\.min\(input\.topK - d1Records\.length, legacyFallbackLimit\)\);/s);
+assert.match(searchSource, /const unbackedDropped = requireD1Backing \? legacyCandidates\.length : 0;/);
+assert.match(searchSource, /if \(vectorOutcome\) \{\s+unbackedDropped = vectorOutcome\.unbackedDropped;\s+\}/s);
 assert.match(searchSource, /score: record\.score \* getLegacyFallbackScoreFactor\(env\)/);
 assert.match(searchSource, /\)\.slice\(0, input\.topK\);/);
 
@@ -91,7 +95,10 @@ assert.match(digestSource, /createMemoryCandidate\(env\.DB, \{/);
 assert.match(digestSource, /source: "dream_excerpt"/);
 assert.match(digestSource, /const archiveDeletesToLongtail = shouldArchiveDreamDeletesToLongtail\(env\);/);
 assert.match(digestSource, /if \(archiveDeletesToLongtail\) \{\s+const lt = await createLongtail/s);
-assert.match(digestSource, /if \(v2Enabled && strategy !== "legacy"\) \{\s+const page = await listMemoriesPage\(env\.DB,/s);
+assert.match(digestSource, /async function selectDreamMemoryContext/);
+assert.match(digestSource, /existingMemories = await selectDreamMemoryContext\(env, \{/);
+assert.match(digestSource, /const results = await searchMemories\(env, \{/);
+assert.match(digestSource, /const page = await listMemoriesPage\(env\.DB, \{/);
 assert.match(digestSource, /modelResult\.reason !== "model_invalid_json" \|\| modelResult\.finishReason !== "length"/);
 assert.match(digestSource, /messages = messages\.slice\(0, nextSize\);/);
 
@@ -172,5 +179,7 @@ assert.doesNotMatch(dbV2Source, /input\.newType \?\? "world_fact"/);
 assert.match(digestSource, /v2 首次抽取由每 4 小时 extractor 负责/);
 assert.doesNotMatch(digestSource, /for \(const memory of digest\.memories_to_add \?\? \[\]\) \{\s+const factKey/s);
 assert.doesNotMatch(digestSource, /added \+= 0/);
+assert.match(candidateJudgeSource, /judgeResult\.score >= approveMin && judgeResult\.grounded && judgeResult\.durable/);
+assert.match(candidateJudgeSource, /judgeResult\.score <= discardMax \|\| !judgeResult\.grounded \|\| !judgeResult\.durable/);
 
 console.log("verify-vector-memory-write: all checks passed");

@@ -334,9 +334,12 @@ export async function searchMemoriesWithProvenance(
   let records: Array<MemoryRecord & { score: number; backed: boolean }>;
   let unbackedDropped = 0;
 
+  if (vectorOutcome) {
+    unbackedDropped = vectorOutcome.unbackedDropped;
+  }
+
   if (vectorOutcome && vectorOutcome.records.length > 0) {
     records = vectorOutcome.records;
-    unbackedDropped = vectorOutcome.unbackedDropped;
   } else {
     // D1 全文兜底: 结果本来就来自 memories 表, 天然全部有 D1 背书。
     const textRecords = await searchMemoriesByText(env.DB, {

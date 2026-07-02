@@ -278,7 +278,7 @@ export async function runCandidateJudge(
       judged += 1;
       const decisionNote = `judge: ${judgeResult.reason}`;
 
-      if (judgeResult.score >= approveMin && judgeResult.grounded) {
+      if (judgeResult.score >= approveMin && judgeResult.grounded && judgeResult.durable) {
         const memoryId = await approveCandidate(env, namespace, candidate, tags, sourceMessageIds);
         await updateMemoryCandidateStatus(env.DB, {
           namespace,
@@ -288,7 +288,7 @@ export async function runCandidateJudge(
           decisionNote
         });
         approved += 1;
-      } else if (judgeResult.score <= discardMax || !judgeResult.grounded) {
+      } else if (judgeResult.score <= discardMax || !judgeResult.grounded || !judgeResult.durable) {
         await updateMemoryCandidateStatus(env.DB, {
           namespace,
           id: candidate.id,

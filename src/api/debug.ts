@@ -10,6 +10,7 @@ import {
   updateVectorMemory,
   vectorMetadataToMemoryRecord
 } from "../memory/vectorStore";
+import { runVectorDoctor } from "../memory/vectorDoctor";
 import { json, openAiError } from "../utils/json";
 import type { Env, KeyProfile, MemoryApiRecord } from "../types";
 import { readBoolean, readJsonObject, readPositiveInt, readString } from "../utils/request";
@@ -352,6 +353,34 @@ export async function handleVectorReindex(request: Request, env: Env): Promise<R
       ok: false,
       error: error instanceof Error ? error.message : String(error)
     }, { status: 500 });
+  }
+}
+
+// 清点 Vectorize/D1 一致性、揪出 v1 残留/孤儿向量，可选一键清掉 (只删 Vectorize，不动 D1)。
+// 详见 memory/vectorDoctor.ts 头注释。auth 跟 handleVectorReindex 保持一致
+// (要求 memory:write，因为 cleanup=true 会产生真实删除，即便默认是 dry-run 报告)。
+export async function handleVectorDoctor(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+  if (!auth.profile.scopes.includes("memory:write")) {
+    return openAiError("Missing required scope: memory:write", 403);
+  }
+
+  const body = await readJsonObject(request);
+  if (!body) return openAiError("Request body must be a JSON object", 400);
+
+  const namespace = readString(body.namespace) || auth.profile.namespace;
+  const limit = readPositiveInt(body.limit, 1000, 5000);
+  // Defensive: cleanup only runs on an explicit boolean true, never on
+  // truthy strings/numbers — accidental cleanup on prod vectors is the
+  // one failure mode this endpoint cannot shrug off.
+  const cleanup = body.cleanup === true;
+
+  try {
+    const report = await runVectorDoctor(env, { namespace, cleanup, limit });
+    return json({ ok: true, data: report });
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
 

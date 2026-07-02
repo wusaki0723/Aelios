@@ -20,10 +20,11 @@ import {
   markMemoriesInjected,
   markPreciousInjected
 } from "../../db/v2";
-import { searchMemories } from "../search";
+import { searchMemoriesWithProvenance } from "../search";
+import type { MemoryApiRecordWithProvenance } from "../search";
 import { filterAndCompressMemories } from "../filter";
 import { createEmbedding } from "../embedding";
-import type { Env, MemoryApiRecord } from "../../types";
+import type { Env } from "../../types";
 
 // --- 开关 ---
 
@@ -251,6 +252,13 @@ export interface RecallHit {
   source_layer: "glossary" | "memory" | "longtail";
   // 闸二标记: 被核心层去重剔除的命中, 供调试/面板观察。
   deduped_against_core?: boolean;
+  // --- provenance (additive)：命中出处，供面板观察清 v2 存量 vs legacy 残留。 ---
+  // D1 memories.source 列值 (extract/dream/judge/doctor_rebuild_v2 等)；longtail 固定 "longtail"；无法确定为 null。
+  source: string | null;
+  // 是否有有效 D1 记录背书 (排除已删除/legacy 孤儿向量)。longtail 命中本来就来自 D1，恒为 true。
+  backed: boolean;
+  // 与 source_layer 中 memory/longtail 对应，供面板按类型统计 (不含 glossary，glossary 命中走单独的 glossary_hits)。
+  kind: "memory" | "longtail";
 }
 
 export interface RecallResult {
@@ -263,6 +271,11 @@ export interface RecallResult {
     floored_count: number;
     min_score: number;
     total: number;
+    // --- provenance (additive) ---
+    // 本次响应里没有 D1 背书的命中数 (RECALL_REQUIRE_D1_BACKING=true 时应恒为 0，因为已被丢弃而非透传)
+    unbacked_count: number;
+    // RECALL_REQUIRE_D1_BACKING=true 时，因严格过滤被丢弃的孤儿向量命中数
+    unbacked_dropped: number;
   };
 }
 
@@ -273,7 +286,10 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
     return {
       hits: [],
       glossary_hits: [],
-      meta: { decayed_ids: [], deduped_ids: [], floored_ids: [], floored_count: 0, min_score: minScore, total: 0 }
+      meta: {
+        decayed_ids: [], deduped_ids: [], floored_ids: [], floored_count: 0, min_score: minScore, total: 0,
+        unbacked_count: 0, unbacked_dropped: 0
+      }
     };
   }
   const minScore = readRecallMinScore(env, input.min_score);
@@ -288,21 +304,25 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
   // 2. memories 向量召回 (L4 + L6 world_fact，active only)
   //    闸一: 不查 precious。precious 归 boot 固定供给, 不进每轮 query 召回池。
   const k = Math.min(Math.max(Math.floor(input.k ?? 20), 1), 100);
-  const rawMemories: MemoryApiRecord[] = await searchMemories(env, {
+  const searchResult = await searchMemoriesWithProvenance(env, {
     namespace: input.namespace,
     query,
     types: input.types,
     topK: k
   });
+  const rawMemories: MemoryApiRecordWithProvenance[] = searchResult.records;
+  // 严格模式下 (RECALL_REQUIRE_D1_BACKING=true) 已经在 search 层丢弃的孤儿向量命中数。
+  const unbackedDropped = searchResult.unbacked_dropped;
 
   // 2.5. 三重管线: reranker 重排 + 小模型压缩 (v1 的 filter.ts 现成逻辑)
   //      prepareCandidates: 去重、sanitize、min score 过滤、按质量排序
   //      rerankMemories: Workers AI bge-reranker-base 重排
   //      LLM compress: 小模型把每条压缩成短句，无关的输出 null 剔除
-  const memories = await filterAndCompressMemories(env, {
+  //      filterAndCompressMemories 内部全程 {...memory} 展开，backed/source provenance 字段原样透传。
+  const memories = (await filterAndCompressMemories(env, {
     query,
     memories: rawMemories
-  });
+  })) as MemoryApiRecordWithProvenance[];
 
   // 3. 闸三: last_injected_at 近期注入过的降权 (不动 importance)
   const windowMs = injectDecayWindowMs(env);
@@ -316,7 +336,10 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
       content: m.content,
       type: m.type,
       score: (m.score ?? 0) * decay,
-      source_layer: "memory" as const
+      source_layer: "memory" as const,
+      source: m.source ?? null,
+      backed: m.backed,
+      kind: "memory" as const
     };
   });
 
@@ -376,7 +399,9 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
       floored_ids: flooredIds,
       floored_count: flooredIds.length,
       min_score: minScore,
-      total: allHits.length
+      total: allHits.length,
+      unbacked_count: allHits.filter((h) => !h.backed).length,
+      unbacked_dropped: unbackedDropped
     }
   };
 }
@@ -423,7 +448,11 @@ async function recallLongtailByVector(
           content: row.content,
           type: "longtail",
           score: match.score,
-          source_layer: "longtail" as const
+          source_layer: "longtail" as const,
+          // longtail 表本身就是 D1 行 (fetchLongtailByIds 命中才走到这里)，不经 memories.source，天然有背书。
+          source: "longtail",
+          backed: true,
+          kind: "longtail" as const
         }];
       }
       return [];
@@ -469,6 +498,9 @@ async function recallLongtailByLike(
     content: r.content,
     type: "longtail",
     score: 0.1,
-    source_layer: "longtail" as const
+    source_layer: "longtail" as const,
+    source: "longtail",
+    backed: true,
+    kind: "longtail" as const
   }));
 }

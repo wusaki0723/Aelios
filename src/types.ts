@@ -39,6 +39,8 @@ export interface Env {
   MEMORY_INJECT_DECAY_FACTOR?: string;
   // memory_recall 最低分地板，默认 0.15；调用方可用 min_score 临时覆盖。
   RECALL_MIN_SCORE?: string;
+  // true = 丢弃没有有效 D1 记录背书的 Vectorize 命中 (清理 legacy 孤儿向量)，默认 false 保持现状。
+  RECALL_REQUIRE_D1_BACKING?: string;
   ENABLE_DAILY_MEMORY_DIGEST?: string;
   DREAM_NAMESPACE?: string;
   DREAM_MAX_MESSAGES?: string;
@@ -54,6 +56,15 @@ export interface Env {
   EXTRACT_MAX_TOKENS?: string;
   EXTRACT_REVIEW_CONFIDENCE?: string;
   DEDUP_COSINE?: string;
+  // L4 每区（type）active 条数硬上限，0 或不设 = 关闭（母帖第一节，对抗膨胀的闸）
+  MEMORY_ZONE_CAP?: string;
+  // 候选队列自动评审（judge），默认关闭；开启后 4 小时 cron 在抽取后跑一轮
+  CANDIDATE_JUDGE_ENABLED?: string;
+  JUDGE_MODEL?: string;
+  JUDGE_MAX_CANDIDATES?: string;
+  // judge 评分阈值：>= APPROVE_MIN 自动入库，<= DISCARD_MAX 自动丢弃，中间留人工
+  JUDGE_APPROVE_MIN?: string;
+  JUDGE_DISCARD_MAX?: string;
   DAILY_DIGEST_MAX_MESSAGES?: string;
   DAILY_DIGEST_MAX_RUNS?: string;
   DAILY_DIGEST_MAX_TOKENS?: string;

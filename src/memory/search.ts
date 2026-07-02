@@ -5,6 +5,21 @@ import { createEmbedding } from "./embedding";
 
 type MetadataMap = Record<string, unknown>;
 
+// provenance (additive)：MemoryApiRecord 之外挂一个 backed 位，
+// 标记这条命中是否有有效 D1 记录背书。不改 types.ts 里的 MemoryApiRecord，
+// 只在本文件扩展一层，调用方按 MemoryApiRecord 用照样成立 (结构类型, 多出的字段不碍事)。
+export interface MemoryApiRecordWithProvenance extends MemoryApiRecord {
+  backed: boolean;
+}
+
+export interface SearchMemoriesResult {
+  records: MemoryApiRecordWithProvenance[];
+  // 本次响应里没有 D1 背书的命中数 (RECALL_REQUIRE_D1_BACKING=true 时应恒为 0，因为已被丢弃)
+  unbacked_count: number;
+  // RECALL_REQUIRE_D1_BACKING=true 时，因严格过滤被丢弃的孤儿向量命中数
+  unbacked_dropped: number;
+}
+
 function parseJsonArray(value: string | null): string[] {
   if (!value) return [];
   try {
@@ -77,6 +92,11 @@ function getLegacyFallbackLimit(env: Env, topK: number): number {
 function getLegacyFallbackScoreFactor(env: Env): number {
   const value = Number(env.MEMORY_LEGACY_VECTOR_FALLBACK_SCORE_FACTOR || 0.45);
   return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.45;
+}
+
+// 严格 D1 背书过滤开关。默认 off = 现状 (legacy 孤儿向量走 legacyOnlyRecords 兜底透传)。
+function isRequireD1Backing(env: Env): boolean {
+  return env.RECALL_REQUIRE_D1_BACKING === "true";
 }
 
 function getRefId(match: VectorizeMatch): string | null {
@@ -202,10 +222,16 @@ async function queryVectorize(
   });
 }
 
+interface VectorizeSearchOutcome {
+  records: Array<MemoryRecord & { score: number; backed: boolean }>;
+  // 严格模式下因没有 D1 背书被整批丢弃的孤儿向量命中数 (未开严格模式恒为 0)
+  unbackedDropped: number;
+}
+
 async function searchWithVectorize(
   env: Env,
   input: { namespace: string; query: string; types?: string[]; topK: number }
-): Promise<Array<MemoryRecord & { score: number }> | null> {
+): Promise<VectorizeSearchOutcome | null> {
   if (!env.VECTORIZE || !input.query.trim()) return null;
 
   const vector = await createEmbedding(env, input.query);
@@ -258,44 +284,71 @@ async function searchWithVectorize(
 
   // Use allRecords (not just active) so inactive D1 records block legacy fallback
   const foundD1Ids = new Set(allRecords.map((record) => record.id));
-  const d1Records = activeRecords.map((record) => ({ ...record, score: scoredIds.get(record.id) ?? 0 }));
-  const legacySlots = Math.max(0, Math.min(input.topK - d1Records.length, legacyFallbackLimit));
+  const d1Records = activeRecords.map((record) => ({
+    ...record,
+    score: scoredIds.get(record.id) ?? 0,
+    backed: true
+  }));
+
+  // legacyCandidates: Vectorize 命中里解不出有效 D1 记录的孤儿向量 (deleted/从未落 D1 的老数据)。
+  const legacyCandidates = legacyRecords.filter((record) => !foundD1Ids.has(record.id));
+  const requireD1Backing = isRequireD1Backing(env);
+  // 严格模式: 不给 legacy 兜底留任何位置，孤儿向量整批丢弃而不是降权透传。
+  const legacySlots = requireD1Backing
+    ? 0
+    : Math.max(0, Math.min(input.topK - d1Records.length, legacyFallbackLimit));
   const legacyOnlyRecords = legacySlots > 0
-    ? legacyRecords
-      .filter((record) => !foundD1Ids.has(record.id))
+    ? legacyCandidates
       .sort((a, b) => b.score + b.importance * 0.05 - (a.score + a.importance * 0.05))
       .slice(0, legacySlots)
       .map((record) => ({
         ...record,
         score: record.score * getLegacyFallbackScoreFactor(env),
-        source: record.source === "vectorize" ? "legacy_vectorize" : record.source || "legacy_vectorize"
+        source: record.source === "vectorize" ? "legacy_vectorize" : record.source || "legacy_vectorize",
+        backed: false
       }))
     : [];
+  const unbackedDropped = requireD1Backing ? legacyCandidates.length : 0;
 
-  return [...d1Records, ...legacyOnlyRecords].sort(
+  const records = [...d1Records, ...legacyOnlyRecords].sort(
     (a, b) => b.score + b.importance * 0.05 - (a.score + a.importance * 0.05)
   ).slice(0, input.topK);
+
+  return { records, unbackedDropped };
 }
 
-export async function searchMemories(
+// searchMemories 的完整版本: 额外带 provenance 计数 (unbacked_count / unbacked_dropped)，
+// 供 v2 recall 管线在 meta 里透出，观察 legacy 孤儿向量的占比。
+export async function searchMemoriesWithProvenance(
   env: Env,
   input: { namespace: string; query: string; types?: string[]; topK?: number }
-): Promise<MemoryApiRecord[]> {
+): Promise<SearchMemoriesResult> {
   const topK = getTopK(env, input.topK);
-  let records = await searchWithVectorize(env, {
+  const vectorOutcome = await searchWithVectorize(env, {
     namespace: input.namespace,
     query: input.query,
     types: input.types,
     topK
   });
 
-  if (!records || records.length === 0) {
-    records = await searchMemoriesByText(env.DB, {
+  let records: Array<MemoryRecord & { score: number; backed: boolean }>;
+  let unbackedDropped = 0;
+
+  if (vectorOutcome) {
+    unbackedDropped = vectorOutcome.unbackedDropped;
+  }
+
+  if (vectorOutcome && vectorOutcome.records.length > 0) {
+    records = vectorOutcome.records;
+  } else {
+    // D1 全文兜底: 结果本来就来自 memories 表, 天然全部有 D1 背书。
+    const textRecords = await searchMemoriesByText(env.DB, {
       namespace: input.namespace,
       query: input.query,
       types: input.types,
       limit: Math.max(topK, 50)
     });
+    records = textRecords.map((record) => ({ ...record, backed: true }));
   }
 
   await markMemoriesRecalled(env.DB, {
@@ -307,7 +360,20 @@ export async function searchMemories(
   const lifecycleRows = await fetchMemoryLifecycleRows(env.DB, records.map((r) => r.id));
   const lifecycleByMemoryId = new Map(lifecycleRows.map((lc) => [lc.memory_id, lc]));
 
-  return records.map((record) =>
-    toMemoryApiRecord(record, record.score, lifecycleByMemoryId.get(record.id) ?? null)
-  );
+  const apiRecords: MemoryApiRecordWithProvenance[] = records.map((record) => ({
+    ...toMemoryApiRecord(record, record.score, lifecycleByMemoryId.get(record.id) ?? null),
+    backed: record.backed
+  }));
+
+  const unbackedCount = apiRecords.filter((record) => !record.backed).length;
+
+  return { records: apiRecords, unbacked_count: unbackedCount, unbacked_dropped: unbackedDropped };
+}
+
+export async function searchMemories(
+  env: Env,
+  input: { namespace: string; query: string; types?: string[]; topK?: number }
+): Promise<MemoryApiRecordWithProvenance[]> {
+  const result = await searchMemoriesWithProvenance(env, input);
+  return result.records;
 }

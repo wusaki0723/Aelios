@@ -476,6 +476,39 @@ export async function countActiveMemoriesByType(
   return result.results ?? [];
 }
 
+// L4 每区硬上限用：单个 type 当前 active 条数。
+export async function countActiveMemoriesOfType(
+  db: D1Database,
+  input: { namespace: string; type: string }
+): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS count FROM memories WHERE namespace = ? AND status = 'active' AND type = ?")
+    .bind(input.namespace, input.type)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
+// 抽取器判重用：库里已有的 fact_key 列表，防止同一件事被重复造 key。
+// fact_key 存在 memory_lifecycle 侧车表，不在 memories 本体 (见文件头注释)，所以要 join。
+export async function listActiveFactKeys(
+  db: D1Database,
+  input: { namespace: string; limit?: number }
+): Promise<string[]> {
+  const limit = Math.min(Math.max(Math.floor(input.limit ?? 300), 1), 1000);
+  const result = await db
+    .prepare(
+      `SELECT DISTINCT lc.fact_key AS fact_key
+       FROM memories m
+       JOIN memory_lifecycle lc ON lc.memory_id = m.id
+       WHERE m.namespace = ? AND m.status = 'active' AND lc.fact_key IS NOT NULL AND lc.fact_key != ''
+       ORDER BY lc.fact_key
+       LIMIT ?`
+    )
+    .bind(input.namespace, limit)
+    .all<{ fact_key: string }>();
+  return (result.results ?? []).map((row) => row.fact_key);
+}
+
 export interface MemoryCandidateRow {
   id: string;
   namespace: string;

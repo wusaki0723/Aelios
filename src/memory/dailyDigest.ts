@@ -12,7 +12,7 @@ import {
   updateVectorMemory
 } from "./vectorStore";
 import { isV2Enabled } from "./v2/recall";
-import { toMemoryApiRecord } from "./search";
+import { searchMemories, toMemoryApiRecord } from "./search";
 import {
   upsertMemoryByFactKey,
   supersedeMemory,
@@ -462,6 +462,7 @@ function buildDigestPrompt(input: {
     "- v2 的首次抽取已由每 4 小时 extractor 负责；memories_to_add 默认给空数组，不要把当天聊天首次抽取成新长期记忆。",
     "- 当多条旧记忆重复，保留更完整的一条并删除重复项；必要时先 update 保留项。",
     "- pinned=true 的旧记忆不能删除，只能在 memories_to_update 中提出更保守的补充。",
+    "- 旧记忆里的临时计划/意图（例如“打算下个月充值X”）如果已经过期、已经发生、或被当天新信息取代，优先更新成持久事实或直接删除，不要让过期的打算一直躺在库里。",
     "- 站在“我=助手”的视角写。关于用户，用“你……”；关于助手承诺，用“我需要……”。",
     "- 不要提到 D1、Vectorize、RAG、数据库、记忆系统、代理层等实现细节。",
     "",
@@ -847,6 +848,50 @@ async function applyDreamV2(
   return { added, updated, deleted, excerpts, longtail: longtailCount };
 }
 
+const DREAM_CONTEXT_QUERY_MAX_MESSAGES = 20;
+const DREAM_CONTEXT_QUERY_MAX_CHARS = 4000;
+
+function buildDreamContextQuery(messages: MessageRecord[]): string {
+  const recent = messages.slice(-DREAM_CONTEXT_QUERY_MAX_MESSAGES);
+  const text = recent
+    .map((message) => message.content.trim())
+    .filter(Boolean)
+    .join("\n");
+  return truncate(text, DREAM_CONTEXT_QUERY_MAX_CHARS);
+}
+
+// dream 的记忆上下文按“和当天聊天最相关”挑选，而不是固定翻旧记忆列表第一页——
+// listMemoriesPage 按 pinned/importance/updated_at 排序，dream 每晚只会看到同一批高分记忆，
+// 永远看不到中间层的重复项；改成用当天聊天做向量检索，才能命中真正该合并/纠正的旧记忆。
+// 搜索失败或无结果时，回退到原先的分页列表，保证 dream 不因此空转。
+async function selectDreamMemoryContext(
+  env: Env,
+  input: { namespace: string; messages: MessageRecord[]; limit: number }
+): Promise<MemoryApiRecord[]> {
+  const query = buildDreamContextQuery(input.messages);
+  if (query) {
+    try {
+      const results = await searchMemories(env, {
+        namespace: input.namespace,
+        query,
+        topK: input.limit
+      });
+      const active = results.filter((record) => record.status === "active");
+      if (active.length > 0) return active;
+    } catch (error) {
+      console.error("dream: relevance-based memory context search failed, falling back to page listing", error);
+    }
+  }
+
+  const page = await listMemoriesPage(env.DB, {
+    namespace: input.namespace,
+    status: "active",
+    limit: input.limit,
+    offset: 0
+  });
+  return page.records.map((record) => toMemoryApiRecord(record));
+}
+
 export async function runDailyMemoryDigest(
   env: Env,
   namespace: string,
@@ -884,13 +929,11 @@ export async function runDailyMemoryDigest(
   let existingMemories: MemoryApiRecord[] = [];
   try {
     if (v2Enabled && strategy !== "legacy") {
-      const page = await listMemoriesPage(env.DB, {
+      existingMemories = await selectDreamMemoryContext(env, {
         namespace,
-        status: "active",
-        limit: memoryContextLimit,
-        offset: 0
+        messages: fetchedMessages,
+        limit: memoryContextLimit
       });
-      existingMemories = page.records.map((record) => toMemoryApiRecord(record));
     } else {
       existingMemories = (await listVectorMemories(env, {
         namespace,

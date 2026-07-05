@@ -107,24 +107,14 @@ function assemble(ctx) {
     blockIds.push("client_system");
   }
 
-  // Block 5: dynamic_memory_patch (dynamic)
-  if (ctx.memoryPatch) {
-    systemBlocks.push({ role: "system", text: ctx.memoryPatch });
-    blockIds.push("dynamic_memory_patch");
-  }
-
-  // Messages: history + current user
+  // Messages: history only (breakpoints computed before turn_context)
   for (const msg of ctx.history ?? []) {
     messages.push(msg);
   }
-  if (ctx.currentUser) {
-    messages.push(ctx.currentUser);
-  }
 
-  // --- 4-breakpoint computation ---
+  // --- 4-breakpoint computation (history only) ---
   const breakpoints = [];
 
-  // Breakpoint 2: system anchor on persona_pinned
   if (anchorIndex >= 0) {
     breakpoints.push({
       target: "system",
@@ -133,13 +123,12 @@ function assemble(ctx) {
     });
   }
 
-  // Message-level breakpoints: bridge + tail
   const msgBlockCounts = messages.map((m) => countMessageBlocks(m.content));
 
   let tailIdx = -1;
   let tailBlockIdx = -1;
-  if (messages.length >= 2) {
-    tailIdx = messages.length - 2;
+  if (messages.length >= 1) {
+    tailIdx = messages.length - 1;
     tailBlockIdx = Math.max(0, msgBlockCounts[tailIdx] - 1);
   }
 
@@ -176,6 +165,15 @@ function assemble(ctx) {
         });
       }
     }
+  }
+
+  if (ctx.memoryPatch) {
+    messages.push({ role: "user", content: ctx.memoryPatch });
+    blockIds.push("dynamic_memory_patch");
+  }
+
+  if (ctx.currentUser) {
+    messages.push(ctx.currentUser);
   }
 
   return {
@@ -374,18 +372,15 @@ test("T7: memory patch change → system cache stable", () => {
   const a = assemble({ ...BASE_CTX, memoryPatch: null });
   const b = assemble({ ...BASE_CTX, memoryPatch: "<memories>new recall</memories>" });
 
-  const stableIdx = Math.min(
-    a.meta.block_ids.indexOf("dynamic_memory_patch") >= 0
-      ? a.meta.block_ids.indexOf("dynamic_memory_patch")
-      : a.system_blocks.length,
-    b.meta.block_ids.indexOf("dynamic_memory_patch") >= 0
-      ? b.meta.block_ids.indexOf("dynamic_memory_patch")
-      : b.system_blocks.length
-  );
-
-  for (let i = 0; i < stableIdx; i++) {
+  assert.strictEqual(a.system_blocks.length, b.system_blocks.length);
+  for (let i = 0; i < a.system_blocks.length; i++) {
     assert.strictEqual(a.system_blocks[i].text, b.system_blocks[i].text);
   }
+
+  const aTurn = a.messages.find((m) => typeof m.content === "string" && m.content.includes("<memories>"));
+  const bTurn = b.messages.find((m) => typeof m.content === "string" && m.content.includes("<memories>"));
+  assert.strictEqual(aTurn, undefined);
+  assert.ok(bTurn);
 });
 
 // T8: tools stable → identical wire bytes

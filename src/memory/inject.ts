@@ -35,6 +35,58 @@ function sanitizeMemoryContent(text: string): string {
     .trim();
 }
 
+/**
+ * Legacy v1 injection: inserts a system message after leading system messages
+ * (before history). Poisons Anthropic prompt-cache prefix — avoid for chat-proxy.
+ */
+export function injectMemoryPatchAsSystemMessage(
+  messages: OpenAIChatMessage[],
+  patch: string
+): OpenAIChatMessage[] {
+  const trimmed = patch.trim();
+  if (!trimmed) return messages;
+
+  let insertAt = 0;
+  while (insertAt < messages.length && messages[insertAt].role === "system") {
+    insertAt += 1;
+  }
+
+  return [
+    ...messages.slice(0, insertAt),
+    { role: "system", content: trimmed },
+    ...messages.slice(insertAt),
+  ];
+}
+
+/**
+ * Cache-safe v1 injection: user message immediately before the current user turn.
+ */
+export function injectMemoryPatchBeforeCurrentUser(
+  messages: OpenAIChatMessage[],
+  patch: string
+): OpenAIChatMessage[] {
+  const trimmed = patch.trim();
+  if (!trimmed) return messages;
+
+  let lastUserIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+
+  if (lastUserIdx < 0) {
+    return [...messages, { role: "user", content: trimmed }];
+  }
+
+  return [
+    ...messages.slice(0, lastUserIdx),
+    { role: "user", content: trimmed },
+    ...messages.slice(lastUserIdx),
+  ];
+}
+
 export function formatMemoryPatch(memories: MemoryApiRecord[]): string {
   if (memories.length === 0) return "";
 

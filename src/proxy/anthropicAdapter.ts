@@ -562,8 +562,8 @@ export async function buildAnthropicNativeRequest(
 //      Default mode A: last block of the message before current_user.
 //      Opt-in mode B: first text block of current_user.
 //
-// Dynamic content (dynamic_memory_patch, time reminders, current user
-// memories) is appended AFTER all breakpoints — never cached.
+// Per-turn dynamic content (turn_context blocks) lives in the message stream
+// immediately before current_user — after all breakpoints, never cached.
 //
 // Top-level cache_control (automatic) is NEVER set.
 // Rolling cache is OFF by default (opt-in via env).
@@ -608,15 +608,12 @@ export function buildAnthropicRequestFromAssembled(
     thinking = undefined;
   }
 
-  const { systemBlocks, dynamicMemoryPatch } = splitDynamicMemorySystemBlock(assembled);
-  const system = assembledToAnthropicSystem(systemBlocks);
+  const system = assembledToAnthropicSystem(assembled.system_blocks);
   const { wire: messages, indexMap } = assembledToAnthropicMessages(assembled.messages);
 
-  // Apply explicit cache breakpoints (system + message level)
+  // Apply explicit cache breakpoints (system + message level).
+  // turn_context blocks are already in assembled.messages before current_user.
   applyExplicitCacheBreakpoints(system, messages, indexMap, assembled, env);
-
-  // dynamic_memory_patch goes AFTER all cache breakpoints as uncached user context
-  appendUncachedUserContext(messages, dynamicMemoryPatch);
 
   // Stable tools JSON: keys sorted, so Anthropic's cache sees identical bytes
   const stableToolsJson = tools

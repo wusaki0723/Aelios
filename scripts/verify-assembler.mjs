@@ -52,6 +52,19 @@ const BLOCK_ORDER = [
 
 const PERSONA_MEMORY_TYPES = ["identity", "persona"];
 
+const TURN_CONTEXT_BLOCK_IDS = [
+  "client_volatile_context",
+  "dynamic_memory_patch",
+  "vision_context",
+];
+
+function countMessageBlocks(content) {
+  if (content == null) return 0;
+  if (typeof content === "string") return 1;
+  if (!Array.isArray(content)) return 0;
+  return content.length;
+}
+
 // ---------------------------------------------------------------------------
 // Text constants — must match src/assembler/blocks.ts
 // ---------------------------------------------------------------------------
@@ -159,14 +172,74 @@ function splitClientSystemTexts(texts) {
   return { stable, volatile };
 }
 
+function computeCacheBreakpoints(historyMessages, anchorIndex) {
+  const LOOKBACK = 16;
+  const breakpoints = [];
+
+  if (anchorIndex >= 0) {
+    breakpoints.push({
+      target: "system",
+      system_block_index: anchorIndex,
+      reason: "system",
+    });
+  }
+
+  const msgBlockCounts = historyMessages.map((m) => countMessageBlocks(m.content));
+
+  let tailIdx = -1;
+  let tailBlockIdx = -1;
+  if (historyMessages.length >= 1) {
+    tailIdx = historyMessages.length - 1;
+    tailBlockIdx = Math.max(0, msgBlockCounts[tailIdx] - 1);
+  }
+
+  if (tailIdx >= 0) {
+    breakpoints.push({
+      target: "message",
+      message_index: tailIdx,
+      block_index: tailBlockIdx,
+      reason: "tail",
+    });
+
+    let blocksBeforeTail = 0;
+    for (let i = 0; i < tailIdx; i++) blocksBeforeTail += msgBlockCounts[i];
+
+    if (blocksBeforeTail > LOOKBACK) {
+      let target = blocksBeforeTail - LOOKBACK;
+      let accumulated = 0;
+      let bridgeMsgIdx = 0;
+      let bridgeBlockIdx = 0;
+      for (let i = 0; i < tailIdx; i++) {
+        if (accumulated + msgBlockCounts[i] > target) {
+          bridgeMsgIdx = i;
+          bridgeBlockIdx = target - accumulated;
+          break;
+        }
+        accumulated += msgBlockCounts[i];
+      }
+      if (bridgeMsgIdx !== tailIdx || bridgeBlockIdx !== tailBlockIdx) {
+        breakpoints.push({
+          target: "message",
+          message_index: bridgeMsgIdx,
+          block_index: bridgeBlockIdx,
+          reason: "bridge",
+        });
+      }
+    }
+  }
+
+  return breakpoints;
+}
+
 function assemble(ctx) {
   const systemBlocks = [];
   const messages = [];
   const enabledBlockIds = [];
+  const turnContextParts = [];
   let anchorIndex = -1;
+  let clientSystemText = null;
 
   for (const blockId of BLOCK_ORDER) {
-    // --- passthrough blocks → messages ---
     if (blockId === "recent_history") {
       let added = false;
       for (const msg of ctx.historyMessages) {
@@ -181,17 +254,9 @@ function assemble(ctx) {
     }
 
     if (blockId === "current_user") {
-      if (ctx.currentUserMessage) {
-        const out = messageToOutput(ctx.currentUserMessage);
-        if (out) {
-          messages.push(out);
-          enabledBlockIds.push(blockId);
-        }
-      }
       continue;
     }
 
-    // --- stable / dynamic blocks → system_blocks ---
     let text = null;
 
     if (blockId === "proxy_static_rules") {
@@ -220,9 +285,6 @@ function assemble(ctx) {
       const { stable } = splitClientSystemTexts(texts);
       if (stable.length > 0) text = stable.join("\n\n");
     } else if (blockId === "boot_stable") {
-      // v2 boot package: digest + yesterday_log + glossary.
-      // Positioned AFTER cache anchor — can change daily without
-      // invalidating the cached system prefix.
       if (ctx.boot) {
         const parts = [];
         if (ctx.boot.digest) {
@@ -241,31 +303,39 @@ function assemble(ctx) {
         }
         if (parts.length > 0) text = parts.join("\n");
       }
-    } else if (blockId === "client_volatile_context") {
-      const texts = ctx.systemMessages
-        .filter((m) => m.role === "system")
-        .map((m) => (typeof m.content === "string" ? m.content.trim() : ""))
-        .filter(Boolean);
-      const { volatile } = splitClientSystemTexts(texts);
-      if (volatile.length > 0) {
-        text = [
-          "<volatile_context>",
-          "以下是客户端提供的当前时间/日期等本轮上下文，只用于当前回复，不要当作长期设定。",
-          ...volatile,
-          "</volatile_context>",
-        ].join("\n");
+    } else if (TURN_CONTEXT_BLOCK_IDS.includes(blockId)) {
+      if (blockId === "client_volatile_context") {
+        const texts = ctx.systemMessages
+          .filter((m) => m.role === "system")
+          .map((m) => (typeof m.content === "string" ? m.content.trim() : ""))
+          .filter(Boolean);
+        const { volatile } = splitClientSystemTexts(texts);
+        if (volatile.length > 0) {
+          text = [
+            "<volatile_context>",
+            "以下是客户端提供的当前时间/日期等本轮上下文，只用于当前回复，不要当作长期设定。",
+            ...volatile,
+            "</volatile_context>",
+          ].join("\n");
+        }
+      } else if (blockId === "dynamic_memory_patch") {
+        if (ctx.ragMemories.length > 0) {
+          const lines = ctx.ragMemories.map(
+            (m) => `- [${m.type}][importance=${m.importance.toFixed(2)}] ${m.content}`
+          );
+          text = ["<memories>", ...lines, "</memories>"].join("\n");
+        }
+      } else if (blockId === "vision_context") {
+        if (ctx.visionOutput) {
+          text = `<vision_context>\n${ctx.visionOutput}\n</vision_context>`;
+        }
       }
-    } else if (blockId === "dynamic_memory_patch") {
-      if (ctx.ragMemories.length > 0) {
-        const lines = ctx.ragMemories.map(
-          (m) => `- [${m.type}][importance=${m.importance.toFixed(2)}] ${m.content}`
-        );
-        text = ["<memories>", ...lines, "</memories>"].join("\n");
+
+      if (text !== null) {
+        turnContextParts.push(text);
+        enabledBlockIds.push(blockId);
       }
-    } else if (blockId === "vision_context") {
-      if (ctx.visionOutput) {
-        text = `<vision_context>\n${ctx.visionOutput}\n</vision_context>`;
-      }
+      continue;
     }
 
     if (text === null) continue;
@@ -274,19 +344,29 @@ function assemble(ctx) {
     if (blockId === "client_system") {
       systemBlock.cache_control = { type: "ephemeral", ttl: "5m" };
       anchorIndex = systemBlocks.length;
+      clientSystemText = text;
     }
 
     systemBlocks.push(systemBlock);
     enabledBlockIds.push(blockId);
   }
 
-  let clientSystemHash = "none";
-  for (let i = 0; i < systemBlocks.length; i++) {
-    if (enabledBlockIds[i] === "client_system") {
-      clientSystemHash = simpleHash(systemBlocks[i].text);
-      break;
+  const breakpoints = computeCacheBreakpoints(messages, anchorIndex);
+
+  const turnContextText = turnContextParts.join("\n\n").trim();
+  if (turnContextText) {
+    messages.push({ role: "user", content: turnContextText });
+  }
+
+  if (ctx.currentUserMessage) {
+    const out = messageToOutput(ctx.currentUserMessage);
+    if (out) {
+      messages.push(out);
+      enabledBlockIds.push("current_user");
     }
   }
+
+  const clientSystemHash = clientSystemText ? simpleHash(clientSystemText) : "none";
 
   return {
     system_blocks: systemBlocks,
@@ -295,6 +375,7 @@ function assemble(ctx) {
       anchor_index: anchorIndex,
       block_ids: enabledBlockIds,
       client_system_hash: clientSystemHash,
+      cache_breakpoints: breakpoints,
     },
   };
 }
@@ -501,13 +582,13 @@ check("no other block has cache_control", () => {
   }
 });
 
-check("stable blocks come before client_system, dynamic after", () => {
+check("stable blocks come before client_system; turn_context not in system_blocks", () => {
   const ctx = makeBaseCtx();
+  ctx.ragMemories = [{ type: "note", importance: 0.8, content: "用户喜欢猫" }];
   const result = assemble(ctx);
 
   const csPos = result.meta.block_ids.indexOf("client_system");
   const stableBefore = ["proxy_static_rules", "persona_pinned", "preset_lite"];
-  const dynamicAfter = ["dynamic_memory_patch", "vision_context"];
 
   for (const id of stableBefore) {
     const pos = result.meta.block_ids.indexOf(id);
@@ -515,15 +596,19 @@ check("stable blocks come before client_system, dynamic after", () => {
       assert.ok(pos < csPos, `${id} should come before client_system`);
     }
   }
-  for (const id of dynamicAfter) {
+
+  for (const id of TURN_CONTEXT_BLOCK_IDS) {
     const pos = result.meta.block_ids.indexOf(id);
     if (pos >= 0) {
-      assert.ok(pos > csPos, `${id} should come after client_system`);
+      assert.ok(
+        !result.system_blocks.some((b) => b.text.includes("<memories>") || b.text.includes("<volatile_context>")),
+        `${id} must not appear in system_blocks`
+      );
     }
   }
 });
 
-check("volatile time lines move after client_system without cache_control", () => {
+check("volatile time lines move to turn_context user message before current_user", () => {
   const ctx = makeBaseCtx();
   ctx.systemMessages = [{
     role: "system",
@@ -539,15 +624,18 @@ check("volatile time lines move after client_system without cache_control", () =
   const volatileIdx = result.meta.block_ids.indexOf("client_volatile_context");
 
   assert.ok(clientIdx >= 0, "client_system should remain present");
-  assert.ok(volatileIdx > clientIdx, "volatile context should come after client_system");
+  assert.ok(volatileIdx >= 0, "volatile context block should be enabled");
   assert.ok(result.system_blocks[clientIdx].text.includes("你是稳定角色。"));
   assert.ok(!result.system_blocks[clientIdx].text.includes("2026-05-22"));
-  assert.ok(result.system_blocks[volatileIdx].text.includes("Current date: Friday, May 22, 2026"));
-  assert.ok(result.system_blocks[volatileIdx].text.includes("当前时间：2026-05-22 16:42:00"));
-  assert.strictEqual(result.system_blocks[volatileIdx].cache_control, undefined);
+
+  const turnContextMsg = result.messages[result.messages.length - 2];
+  assert.strictEqual(turnContextMsg.role, "user");
+  assert.ok(turnContextMsg.content.includes("Current date: Friday, May 22, 2026"));
+  assert.ok(turnContextMsg.content.includes("当前时间：2026-05-22 16:42:00"));
+  assert.ok(turnContextMsg.content.includes("<volatile_context>"));
 });
 
-check("volatile section headers move entire client block after cache anchor", () => {
+check("volatile section headers move to turn_context message stream", () => {
   const ctx = makeBaseCtx();
   ctx.systemMessages = [
     {
@@ -564,13 +652,13 @@ check("volatile section headers move entire client block after cache anchor", ()
   ];
   const result = assemble(ctx);
   const clientIdx = result.meta.block_ids.indexOf("client_system");
-  const volatileIdx = result.meta.block_ids.indexOf("client_volatile_context");
   assert.ok(result.system_blocks[clientIdx].text.includes("稳定角色设定"));
   assert.ok(result.system_blocks[clientIdx].text.includes("稳定补充设定"));
   assert.ok(!result.system_blocks[clientIdx].text.includes("客户端每轮动态注入"));
-  assert.ok(result.system_blocks[volatileIdx].text.includes("【相关记忆】"));
-  assert.ok(result.system_blocks[volatileIdx].text.includes("客户端每轮动态注入"));
-  assert.strictEqual(result.system_blocks[volatileIdx].cache_control, undefined);
+
+  const turnContextMsg = result.messages[result.messages.length - 2];
+  assert.ok(turnContextMsg.content.includes("【相关记忆】"));
+  assert.ok(turnContextMsg.content.includes("客户端每轮动态注入"));
 });
 
 check("client_system_hash ignores changing top-level time variables", () => {
@@ -593,10 +681,9 @@ check("client_system_hash ignores changing top-level time variables", () => {
     a.system_blocks[a.meta.block_ids.indexOf("client_system")].text,
     b.system_blocks[b.meta.block_ids.indexOf("client_system")].text
   );
-  assert.notStrictEqual(
-    a.system_blocks[a.meta.block_ids.indexOf("client_volatile_context")].text,
-    b.system_blocks[b.meta.block_ids.indexOf("client_volatile_context")].text
-  );
+  const aTurn = a.messages[a.messages.length - 2]?.content;
+  const bTurn = b.messages[b.messages.length - 2]?.content;
+  assert.notStrictEqual(aTurn, bTurn);
 });
 
 // ---------------------------------------------------------------------------
@@ -684,16 +771,17 @@ check("tool messages are excluded from recent_history", () => {
     );
   }
 
-  // Should have 3 history messages + 1 current_user = 4 total
-  assert.strictEqual(result.messages.length, 4);
+  // 3 history + turn_context + current_user
+  assert.strictEqual(result.messages.length, 5);
   assert.strictEqual(result.messages[0].role, "user");
   assert.strictEqual(result.messages[0].content, "查一下天气");
   assert.strictEqual(result.messages[1].role, "assistant");
   assert.strictEqual(result.messages[1].content, "好的");
   assert.strictEqual(result.messages[2].role, "assistant");
   assert.strictEqual(result.messages[2].content, "今天25度");
-  assert.strictEqual(result.messages[3].role, "user");
-  assert.strictEqual(result.messages[3].content, "今天天气怎么样？");
+  assert.ok(result.messages[3].content.includes("<memories>"));
+  assert.strictEqual(result.messages[4].role, "user");
+  assert.strictEqual(result.messages[4].content, "今天天气怎么样？");
 });
 
 check("system messages excluded from recent_history", () => {
@@ -718,9 +806,10 @@ check("all-tool history produces no recent_history messages", () => {
   ];
 
   const result = assemble(ctx);
-  // Only current_user in messages, no history
-  assert.strictEqual(result.messages.length, 1);
-  assert.strictEqual(result.messages[0].role, "user");
+  // turn_context + current_user, no history
+  assert.strictEqual(result.messages.length, 2);
+  assert.ok(result.messages[0].content.includes("<memories>"));
+  assert.strictEqual(result.messages[1].content, "今天天气怎么样？");
   assert.ok(!result.meta.block_ids.includes("recent_history"));
 });
 
@@ -819,12 +908,11 @@ check("anthropic messages convert user/assistant correctly", () => {
   const assembled = assemble(ctx);
   const anthropicMsgs = assembledToAnthropicMessages(assembled.messages);
 
-  // Should have at least 2 messages (history + current_user)
   assert.ok(anthropicMsgs.length >= 2);
-  // Last should be the current user message
   const last = anthropicMsgs[anthropicMsgs.length - 1];
   assert.strictEqual(last.role, "user");
-  assert.strictEqual(last.content[0].text, "今天天气怎么样？");
+  assert.ok(last.content[0].text.includes("<memories>"));
+  assert.strictEqual(last.content[last.content.length - 1].text, "今天天气怎么样？");
 });
 
 check("anthropic stringifies structured content for image", () => {
@@ -841,10 +929,9 @@ check("anthropic stringifies structured content for image", () => {
   const last = anthropicMsgs[anthropicMsgs.length - 1];
 
   assert.strictEqual(last.role, "user");
-  assert.strictEqual(last.content.length, 1);
-  assert.strictEqual(last.content[0].type, "text");
-  // Should be JSON-stringified since it's structured content
-  const parsed = JSON.parse(last.content[0].text);
+  assert.strictEqual(last.content.length, 2);
+  assert.ok(last.content[0].text.includes("<memories>"));
+  const parsed = JSON.parse(last.content[1].text);
   assert.strictEqual(parsed.length, 2);
   assert.strictEqual(parsed[1].type, "image_url");
 });
@@ -1086,7 +1173,7 @@ check("cache_control on client_system block only", () => {
   assert.strictEqual(anchorBlock.cache_control.type, "ephemeral");
 });
 
-check("dynamic memory block after client_system has no cache_control", () => {
+check("dynamic memory patch is in turn_context message, not system blocks", () => {
   const ctx = makeBaseCtx();
   ctx.ragMemories = [
     { type: "note", importance: 0.8, content: "用户喜欢猫" },
@@ -1095,11 +1182,16 @@ check("dynamic memory block after client_system has no cache_control", () => {
   const assembled = assemble(ctx);
   const anthropicSystem = assembledToAnthropicSystem(assembled.system_blocks);
 
-  // Find dynamic_memory_patch block
   const dmIdx = assembled.meta.block_ids.indexOf("dynamic_memory_patch");
   assert.ok(dmIdx >= 0, "dynamic_memory_patch should be present");
-  // It should NOT have cache_control
-  assert.strictEqual(anthropicSystem[dmIdx].cache_control, undefined);
+  assert.ok(
+    !anthropicSystem.some((b) => b.text.includes("<memories>")),
+    "memories must not be in system blocks"
+  );
+
+  const turnContextMsg = assembled.messages[assembled.messages.length - 2];
+  assert.ok(turnContextMsg.content.includes("<memories>"));
+  assert.ok(turnContextMsg.content.includes("用户喜欢猫"));
 });
 
 check("plain user/assistant messages order preserved through Anthropic conversion", () => {
@@ -1115,18 +1207,15 @@ check("plain user/assistant messages order preserved through Anthropic conversio
   const assembled = assemble(ctx);
   const anthropicMsgs = assembledToAnthropicMessages(assembled.messages);
 
-  // Should be: user, assistant, user, assistant, user (current)
   assert.strictEqual(anthropicMsgs.length, 5);
-  assert.strictEqual(anthropicMsgs[0].role, "user");
   assert.strictEqual(anthropicMsgs[0].content[0].text, "第一条");
-  assert.strictEqual(anthropicMsgs[1].role, "assistant");
   assert.strictEqual(anthropicMsgs[1].content[0].text, "回复第一条");
-  assert.strictEqual(anthropicMsgs[2].role, "user");
   assert.strictEqual(anthropicMsgs[2].content[0].text, "第二条");
-  assert.strictEqual(anthropicMsgs[3].role, "assistant");
   assert.strictEqual(anthropicMsgs[3].content[0].text, "回复第二条");
-  assert.strictEqual(anthropicMsgs[4].role, "user");
-  assert.strictEqual(anthropicMsgs[4].content[0].text, "第三条");
+  const last = anthropicMsgs[anthropicMsgs.length - 1];
+  assert.strictEqual(last.role, "user");
+  assert.ok(last.content[0].text.includes("<memories>"));
+  assert.strictEqual(last.content[last.content.length - 1].text, "第三条");
 });
 
 check("tool/tool_calls request → hasToolContent=true (fallback for both paths)", () => {
@@ -1156,10 +1245,9 @@ check("structured content (image_url) goes through JSON.stringify fallback in An
   const last = anthropicMsgs[anthropicMsgs.length - 1];
 
   assert.strictEqual(last.role, "user");
-  assert.strictEqual(last.content.length, 1);
-  assert.strictEqual(last.content[0].type, "text");
-  // JSON.stringify fallback — structured content is stringified, not lost
-  const parsed = JSON.parse(last.content[0].text);
+  assert.strictEqual(last.content.length, 2);
+  assert.ok(last.content[0].text.includes("<memories>"));
+  const parsed = JSON.parse(last.content[1].text);
   assert.ok(Array.isArray(parsed));
   assert.strictEqual(parsed.length, 2);
   assert.strictEqual(parsed[0].type, "text");
@@ -1221,22 +1309,19 @@ check("Anthropic path: full pipeline produces valid system + messages", () => {
   const systemBlocks = assembledToAnthropicSystem(assembled.system_blocks);
   applyCacheOverrides(systemBlocks, {});
 
-  // Should have: proxy_static_rules, persona_pinned(skip),
-  //              preset_lite, client_system, dynamic_memory_patch
   assert.ok(systemBlocks.length >= 3);
-  // First block text should contain proxy rules
   assert.ok(systemBlocks[0].text.includes("前端提供的角色"));
-  // Cache anchor present on client_system
   const anchor = systemBlocks.find((b) => b.cache_control);
   assert.ok(anchor);
   assert.ok(anchor.text.includes("咲咲的伴侣"));
+  assert.ok(!systemBlocks.some((b) => b.text.includes("<memories>")));
 
-  // Messages
   const messages = assembledToAnthropicMessages(assembled.messages);
   assert.ok(messages.length >= 1);
   const last = messages[messages.length - 1];
   assert.strictEqual(last.role, "user");
-  assert.strictEqual(last.content[0].text, "今天天气怎么样？");
+  assert.ok(last.content[0].text.includes("<memories>"));
+  assert.strictEqual(last.content[last.content.length - 1].text, "今天天气怎么样？");
 });
 
 // ---------------------------------------------------------------------------
@@ -1569,16 +1654,12 @@ function splitDynamicMemorySystemBlock(assembled) {
 
 function buildAnthropicRequestFromAssembled(req, targetModel, assembled, env) {
   const thinking = buildThinkingConfig(env, req);
-  const { systemBlocks, dynamicMemoryPatch } = splitDynamicMemorySystemBlock(assembled);
-  const system = assembledToAnthropicSystem(systemBlocks);
+  const system = assembledToAnthropicSystem(assembled.system_blocks);
   applyCacheOverrides(system, env);
   const messages = assembledToAnthropicMessages(assembled.messages);
-  // Rolling cache OFF by default (opt-in via env)
   if (env.ANTHROPIC_ROLLING_CACHE_ENABLED === "true") {
     applyRollingMessageCache(messages, env, system);
   }
-  // dynamic_memory_patch AFTER all breakpoints as uncached user context
-  appendUncachedUserContext(messages, dynamicMemoryPatch);
   return {
     model: targetModel.replace(/^anthropic\//i, ""),
     max_tokens: getAnthropicMaxTokens(req, env),
@@ -1702,8 +1783,10 @@ check("Anthropic helper: full rolling window caches latest user and earlier brid
 
   assert.strictEqual(firstUser.content[0].text, "窗口第一条用户消息");
   assert.deepStrictEqual(firstUserBlock.cache_control, { type: "ephemeral" });
-  assert.deepStrictEqual(lastUserOriginalBlock.cache_control, { type: "ephemeral" });
-  assert.strictEqual(lastUserAppendedBlock.cache_control, undefined);
+  assert.ok(lastUserOriginalBlock.text.includes("<memories>"));
+  assert.strictEqual(lastUserOriginalBlock.cache_control, undefined);
+  assert.strictEqual(lastUserAppendedBlock.text, "窗口最新用户消息");
+  assert.deepStrictEqual(lastUserAppendedBlock.cache_control, { type: "ephemeral" });
 });
 
 check("Anthropic helper: metadata.user_id comes from env only", () => {
@@ -1725,7 +1808,7 @@ check("Anthropic helper: metadata.user_id comes from env only", () => {
   assert.deepStrictEqual(withUser.metadata, { user_id: "aelios-user" });
 });
 
-check("Anthropic helper: dynamic memory is appended as uncached user context", () => {
+check("Anthropic helper: dynamic memory is turn_context before current user", () => {
   const ctx = makeBaseCtx();
   ctx.ragMemories = [
     { type: "note", importance: 0.8, content: "用户喜欢缓存命中率高一点" },
@@ -1739,16 +1822,16 @@ check("Anthropic helper: dynamic memory is appended as uncached user context", (
     {}
   );
 
-  // Dynamic memory should NOT be in system blocks
   assert.ok(!req.system.some((b) => b.text.includes("用户喜欢缓存命中率高一点")));
 
-  // Dynamic memory should be appended to the last user message
+  const turnContext = assembled.messages[assembled.messages.length - 2];
+  assert.ok(turnContext.content.includes("用户喜欢缓存命中率高一点"));
+
   const lastUser = [...req.messages].reverse().find((m) => m.role === "user");
   assert.ok(lastUser);
-  assert.strictEqual(lastUser.content[0].text, "继续优化缓存");
-  assert.ok(lastUser.content[1].text.includes("用户喜欢缓存命中率高一点"));
-  // Dynamic memory block should NOT have cache_control
-  assert.strictEqual(lastUser.content[1].cache_control, undefined);
+  assert.ok(lastUser.content[0].text.includes("用户喜欢缓存命中率高一点"));
+  assert.strictEqual(lastUser.content[lastUser.content.length - 1].text, "继续优化缓存");
+  assert.strictEqual(lastUser.content[0].cache_control, undefined);
 });
 
 check("Anthropic helper: ANTHROPIC_CACHE_ENABLED=false removes cache_control", () => {
@@ -1843,11 +1926,10 @@ check("Anthropic helper: structured content stringified (temporary fallback)", (
   const last = req.messages[req.messages.length - 1];
   assert.strictEqual(last.role, "user");
   assert.strictEqual(last.content.length, 2);
-  assert.strictEqual(last.content[0].type, "text");
-  const parsed = JSON.parse(last.content[0].text);
+  assert.ok(last.content[0].text.includes("<memories>"));
+  const parsed = JSON.parse(last.content[1].text);
   assert.strictEqual(parsed[1].type, "image_url");
-  assert.ok(last.content[1].text.includes("<memories>"));
-  assert.strictEqual(last.content[1].cache_control, undefined);
+  assert.strictEqual(last.content[0].cache_control, undefined);
 });
 
 check("Anthropic helper: model prefix stripped", () => {

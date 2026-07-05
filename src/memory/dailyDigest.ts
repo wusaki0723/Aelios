@@ -1,4 +1,4 @@
-import { finishDreamRun, hasSuccessfulDreamRun, insertDreamRun } from "../db/dreamRuns";
+import { finishDreamRun, insertDreamRun } from "../db/dreamRuns";
 import { listMessagesByNamespaceInRange } from "../db/messages";
 import { listMemoriesPage } from "../db/memories";
 import { readCursor, writeCursor } from "../db/retention";
@@ -652,6 +652,7 @@ async function callDigestModel(
         attempt: attempt + 1,
         error: message
       });
+      // Thrown fetch errors are almost always network-level and worth retrying.
       if (attempt < maxAttempts - 1) continue;
       return { digest: null, reason: "model_error", model };
     }
@@ -1051,12 +1052,9 @@ export async function runDreamBackfill(
     const rawCount = await countRawMessagesForDateLabel(env.DB, { namespace, dateLabel, timeZone });
     if (rawCount === 0) continue;
 
-    const alreadyOk = await hasSuccessfulDreamRun(env.DB, { namespace, dateLabel });
-    if (alreadyOk) continue;
-
     const result = await runDailyMemoryDigest(env, namespace, { dateLabel, trigger: "cron" });
     results.push({ dateLabel, result });
-    backfilled += 1;
+    if (result.ran) backfilled += 1;
   }
 
   return results;
@@ -1204,7 +1202,7 @@ export async function runDailyMemoryDigest(
   if (dryRun) {
     await safeFinishDreamRun(env.DB, {
       id: dreamRunId,
-      status: "ok",
+      status: "skipped",
       reason: "dry_run",
       model: modelResult.model,
       processedMessages: messages.length

@@ -292,7 +292,8 @@ async function handleRunDigest(
     for (let i = 0; i < maxRuns; i += 1) {
       const result = await runDailyMemoryDigest(env, namespace, {
         dateLabel: target,
-        force: force && i === 0
+        force: force && i === 0,
+        trigger: "manual"
       });
       runs.push(result);
       if (!result.ran || !result.stats?.hasMore) break;

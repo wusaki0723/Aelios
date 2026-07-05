@@ -91,19 +91,3 @@ export async function listDreamRunsForNamespace(
     .all<DreamRunRow>();
   return result.results ?? [];
 }
-
-export async function hasSuccessfulDreamRun(
-  db: D1Database,
-  input: { namespace: string; dateLabel: string }
-): Promise<boolean> {
-  const row = await db
-    .prepare(
-      `SELECT 1 AS found
-       FROM dream_runs
-       WHERE namespace = ? AND date_label = ? AND status = 'ok'
-       LIMIT 1`
-    )
-    .bind(input.namespace, input.dateLabel)
-    .first<{ found: number }>();
-  return Boolean(row?.found);
-}

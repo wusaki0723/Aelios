@@ -3,17 +3,27 @@ import { requireScope } from "../auth/scopes";
 import { getOrCreateConversation } from "../db/conversations";
 import { saveAssistantMessage, saveUserMessages } from "../db/messages";
 import { saveUsageLog } from "../db/usageLogs";
-import { extractLastUserText } from "../memory/inject";
+import {
+  extractLastUserText,
+  formatMemoryPatch,
+  injectMemoryPatchBeforeCurrentUser,
+} from "../memory/inject";
+import { searchMemories } from "../memory/search";
 import { assemble } from "../assembler/assemble";
 import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../queue/producer";
 import { buildBootPackage, isV2Enabled, runRecall } from "../memory/v2/recall";
 import {
+  buildAnthropicNativeRequest,
   buildAnthropicRequestFromAssembled,
   callAnthropicNative,
   getAnthropicCacheMode,
   parseAnthropicNonStream
 } from "../proxy/anthropicAdapter";
-import { buildOpenAIRequestFromAssembled, callOpenAICompat } from "../proxy/openaiAdapter";
+import {
+  buildOpenAICompatRequest,
+  buildOpenAIRequestFromAssembled,
+  callOpenAICompat,
+} from "../proxy/openaiAdapter";
 import { classifyProvider, resolveTargetModel } from "../proxy/resolveModel";
 import { streamAnthropicToOpenAI } from "../proxy/streamAnthropic";
 import { streamOpenAIWithTee } from "../proxy/streamOpenAI";
@@ -141,10 +151,32 @@ export async function handleChatCompletions(
   let clientSystemHash: string | null = null;
   let cacheAnchorBlock: string | null = null;
   try {
-    if (provider === "anthropic") {
-      // Always use assembler path — it handles tools, tool_calls, tool_results,
-      // and the 4-breakpoint cache strategy. The old native path is only needed
-      // for edge cases where the assembler can't handle the request.
+    if (!isV2Enabled(env)) {
+      const ragMemories = lastUserText
+        ? await searchMemories(env, { namespace, query: lastUserText })
+        : [];
+      const memoryPatch = formatMemoryPatch(ragMemories);
+      const patchedBody: OpenAIChatRequest = {
+        ...body,
+        messages: injectMemoryPatchBeforeCurrentUser(body.messages, memoryPatch),
+      };
+
+      if (provider === "anthropic") {
+        upstream = await callAnthropicNative(
+          env,
+          await buildAnthropicNativeRequest(patchedBody, {
+            env,
+            targetModel,
+            namespace,
+            boot: null,
+            recallHits: [],
+          }),
+          targetModel
+        );
+      } else {
+        upstream = await callOpenAICompat(env, buildOpenAICompatRequest(patchedBody, targetModel));
+      }
+    } else if (provider === "anthropic") {
       const assembled = assemble({
         request: body,
         pinnedPersonaMemories: null,
@@ -154,9 +186,12 @@ export async function handleChatCompletions(
       });
       clientSystemHash = assembled.meta.client_system_hash;
       cacheAnchorBlock = assembled.meta.anchor_index >= 0 ? "client_system" : null;
-      upstream = await callAnthropicNative(env, buildAnthropicRequestFromAssembled(body, targetModel, assembled, env), targetModel);
+      upstream = await callAnthropicNative(
+        env,
+        buildAnthropicRequestFromAssembled(body, targetModel, assembled, env),
+        targetModel
+      );
     } else {
-      // OpenAI-compatible: always use assembler path
       const assembled = assemble({
         request: body,
         pinnedPersonaMemories: null,
@@ -165,7 +200,10 @@ export async function handleChatCompletions(
         visionOutput: null,
       });
       clientSystemHash = assembled.meta.client_system_hash;
-      upstream = await callOpenAICompat(env, buildOpenAIRequestFromAssembled(body, targetModel, assembled));
+      upstream = await callOpenAICompat(
+        env,
+        buildOpenAIRequestFromAssembled(body, targetModel, assembled)
+      );
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to call upstream";

@@ -15,7 +15,7 @@ import type { BootPackage } from "../memory/v2/recall";
 // Block definition
 // ---------------------------------------------------------------------------
 
-export type BlockKind = "stable" | "dynamic" | "passthrough";
+export type BlockKind = "stable" | "turn_context" | "passthrough";
 
 export interface Block {
   id: string;
@@ -143,9 +143,17 @@ export const BLOCK_ORDER: readonly string[] = [
  * boot_stable (glossary, digest, yesterday_log) is AFTER the anchor.
  * It changes daily but does NOT invalidate the cached system prefix.
  * client_volatile_context (time), dynamic_memory_patch (RAG), vision_context
- * are also after the anchor — fully dynamic, never cached.
+ * are turn_context blocks — injected into the message stream before current_user,
+ * after all cache breakpoints, never cached.
  */
 export const CACHE_ANCHOR_AFTER_ID = "client_system";
+
+/** Per-turn dynamic blocks routed into the message stream, not system_blocks. */
+export const TURN_CONTEXT_BLOCK_IDS: readonly string[] = [
+  "client_volatile_context",
+  "dynamic_memory_patch",
+  "vision_context",
+] as const;
 
 // ---------------------------------------------------------------------------
 // Allowed memory types for persona_pinned (block 2)

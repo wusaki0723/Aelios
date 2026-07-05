@@ -107,24 +107,14 @@ function assemble(ctx) {
     blockIds.push("client_system");
   }
 
-  // Block 5: dynamic_memory_patch (dynamic)
-  if (ctx.memoryPatch) {
-    systemBlocks.push({ role: "system", text: ctx.memoryPatch });
-    blockIds.push("dynamic_memory_patch");
-  }
-
-  // Messages: history + current user
+  // Messages: history only (breakpoints computed before turn_context)
   for (const msg of ctx.history ?? []) {
     messages.push(msg);
   }
-  if (ctx.currentUser) {
-    messages.push(ctx.currentUser);
-  }
 
-  // --- 4-breakpoint computation ---
+  // --- 4-breakpoint computation (history only) ---
   const breakpoints = [];
 
-  // Breakpoint 2: system anchor on persona_pinned
   if (anchorIndex >= 0) {
     breakpoints.push({
       target: "system",
@@ -133,13 +123,12 @@ function assemble(ctx) {
     });
   }
 
-  // Message-level breakpoints: bridge + tail
   const msgBlockCounts = messages.map((m) => countMessageBlocks(m.content));
 
   let tailIdx = -1;
   let tailBlockIdx = -1;
-  if (messages.length >= 2) {
-    tailIdx = messages.length - 2;
+  if (messages.length >= 1) {
+    tailIdx = messages.length - 1;
     tailBlockIdx = Math.max(0, msgBlockCounts[tailIdx] - 1);
   }
 
@@ -178,6 +167,15 @@ function assemble(ctx) {
     }
   }
 
+  if (ctx.memoryPatch) {
+    messages.push({ role: "user", content: ctx.memoryPatch });
+    blockIds.push("dynamic_memory_patch");
+  }
+
+  if (ctx.currentUser) {
+    messages.push(ctx.currentUser);
+  }
+
   return {
     system_blocks: systemBlocks,
     messages,
@@ -190,30 +188,64 @@ function assemble(ctx) {
   };
 }
 
+function assembledToAnthropicMessages(messages) {
+  const wire = [];
+  const indexMap = new Map();
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const role = msg.role;
+    const text =
+      typeof msg.content === "string"
+        ? msg.content
+        : msg.content == null
+          ? ""
+          : JSON.stringify(msg.content);
+    const prev = wire[wire.length - 1];
+    if (prev?.role === role) {
+      const blockOffset = prev.content.length;
+      prev.content.push({ type: "text", text });
+      indexMap.set(i, { wireIndex: wire.length - 1, blockOffset });
+      continue;
+    }
+    wire.push({ role, content: [{ type: "text", text }] });
+    indexMap.set(i, { wireIndex: wire.length - 1, blockOffset: 0 });
+  }
+  if (wire.length === 0) {
+    wire.push({ role: "user", content: [{ type: "text", text: "" }] });
+  }
+  return { wire, indexMap };
+}
+
+function applyMessageCacheBreakpoints(wireMessages, breakpoints, indexMap, cacheControl) {
+  for (const bp of breakpoints) {
+    if (bp.target !== "message") continue;
+    if (bp.message_index == null) continue;
+    const mapping = indexMap.get(bp.message_index);
+    if (mapping == null) continue;
+    const msg = wireMessages[mapping.wireIndex];
+    if (!msg || msg.content.length === 0) continue;
+    const blockIdx = Math.min(mapping.blockOffset, msg.content.length - 1);
+    const block = msg.content[blockIdx];
+    if (block && block.type === "text") {
+      block.cache_control = cacheControl;
+    }
+  }
+}
+
 // Apply breakpoints (mirrors adapter logic)
 function applyBreakpoints(assembled, cacheEnabled = true) {
   const cc = cacheEnabled ? { type: "ephemeral", ttl: "5m" } : null;
 
-  // System blocks: only blocks with cache_control get it
   for (const b of assembled.system_blocks) {
     if (b.cache_control) {
       b.cache_control = cc ?? undefined;
     }
   }
 
-  // Message-level breakpoints
   if (cc) {
-    for (const bp of assembled.meta.cache_breakpoints) {
-      if (bp.target !== "message") continue;
-      if (bp.message_index == null) continue;
-      const msg = assembled.messages[bp.message_index];
-      if (!msg || msg.content.length === 0) continue;
-      const blockIdx = bp.block_index ?? msg.content.length - 1;
-      const block = msg.content[blockIdx];
-      if (block && typeof block === "object" && block.type === "text") {
-        block.cache_control = cc;
-      }
-    }
+    const { wire, indexMap } = assembledToAnthropicMessages(assembled.messages);
+    applyMessageCacheBreakpoints(wire, assembled.meta.cache_breakpoints, indexMap, cc);
+    assembled._wire = wire;
   }
 }
 
@@ -374,18 +406,15 @@ test("T7: memory patch change → system cache stable", () => {
   const a = assemble({ ...BASE_CTX, memoryPatch: null });
   const b = assemble({ ...BASE_CTX, memoryPatch: "<memories>new recall</memories>" });
 
-  const stableIdx = Math.min(
-    a.meta.block_ids.indexOf("dynamic_memory_patch") >= 0
-      ? a.meta.block_ids.indexOf("dynamic_memory_patch")
-      : a.system_blocks.length,
-    b.meta.block_ids.indexOf("dynamic_memory_patch") >= 0
-      ? b.meta.block_ids.indexOf("dynamic_memory_patch")
-      : b.system_blocks.length
-  );
-
-  for (let i = 0; i < stableIdx; i++) {
+  assert.strictEqual(a.system_blocks.length, b.system_blocks.length);
+  for (let i = 0; i < a.system_blocks.length; i++) {
     assert.strictEqual(a.system_blocks[i].text, b.system_blocks[i].text);
   }
+
+  const aTurn = a.messages.find((m) => typeof m.content === "string" && m.content.includes("<memories>"));
+  const bTurn = b.messages.find((m) => typeof m.content === "string" && m.content.includes("<memories>"));
+  assert.strictEqual(aTurn, undefined);
+  assert.ok(bTurn);
 });
 
 // T8: tools stable → identical wire bytes
@@ -488,6 +517,36 @@ test("T14: at most 4 breakpoints", () => {
     currentUser: userMsg("current"),
   });
   assert.ok(assembled.meta.cache_breakpoints.length <= 4, "at most 4 breakpoints");
+});
+
+// T16: wire-level tail breakpoint survives consecutive user merge
+test("T16: wire tail breakpoint lands on correct merged block", () => {
+  const history = [
+    { role: "user", content: "u1" },
+    { role: "user", content: "u2" },
+    assistantMsg("a1"),
+  ];
+  const ctx = {
+    ...BASE_CTX,
+    history,
+    currentUser: userMsg("current"),
+  };
+  const assembled = assemble(ctx);
+  applyBreakpoints(assembled);
+  const tailBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "tail");
+  assert.ok(tailBP);
+  const { wire, indexMap } = assembledToAnthropicMessages(assembled.messages);
+  const mapping = indexMap.get(tailBP.message_index);
+  assert.ok(mapping);
+  const cc = { type: "ephemeral", ttl: "5m" };
+  applyMessageCacheBreakpoints(wire, assembled.meta.cache_breakpoints, indexMap, cc);
+  const target = wire[mapping.wireIndex].content[mapping.blockOffset];
+  assert.ok(target.cache_control, "tail breakpoint stamped on wire block");
+  const mergedUser = wire.find((m) => m.role === "user" && m.content.length === 2);
+  assert.ok(mergedUser);
+  assert.strictEqual(mergedUser.content[0].text, "u1");
+  assert.strictEqual(mergedUser.content[1].text, "u2");
+  assert.strictEqual(mergedUser.content[1].cache_control, undefined);
 });
 
 // T15: stable tools input_schema deep-sorted

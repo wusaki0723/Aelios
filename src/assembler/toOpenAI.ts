@@ -31,20 +31,72 @@ export function assembledToOpenAISystem(
 // Messages → OpenAIChatMessage[]
 // ---------------------------------------------------------------------------
 
+function contentToText(content: string | unknown[] | null): string {
+  if (typeof content === "string") return content;
+  if (content == null) return "";
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return [];
+      const value = part as { type?: unknown; text?: unknown };
+      return value.type === "text" && typeof value.text === "string" ? [value.text] : [];
+    })
+    .join("\n");
+}
+
+function mergeUserIntoPrevious(
+  prev: OpenAIChatMessage,
+  content: string | unknown[] | null
+): void {
+  const prevText = contentToText(prev.content);
+  const curText = contentToText(content);
+  const mergedText =
+    prevText && curText ? `${prevText}\n\n${curText}` : prevText || curText;
+
+  if (Array.isArray(content)) {
+    const nonText = content.filter(
+      (part) =>
+        part &&
+        typeof part === "object" &&
+        !Array.isArray(part) &&
+        (part as { type?: string }).type !== "text"
+    );
+    prev.content =
+      nonText.length > 0
+        ? [{ type: "text", text: mergedText }, ...nonText]
+        : mergedText;
+    return;
+  }
+
+  prev.content = mergedText;
+}
+
 /**
  * Convert AssembledPrompt.messages to OpenAI message format.
  *
- * Content is passed through as-is: string stays string, structured content
- * (image_url etc.) stays as the original array. This preserves image_url
- * for multimodal requests.
+ * Consecutive user messages are merged into one turn (turn_context first,
+ * then current user text, separated by a blank line). Structured content
+ * such as image_url is preserved on the merged message.
  */
 export function assembledToOpenAIMessages(
   messages: AssembledPrompt["messages"]
 ): OpenAIChatMessage[] {
-  return messages.map((msg) => ({
-    role: msg.role,
-    content: msg.content as string | Array<unknown> | null,
-  }));
+  const result: OpenAIChatMessage[] = [];
+
+  for (const msg of messages) {
+    const prev = result[result.length - 1];
+    if (msg.role === "user" && prev?.role === "user") {
+      mergeUserIntoPrevious(prev, msg.content);
+      continue;
+    }
+
+    result.push({
+      role: msg.role,
+      content: msg.content as string | Array<unknown> | null,
+    });
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------

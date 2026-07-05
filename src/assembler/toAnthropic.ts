@@ -45,6 +45,13 @@ export interface AnthropicWireMessage {
   content: AnthropicContentBlock[];
 }
 
+/** Maps an assembled message index to its position on the Anthropic wire. */
+export interface AnthropicMessageWireMapping {
+  wireIndex: number;
+  /** Index of the wire content block that ends this assembled message. */
+  blockOffset: number;
+}
+
 export interface AnthropicTool {
   name: string;
   description: string;
@@ -103,9 +110,9 @@ export function assembledToAnthropicSystem(
  */
 export function assembledToAnthropicMessages(
   messages: AssembledPrompt["messages"]
-): { wire: AnthropicWireMessage[]; indexMap: Map<number, number> } {
+): { wire: AnthropicWireMessage[]; indexMap: Map<number, AnthropicMessageWireMapping> } {
   const wire: AnthropicWireMessage[] = [];
-  const indexMap = new Map<number, number>();
+  const indexMap = new Map<number, AnthropicMessageWireMapping>();
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -114,14 +121,14 @@ export function assembledToAnthropicMessages(
 
     const prev = wire[wire.length - 1];
     if (prev?.role === role) {
+      const blockOffset = prev.content.length;
       prev.content.push({ type: "text", text });
-      // This original message merges into the same wire message as the previous
-      indexMap.set(i, wire.length - 1);
+      indexMap.set(i, { wireIndex: wire.length - 1, blockOffset });
       continue;
     }
 
     wire.push({ role, content: [{ type: "text", text }] });
-    indexMap.set(i, wire.length - 1);
+    indexMap.set(i, { wireIndex: wire.length - 1, blockOffset: 0 });
   }
 
   if (wire.length === 0) {
@@ -149,18 +156,18 @@ export function assembledToAnthropicMessages(
 export function applyMessageCacheBreakpoints(
   wireMessages: AnthropicWireMessage[],
   breakpoints: CacheBreakpoint[],
-  indexMap: Map<number, number>,
+  indexMap: Map<number, AnthropicMessageWireMapping>,
   cacheControl: { type: "ephemeral"; ttl?: "5m" | "1h" }
 ): void {
   for (const bp of breakpoints) {
     if (bp.target !== "message") continue;
     if (bp.message_index == null) continue;
-    const wireIdx = indexMap.get(bp.message_index);
-    if (wireIdx == null) continue;
-    const msg = wireMessages[wireIdx];
+    const mapping = indexMap.get(bp.message_index);
+    if (mapping == null) continue;
+    const msg = wireMessages[mapping.wireIndex];
     if (!msg || msg.content.length === 0) continue;
 
-    const blockIdx = bp.block_index ?? msg.content.length - 1;
+    const blockIdx = Math.min(mapping.blockOffset, msg.content.length - 1);
     const block = msg.content[blockIdx];
     if (block && block.type === "text") {
       block.cache_control = cacheControl;

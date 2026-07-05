@@ -355,7 +355,17 @@ function assemble(ctx) {
 
   const turnContextText = turnContextParts.join("\n\n").trim();
   if (turnContextText) {
-    messages.push({ role: "user", content: turnContextText });
+    if (!ctx.currentUserMessage) {
+      console.error(
+        "[assembler] skipping turn_context injection: no current_user message"
+      );
+      for (const id of TURN_CONTEXT_BLOCK_IDS) {
+        const idx = enabledBlockIds.indexOf(id);
+        if (idx >= 0) enabledBlockIds.splice(idx, 1);
+      }
+    } else {
+      messages.push({ role: "user", content: turnContextText });
+    }
   }
 
   if (ctx.currentUserMessage) {
@@ -831,23 +841,47 @@ function assembledToAnthropicSystem(systemBlocks) {
 }
 
 function assembledToAnthropicMessages(messages) {
-  const result = [];
-  for (const msg of messages) {
+  const wire = [];
+  const indexMap = new Map();
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     const role = msg.role;
-    const text = typeof msg.content === "string" ? msg.content
-      : msg.content == null ? ""
-      : JSON.stringify(msg.content);
-    const prev = result[result.length - 1];
+    const text =
+      typeof msg.content === "string"
+        ? msg.content
+        : msg.content == null
+          ? ""
+          : JSON.stringify(msg.content);
+    const prev = wire[wire.length - 1];
     if (prev?.role === role) {
+      const blockOffset = prev.content.length;
       prev.content.push({ type: "text", text });
+      indexMap.set(i, { wireIndex: wire.length - 1, blockOffset });
       continue;
     }
-    result.push({ role, content: [{ type: "text", text }] });
+    wire.push({ role, content: [{ type: "text", text }] });
+    indexMap.set(i, { wireIndex: wire.length - 1, blockOffset: 0 });
   }
-  if (result.length === 0) {
-    result.push({ role: "user", content: [{ type: "text", text: "" }] });
+  if (wire.length === 0) {
+    wire.push({ role: "user", content: [{ type: "text", text: "" }] });
   }
-  return result;
+  return { wire, indexMap };
+}
+
+function applyMessageCacheBreakpoints(wireMessages, breakpoints, indexMap, cacheControl) {
+  for (const bp of breakpoints) {
+    if (bp.target !== "message") continue;
+    if (bp.message_index == null) continue;
+    const mapping = indexMap.get(bp.message_index);
+    if (mapping == null) continue;
+    const msg = wireMessages[mapping.wireIndex];
+    if (!msg || msg.content.length === 0) continue;
+    const blockIdx = Math.min(mapping.blockOffset, msg.content.length - 1);
+    const block = msg.content[blockIdx];
+    if (block && block.type === "text") {
+      block.cache_control = cacheControl;
+    }
+  }
 }
 
 function assembledToOpenAISystem(systemBlocks) {
@@ -856,8 +890,51 @@ function assembledToOpenAISystem(systemBlocks) {
   return { role: "system", content: text };
 }
 
+function contentToText(content) {
+  if (typeof content === "string") return content;
+  if (content == null) return "";
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return [];
+      return part.type === "text" && typeof part.text === "string" ? [part.text] : [];
+    })
+    .join("\n");
+}
+
+function mergeUserIntoPrevious(prev, content) {
+  const prevText = contentToText(prev.content);
+  const curText = contentToText(content);
+  const mergedText =
+    prevText && curText ? `${prevText}\n\n${curText}` : prevText || curText;
+  if (Array.isArray(content)) {
+    const nonText = content.filter(
+      (part) =>
+        part &&
+        typeof part === "object" &&
+        !Array.isArray(part) &&
+        part.type !== "text"
+    );
+    prev.content =
+      nonText.length > 0
+        ? [{ type: "text", text: mergedText }, ...nonText]
+        : mergedText;
+    return;
+  }
+  prev.content = mergedText;
+}
+
 function assembledToOpenAIMessages(messages) {
-  return messages.map((msg) => ({ role: msg.role, content: msg.content }));
+  const result = [];
+  for (const msg of messages) {
+    const prev = result[result.length - 1];
+    if (msg.role === "user" && prev?.role === "user") {
+      mergeUserIntoPrevious(prev, msg.content);
+      continue;
+    }
+    result.push({ role: msg.role, content: msg.content });
+  }
+  return result;
 }
 
 function assembledToOpenAIChatMessages(assembled) {
@@ -906,7 +983,7 @@ check("non-anchor blocks have no cache_control", () => {
 check("anthropic messages convert user/assistant correctly", () => {
   const ctx = makeBaseCtx();
   const assembled = assemble(ctx);
-  const anthropicMsgs = assembledToAnthropicMessages(assembled.messages);
+  const { wire: anthropicMsgs } = assembledToAnthropicMessages(assembled.messages);
 
   assert.ok(anthropicMsgs.length >= 2);
   const last = anthropicMsgs[anthropicMsgs.length - 1];
@@ -925,7 +1002,7 @@ check("anthropic stringifies structured content for image", () => {
     ],
   };
   const assembled = assemble(ctx);
-  const anthropicMsgs = assembledToAnthropicMessages(assembled.messages);
+  const { wire: anthropicMsgs } = assembledToAnthropicMessages(assembled.messages);
   const last = anthropicMsgs[anthropicMsgs.length - 1];
 
   assert.strictEqual(last.role, "user");
@@ -934,6 +1011,36 @@ check("anthropic stringifies structured content for image", () => {
   const parsed = JSON.parse(last.content[1].text);
   assert.strictEqual(parsed.length, 2);
   assert.strictEqual(parsed[1].type, "image_url");
+});
+
+check("anthropic wire mapping: tail breakpoint lands on merged wire block", () => {
+  const ctx = makeBaseCtx();
+  ctx.historyMessages = [
+    { role: "user", content: "first" },
+    { role: "user", content: "second" },
+    { role: "assistant", content: "reply" },
+  ];
+  const assembled = assemble(ctx);
+  const { wire, indexMap } = assembledToAnthropicMessages(assembled.messages);
+  const tailBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "tail");
+  assert.ok(tailBP);
+  const mapping = indexMap.get(tailBP.message_index);
+  assert.ok(mapping);
+  const cc = { type: "ephemeral", ttl: "5m" };
+  applyMessageCacheBreakpoints(wire, assembled.meta.cache_breakpoints, indexMap, cc);
+  const target = wire[mapping.wireIndex].content[mapping.blockOffset];
+  assert.ok(target.cache_control, "breakpoint on wire block ending original message");
+  const mergedUser = wire.find((m) => m.role === "user" && m.content.length === 2);
+  assert.ok(mergedUser, "consecutive user history merged on wire");
+  assert.strictEqual(mergedUser.content[1].cache_control, undefined);
+});
+
+check("turn_context skipped when no current_user message", () => {
+  const ctx = makeBaseCtx();
+  ctx.currentUserMessage = null;
+  const assembled = assemble(ctx);
+  assert.ok(!assembled.messages.some((m) => m.content.includes("<memories>")));
+  assert.ok(!assembled.meta.block_ids.includes("dynamic_memory_patch"));
 });
 
 // ---------------------------------------------------------------------------
@@ -987,7 +1094,10 @@ check("openai combined starts with system, then conversation", () => {
   const nonSystem = openaiMsgs.filter((m) => m.role !== "system");
   assert.ok(nonSystem.length >= 2);
   assert.strictEqual(nonSystem[nonSystem.length - 1].role, "user");
-  assert.strictEqual(nonSystem[nonSystem.length - 1].content, "今天天气怎么样？");
+  const lastContent = nonSystem[nonSystem.length - 1].content;
+  assert.ok(typeof lastContent === "string");
+  assert.ok(lastContent.includes("<memories>"));
+  assert.ok(lastContent.endsWith("今天天气怎么样？"));
 });
 
 check("openai empty system_blocks produces no system message", () => {
@@ -1009,6 +1119,60 @@ check("cache_control never leaks into openai output", () => {
   for (const msg of openaiMsgs) {
     assert.strictEqual(msg.cache_control, undefined);
   }
+});
+
+check("openai merges consecutive user messages (turn_context + current_user)", () => {
+  const ctx = makeBaseCtx();
+  const assembled = assemble(ctx);
+  const openaiMsgs = assembledToOpenAIChatMessages(assembled);
+  const userMsgs = openaiMsgs.filter((m) => m.role === "user");
+  assert.strictEqual(userMsgs.length, 2, "history user + merged turn");
+  const merged = userMsgs[userMsgs.length - 1];
+  assert.ok(typeof merged.content === "string");
+  assert.ok(merged.content.includes("<memories>"));
+  assert.ok(merged.content.endsWith("今天天气怎么样？"));
+});
+
+function injectMemoryPatchAsSystemMessage(messages, patch) {
+  const trimmed = patch.trim();
+  if (!trimmed) return messages;
+  let insertAt = 0;
+  while (insertAt < messages.length && messages[insertAt].role === "system") {
+    insertAt += 1;
+  }
+  return [
+    ...messages.slice(0, insertAt),
+    { role: "system", content: trimmed },
+    ...messages.slice(insertAt),
+  ];
+}
+
+function injectMemoryPatchBeforeCurrentUser(messages, patch) {
+  const trimmed = patch.trim();
+  if (!trimmed) return messages;
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage || lastMessage.role !== "user") {
+    return injectMemoryPatchAsSystemMessage(messages, trimmed);
+  }
+  return [
+    ...messages.slice(0, messages.length - 1),
+    { role: "user", content: trimmed },
+    lastMessage,
+  ];
+}
+
+check("injectMemoryPatchBeforeCurrentUser falls back on tool-round tail", () => {
+  const messages = [
+    { role: "user", content: "查天气" },
+    { role: "assistant", content: null, tool_calls: [{ id: "tc1", type: "function", function: { name: "get_weather", arguments: "{}" } }] },
+    { role: "tool", content: '{"temp":25}', tool_call_id: "tc1" },
+  ];
+  const patch = "<memories>- [note] likes rain</memories>";
+  const result = injectMemoryPatchBeforeCurrentUser(messages, patch);
+  assert.strictEqual(result.length, 4);
+  assert.strictEqual(result[0].role, "system");
+  assert.ok(result[0].content.includes("<memories>"));
+  assert.strictEqual(result[1].role, "user");
 });
 
 // ---------------------------------------------------------------------------
@@ -1205,7 +1369,7 @@ check("plain user/assistant messages order preserved through Anthropic conversio
   ctx.currentUserMessage = { role: "user", content: "第三条" };
 
   const assembled = assemble(ctx);
-  const anthropicMsgs = assembledToAnthropicMessages(assembled.messages);
+  const { wire: anthropicMsgs } = assembledToAnthropicMessages(assembled.messages);
 
   assert.strictEqual(anthropicMsgs.length, 5);
   assert.strictEqual(anthropicMsgs[0].content[0].text, "第一条");
@@ -1241,7 +1405,7 @@ check("structured content (image_url) goes through JSON.stringify fallback in An
     ],
   };
   const assembled = assemble(ctx);
-  const anthropicMsgs = assembledToAnthropicMessages(assembled.messages);
+  const { wire: anthropicMsgs } = assembledToAnthropicMessages(assembled.messages);
   const last = anthropicMsgs[anthropicMsgs.length - 1];
 
   assert.strictEqual(last.role, "user");
@@ -1316,7 +1480,7 @@ check("Anthropic path: full pipeline produces valid system + messages", () => {
   assert.ok(anchor.text.includes("咲咲的伴侣"));
   assert.ok(!systemBlocks.some((b) => b.text.includes("<memories>")));
 
-  const messages = assembledToAnthropicMessages(assembled.messages);
+  const { wire: messages } = assembledToAnthropicMessages(assembled.messages);
   assert.ok(messages.length >= 1);
   const last = messages[messages.length - 1];
   assert.strictEqual(last.role, "user");
@@ -1623,40 +1787,20 @@ function applyRollingMessageCache(messages, env, systemBlocks = []) {
   }
 }
 
-function appendUncachedUserContext(messages, text) {
-  const trimmed = text?.trim();
-  if (!trimmed) return;
-
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message.role !== "user") continue;
-    message.content.push({ type: "text", text: trimmed });
-    return;
-  }
-
-  messages.push({ role: "user", content: [{ type: "text", text: trimmed }] });
-}
-
-function splitDynamicMemorySystemBlock(assembled) {
-  const idx = assembled.meta.block_ids.indexOf("dynamic_memory_patch");
-  if (idx < 0 || idx >= assembled.system_blocks.length) {
-    return { systemBlocks: assembled.system_blocks, dynamicMemoryPatch: null };
-  }
-
-  return {
-    systemBlocks: [
-      ...assembled.system_blocks.slice(0, idx),
-      ...assembled.system_blocks.slice(idx + 1),
-    ],
-    dynamicMemoryPatch: assembled.system_blocks[idx].text,
-  };
-}
-
 function buildAnthropicRequestFromAssembled(req, targetModel, assembled, env) {
   const thinking = buildThinkingConfig(env, req);
   const system = assembledToAnthropicSystem(assembled.system_blocks);
   applyCacheOverrides(system, env);
-  const messages = assembledToAnthropicMessages(assembled.messages);
+  const { wire: messages, indexMap } = assembledToAnthropicMessages(assembled.messages);
+  const cc = buildCacheControl(env);
+  if (cc) {
+    applyMessageCacheBreakpoints(
+      messages,
+      assembled.meta.cache_breakpoints,
+      indexMap,
+      cc
+    );
+  }
   if (env.ANTHROPIC_ROLLING_CACHE_ENABLED === "true") {
     applyRollingMessageCache(messages, env, system);
   }
@@ -1864,11 +2008,15 @@ check("Anthropic helper: ANTHROPIC_CACHE_TTL=1h sets ttl=1h on system anchor", (
   const anchor = req.system.find((b) => b.cache_control);
   assert.ok(anchor);
   assert.deepStrictEqual(anchor.cache_control, { type: "ephemeral", ttl: "1h" });
-  // No user block cache by default (rolling cache off)
-  const userBlocksWithCache = req.messages
+  const cachedBlocks = req.messages
     .flatMap((m) => m.content)
     .filter((b) => b.cache_control);
-  assert.strictEqual(userBlocksWithCache.length, 0);
+  assert.strictEqual(cachedBlocks.length, 1, "tail breakpoint on history only");
+  const lastUser = [...req.messages].reverse().find((m) => m.role === "user");
+  assert.ok(lastUser);
+  for (const block of lastUser.content) {
+    assert.strictEqual(block.cache_control, undefined, "turn_context/current_user uncached");
+  }
 });
 
 check("Anthropic helper: defaults to system anchor only (no rolling, no auto)", () => {
@@ -1880,17 +2028,19 @@ check("Anthropic helper: defaults to system anchor only (no rolling, no auto)", 
     assembled,
     {}
   );
-  // System anchor (persona_pinned) has cache_control
   const anchor = req.system.find((b) => b.cache_control);
   assert.ok(anchor);
   assert.deepStrictEqual(anchor.cache_control, { type: "ephemeral", ttl: "5m" });
-  // No top-level cache_control
   assert.strictEqual(req.cache_control, undefined);
-  // No rolling cache on user messages by default
-  const userBlocksWithCache = req.messages
+  const cachedBlocks = req.messages
     .flatMap((m) => m.content)
     .filter((b) => b.cache_control);
-  assert.strictEqual(userBlocksWithCache.length, 0);
+  assert.strictEqual(cachedBlocks.length, 1, "tail breakpoint on history only");
+  const lastUser = [...req.messages].reverse().find((m) => m.role === "user");
+  assert.ok(lastUser);
+  for (const block of lastUser.content) {
+    assert.strictEqual(block.cache_control, undefined, "turn_context/current_user uncached");
+  }
 });
 
 check("Anthropic helper: no top-level automatic cache_control", () => {

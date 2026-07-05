@@ -60,6 +60,8 @@ export function injectMemoryPatchAsSystemMessage(
 
 /**
  * Cache-safe v1 injection: user message immediately before the current user turn.
+ * When the final message is not user-role (tool rounds / assistant prefill),
+ * falls back to legacy system-message injection for correctness.
  */
 export function injectMemoryPatchBeforeCurrentUser(
   messages: OpenAIChatMessage[],
@@ -68,22 +70,15 @@ export function injectMemoryPatchBeforeCurrentUser(
   const trimmed = patch.trim();
   if (!trimmed) return messages;
 
-  let lastUserIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role === "user") {
-      lastUserIdx = i;
-      break;
-    }
-  }
-
-  if (lastUserIdx < 0) {
-    return [...messages, { role: "user", content: trimmed }];
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage || lastMessage.role !== "user") {
+    return injectMemoryPatchAsSystemMessage(messages, trimmed);
   }
 
   return [
-    ...messages.slice(0, lastUserIdx),
+    ...messages.slice(0, messages.length - 1),
     { role: "user", content: trimmed },
-    ...messages.slice(lastUserIdx),
+    lastMessage,
   ];
 }
 

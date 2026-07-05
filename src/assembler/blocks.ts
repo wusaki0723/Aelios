@@ -494,8 +494,18 @@ export function assemble(ctx: AssemblerContext): AssembledPrompt {
   let turnContextMessageIndex: number | null = null;
   const turnContextText = turnContextParts.join("\n\n").trim();
   if (turnContextText) {
-    turnContextMessageIndex = messages.length;
-    messages.push({ role: "user", content: turnContextText });
+    if (!ctx.currentUserMessage) {
+      console.error(
+        "[assembler] skipping turn_context injection: no current_user message"
+      );
+      for (const id of TURN_CONTEXT_BLOCK_IDS) {
+        const idx = enabledBlockIds.indexOf(id);
+        if (idx >= 0) enabledBlockIds.splice(idx, 1);
+      }
+    } else {
+      turnContextMessageIndex = messages.length;
+      messages.push({ role: "user", content: turnContextText });
+    }
   }
 
   if (ctx.currentUserMessage) {

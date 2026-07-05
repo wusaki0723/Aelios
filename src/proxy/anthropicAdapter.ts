@@ -10,6 +10,7 @@ import {
   anthropicToolUseBlocksToOpenAI,
   safeParseJSON,
   stableStringify,
+  type AnthropicMessageWireMapping,
   type AnthropicTextBlock,
   type AnthropicWireMessage,
   type AnthropicTool,
@@ -19,7 +20,7 @@ import {
 } from "../assembler/toAnthropic";
 import type { Env, OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse, TokenUsage } from "../types";
 import type { BootPackage } from "../memory/v2/recall";
-import { formatBootStable, formatRecallPatch } from "../assembler/types";
+import { formatBootStable } from "../assembler/types";
 import { normalizeAiGatewayBaseUrl } from "./openaiAdapter";
 
 // ---------------------------------------------------------------------------
@@ -121,7 +122,7 @@ export function getAnthropicCacheMode(env: Env): string | null {
 function applyExplicitCacheBreakpoints(
   systemBlocks: AnthropicTextBlock[],
   wireMessages: AnthropicWireMessage[],
-  indexMap: Map<number, number>,
+  indexMap: Map<number, AnthropicMessageWireMapping>,
   assembled: AssembledPrompt,
   env: Env
 ): void {
@@ -181,44 +182,6 @@ function applyRollingMessageCache(messages: AnthropicWireMessage[], env: Env, sy
     const block = messages[idx].content[messages[idx].content.length - 1];
     if (block.type === "text") block.cache_control = cacheControl;
   }
-}
-
-// ---------------------------------------------------------------------------
-// dynamic_memory_patch → append as uncached user context
-// ---------------------------------------------------------------------------
-
-function appendUncachedUserContext(
-  messages: AnthropicWireMessage[],
-  text: string | null | undefined
-): void {
-  const trimmed = text?.trim();
-  if (!trimmed) return;
-
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message.role !== "user") continue;
-    message.content.push({ type: "text", text: trimmed });
-    return;
-  }
-
-  messages.push({ role: "user", content: [{ type: "text", text: trimmed }] });
-}
-
-function splitDynamicMemorySystemBlock(
-  assembled: AssembledPrompt
-): { systemBlocks: AssembledPrompt["system_blocks"]; dynamicMemoryPatch: string | null } {
-  const idx = assembled.meta.block_ids.indexOf("dynamic_memory_patch");
-  if (idx < 0 || idx >= assembled.system_blocks.length) {
-    return { systemBlocks: assembled.system_blocks, dynamicMemoryPatch: null };
-  }
-
-  return {
-    systemBlocks: [
-      ...assembled.system_blocks.slice(0, idx),
-      ...assembled.system_blocks.slice(idx + 1),
-    ],
-    dynamicMemoryPatch: assembled.system_blocks[idx].text,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -502,7 +465,6 @@ export async function buildAnthropicNativeRequest(
     stableBlock.cache_control = buildCacheControl(input.env);
   }
 
-  const dynamicMemoryPatch = input.recallHits.length > 0 ? formatRecallPatch(input.recallHits) : "";
   const system: AnthropicTextBlock[] = [
     ...extractSystemBlocks(req.messages),
     {
@@ -521,7 +483,6 @@ export async function buildAnthropicNativeRequest(
   if (input.env.ANTHROPIC_ROLLING_CACHE_ENABLED === "true") {
     applyRollingMessageCache(messages, input.env, system);
   }
-  appendUncachedUserContext(messages, dynamicMemoryPatch);
 
   return {
     model: stripAnthropicModelPrefix(input.targetModel),

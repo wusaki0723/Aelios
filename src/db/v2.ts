@@ -892,11 +892,45 @@ export async function supersedeMemory(
     .prepare("SELECT id, status, vector_id FROM memories WHERE namespace = ? AND id = ?")
     .bind(input.namespace, input.oldId)
     .first<{ id: string; status: string; vector_id: string | null }>();
-  if (!old) throw new Error("memory to supersede not found");
 
   const nextId = newId("mem");
   const nextVectorId = `mem_${nextId}`;
   const newFactKey = input.newFactKey ?? null;
+
+  if (!old) {
+    await db
+      .prepare(
+        `INSERT INTO memories (
+          id, namespace, type, content, importance, confidence, status, pinned,
+          tags, source, source_message_ids, vector_id, created_at, updated_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?, ?, null)`
+      )
+      .bind(
+        nextId,
+        input.namespace,
+        clampMemoryType(input.newType, "fact"),
+        input.newContent,
+        input.importance ?? 0.6,
+        input.confidence ?? 0.8,
+        JSON.stringify(input.tags ?? []),
+        input.source ?? "supersede",
+        JSON.stringify(input.sourceMessageIds ?? []),
+        nextVectorId,
+        now,
+        now
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO memory_lifecycle (
+          memory_id, namespace, fact_key, supersedes_id, review_reason, valid_as_of, last_seen_at, seen_count, last_injected_at
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?, 0, NULL)`
+      )
+      .bind(nextId, input.namespace, newFactKey, input.reason ?? null, input.validAsOf ?? null, now)
+      .run();
+    await syncMemoryVector(env, { namespace: input.namespace, id: nextId });
+    return { oldStatus: "missing", newId: nextId };
+  }
 
   // 1. 旧条目标 superseded (memories 本体只改 status)
   await db

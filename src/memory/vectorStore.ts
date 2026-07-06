@@ -391,7 +391,16 @@ export async function createVectorMemory(env: Env, input: VectorMemoryInput): Pr
   return memoryRecordToApiRecord(record);
 }
 
-export async function getVectorMemory(env: Env, id: string): Promise<MemoryApiRecord | null> {
+export async function getVectorMemory(
+  env: Env,
+  id: string,
+  options?: { requireD1Backing?: boolean }
+): Promise<MemoryApiRecord | null> {
+  if (options?.requireD1Backing) {
+    const d1Record = await getMemoryRecordById(env, id);
+    return d1Record ? memoryRecordToApiRecord(d1Record) : null;
+  }
+
   const vectorIds = candidateVectorIds(id);
   const vectors = vectorIds.length > 0 ? await requireVectorize(env).getByIds(vectorIds) : [];
 

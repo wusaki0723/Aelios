@@ -16,16 +16,15 @@ import {
 import { isV2Enabled } from "./v2/recall";
 import { searchMemories, toMemoryApiRecord } from "./search";
 import {
-  upsertMemoryByFactKey,
   supersedeMemory,
   archiveMemory,
-  upsertDigest,
   createLongtail,
   createMemoryCandidate,
   upsertDailyLog,
   fetchMemoryLifecycleRows,
   upsertLongtailEmbedding
 } from "../db/v2";
+import { extractDreamMemoriesFromMessages } from "./dreamExtract";
 import { newId } from "../utils/ids";
 import { nowIso } from "../utils/time";
 
@@ -68,11 +67,30 @@ interface DailyDigestStats {
   addedMemories: number;
   updatedMemories: number;
   deletedMemories: number;
+  queuedCandidates: number;
   savedExcerpts: number;
   cleanedEmptyMemories: number;
   cursorAdvanced: boolean;
   hasMore: boolean;
   errors?: Array<{ target_id: string; reason: string }>;
+}
+
+export interface DreamRoutingItem {
+  destination: "candidate" | "world_fact_direct";
+  kind: "extract" | "add" | "update" | "delete" | "excerpt";
+  content?: string;
+  type?: string;
+  fact_key?: string | null;
+  target_id?: string;
+  reason?: string;
+}
+
+export interface DreamRoutingPlan {
+  items: DreamRoutingItem[];
+  summary: {
+    to_candidates: number;
+    world_fact_direct: number;
+  };
 }
 
 type DailyDigestSkipReason =
@@ -98,8 +116,14 @@ interface DailyDigestSkipped {
 }
 
 type DailyDigestRunResult =
-  | { ran: true; stats: DailyDigestStats; proposal?: DailyDigestResult }
-  | (DailyDigestSkipped & { proposal?: DailyDigestResult });
+  | {
+      ran: true;
+      stats: DailyDigestStats;
+      proposal?: DailyDigestResult;
+      routing_plan?: DreamRoutingPlan;
+      extracted_memories?: ExtractedMemory[];
+    }
+  | (DailyDigestSkipped & { proposal?: DailyDigestResult; routing_plan?: DreamRoutingPlan });
 
 export type DailyDigestRunOptions = {
   dateLabel?: string;
@@ -147,8 +171,13 @@ function readFirstEnvValue(...values: unknown[]): unknown {
   return undefined;
 }
 
+const DEFAULT_DREAM_MODEL = "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
 function readDreamModel(env: Env): string | null {
-  return readString(readFirstEnvValue(env.DREAM_MODEL, env.DAILY_DIGEST_MODEL, env.SUMMARY_MODEL));
+  return (
+    readString(readFirstEnvValue(env.DREAM_MODEL, env.DAILY_DIGEST_MODEL, env.SUMMARY_MODEL)) ||
+    DEFAULT_DREAM_MODEL
+  );
 }
 
 function readDreamTimeZone(env: Env): string {
@@ -469,10 +498,10 @@ function buildDigestPrompt(input: {
     "",
     "Dream 目标：",
     "- 合并重复记忆，避免同一事实以多个版本长期存在。",
-    "- 发现过时、被新信息否定、互相矛盾的旧记忆，并更新或删除。",
-    "- 检查当天小批抽取已经入库的记忆和旧记忆之间是否重复、过时或冲突。",
-    "- 只在极少数必要场景提出关键原文摘录，重写一份简洁的 L1 摘要。",
-    "- 形成下一次对话可直接使用的简洁记忆，而不是保存流水账。",
+    "- 发现过时、被新信息否定、互相矛盾的旧记忆，并提出更新或删除建议（全部进入审核队列）。",
+    "- 检查当天夜间抽取候选和旧记忆之间是否重复、过时或冲突。",
+    "- 只在极少数必要场景提出关键原文摘录。",
+    "- 形成简洁的昨日日志，而不是保存流水账。",
     "",
     "窗口：",
     `- 你只能处理 ${input.dateLabel} 这一天窗口内的聊天。窗口是 ${input.startIso} 到 ${input.endIso}。`,
@@ -483,7 +512,7 @@ function buildDigestPrompt(input: {
     "- 宁可少记，也不要把临时语气、寒暄、重复话、空内容、调试内容写进长期记忆。",
     "- 当旧记忆和新信息冲突时，优先更新或删除旧记忆，不要并排留下互相打架的版本。",
     "- 当新信息只是旧记忆的更准确版本，优先 memories_to_update，不要 memories_to_add。",
-    "- v2 的首次抽取已由每 4 小时 extractor 负责；memories_to_add 默认给空数组，不要把当天聊天首次抽取成新长期记忆。",
+    "- 稳定事实的首次抽取由 dream 夜间管线负责，产物全部进审核队列；memories_to_add 默认给空数组。",
     "- 当多条旧记忆重复，保留更完整的一条并删除重复项；必要时先 update 保留项。",
     "- pinned=true 的旧记忆不能删除，只能在 memories_to_update 中提出更保守的补充。",
     "- 旧记忆里的临时计划/意图（例如“打算下个月充值X”）如果已经过期、已经发生、或被当天新信息取代，优先更新成持久事实或直接删除，不要让过期的打算一直躺在库里。",
@@ -832,6 +861,121 @@ function sanitizeDreamDigestLists(
   return { updates: cleanedUpdates, deletes: deletes ?? [] };
 }
 
+function isWorldFactMemory(input: { type?: string | null; factKey?: string | null }): boolean {
+  const type = input.type?.trim().toLowerCase();
+  if (type === "world_fact") return true;
+  const factKey = input.factKey?.trim().toLowerCase();
+  return Boolean(factKey && (factKey.startsWith("world_fact:") || factKey.startsWith("world:")));
+}
+
+async function resolveWorldFactTarget(
+  env: Env,
+  input: { namespace: string; targetId: string }
+): Promise<{ type: string; factKey: string | null } | null> {
+  const existing = await getVectorMemory(env, input.targetId, { requireD1Backing: true });
+  if (!existing || existing.namespace !== input.namespace || existing.status !== "active") return null;
+  const lifecycleRows = await fetchMemoryLifecycleRows(env.DB, [existing.id]);
+  const factKey = lifecycleRows[0]?.fact_key ?? null;
+  if (!isWorldFactMemory({ type: existing.type, factKey })) return null;
+  return { type: existing.type, factKey };
+}
+
+async function queueDreamExtractedMemories(
+  env: Env,
+  input: { namespace: string; memories: ExtractedMemory[]; messageIds: string[] }
+): Promise<number> {
+  let queued = 0;
+  for (const memory of input.memories) {
+    try {
+      await createMemoryCandidate(env.DB, {
+        namespace: input.namespace,
+        type: memory.type,
+        content: memory.content,
+        factKey: memory.fact_key ?? null,
+        confidence: memory.confidence,
+        importance: memory.importance,
+        tags: memory.tags,
+        sourceMessageIds: memory.source_message_ids.length ? memory.source_message_ids : input.messageIds,
+        source: "dream_extract"
+      });
+      queued += 1;
+    } catch (error) {
+      console.warn("dream: failed to queue extracted memory", {
+        namespace: input.namespace,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  return queued;
+}
+
+export function buildDreamRoutingPlan(input: {
+  extracted: ExtractedMemory[];
+  digest: DailyDigestResult;
+  worldFactUpdateIds?: Set<string>;
+}): DreamRoutingPlan {
+  const items: DreamRoutingItem[] = [];
+  const worldFactUpdateIds = input.worldFactUpdateIds ?? new Set<string>();
+
+  for (const memory of input.extracted) {
+    items.push({
+      destination: "candidate",
+      kind: "extract",
+      content: memory.content,
+      type: memory.type,
+      fact_key: memory.fact_key ?? null
+    });
+  }
+
+  for (const item of input.digest.memories_to_add ?? []) {
+    items.push({
+      destination: "candidate",
+      kind: "add",
+      content: item.content,
+      type: item.type,
+      fact_key: item.fact_key ?? null
+    });
+  }
+
+  for (const item of input.digest.memories_to_update ?? []) {
+    items.push({
+      destination: worldFactUpdateIds.has(item.target_id) ? "world_fact_direct" : "candidate",
+      kind: "update",
+      content: item.content,
+      type: item.type,
+      target_id: item.target_id
+    });
+  }
+
+  for (const item of input.digest.memories_to_delete ?? []) {
+    items.push({
+      destination: "candidate",
+      kind: "delete",
+      target_id: item.target_id,
+      reason: item.reason
+    });
+  }
+
+  for (const excerpt of input.digest.important_excerpts ?? []) {
+    if (!readString(excerpt.quote)) continue;
+    items.push({
+      destination: "candidate",
+      kind: "excerpt",
+      content: excerpt.quote,
+      reason: excerpt.reason
+    });
+  }
+
+  const toCandidates = items.filter((item) => item.destination === "candidate").length;
+  return {
+    items,
+    summary: {
+      to_candidates: toCandidates,
+      world_fact_direct: items.length - toCandidates
+    }
+  };
+}
+
 async function applyDreamV2(
   env: Env,
   input: {
@@ -841,69 +985,75 @@ async function applyDreamV2(
     messages: MessageRecord[];
     digest: DailyDigestResult;
     messageIds: string[];
+    extracted: ExtractedMemory[];
   }
 ): Promise<{
   added: number;
   updated: number;
   deleted: number;
+  queuedCandidates: number;
   excerpts: number;
   longtail: number;
   errors: Array<{ target_id: string; reason: string }>;
 }> {
-  const { namespace, strategy, dateLabel, digest, messageIds } = input;
+  const { namespace, strategy, dateLabel, digest, messageIds, extracted } = input;
   const isReview = strategy === "review";
-  const added = 0;
-  let updated = 0, deleted = 0, longtailCount = 0;
+  let updated = 0;
+  let deleted = 0;
+  let queuedCandidates = 0;
   const errors: Array<{ target_id: string; reason: string }> = [];
-  const archiveDeletesToLongtail = shouldArchiveDreamDeletesToLongtail(env);
 
   if (isReview) {
     await recordDreamReviewProposal(env, { namespace, dateLabel, digest, messageIds });
-    return { added: 0, updated: 0, deleted: 0, excerpts: 0, longtail: 0, errors: [] };
+    return { added: 0, updated: 0, deleted: 0, queuedCandidates: 0, excerpts: 0, longtail: 0, errors: [] };
   }
+
+  queuedCandidates += await queueDreamExtractedMemories(env, {
+    namespace,
+    memories: extracted,
+    messageIds
+  });
 
   const { updates: memoriesToUpdate, deletes: memoriesToDelete } = sanitizeDreamDigestLists(
     digest.memories_to_update ?? [],
     digest.memories_to_delete ?? []
   );
 
-  // v2 首次抽取由每 4 小时 extractor 负责；dream 只整理、更新、删除和写 L1/daily_log。
   for (const item of memoriesToUpdate) {
     try {
-      const existing = await getVectorMemory(env, item.target_id, { requireD1Backing: true });
-      if (!existing || existing.namespace !== namespace || existing.status !== "active") continue;
-
-      const lifecycleRows = await fetchMemoryLifecycleRows(env.DB, [existing.id]);
-      const existingFactKey = lifecycleRows[0]?.fact_key ?? null;
-
-      if (existingFactKey && item.content) {
-        await upsertMemoryByFactKey(env, {
-          namespace,
-          factKey: existingFactKey,
-          content: item.content,
-          type: item.type,
-          importance: item.importance,
-          confidence: item.confidence,
-          tags: item.tags,
-          source: "dream",
-          sourceMessageIds: messageIds
-        });
-        updated++;
-      } else if (item.content) {
+      const worldFactTarget = await resolveWorldFactTarget(env, { namespace, targetId: item.target_id });
+      if (worldFactTarget && item.content) {
         await supersedeMemory(env, {
           namespace,
           oldId: item.target_id,
           newContent: item.content,
-          newType: item.type,
+          newType: item.type ?? worldFactTarget.type,
+          newFactKey: worldFactTarget.factKey,
           importance: item.importance,
           confidence: item.confidence,
           tags: item.tags,
           source: "dream",
           sourceMessageIds: messageIds,
-          reason: "dream_update"
+          reason: "dream_world_fact"
         });
         updated++;
+        continue;
       }
+
+      if (!item.content) continue;
+      await createMemoryCandidate(env.DB, {
+        namespace,
+        type: item.type ?? "note",
+        content: item.content,
+        factKey: null,
+        confidence: item.confidence ?? 0.72,
+        importance: item.importance ?? 0.72,
+        tags: item.tags,
+        sourceMessageIds: messageIds,
+        source: "dream_update",
+        targetMemoryId: item.target_id
+      });
+      queuedCandidates += 1;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       console.warn("dream: update failed", { namespace, target_id: item.target_id, reason });
@@ -916,14 +1066,20 @@ async function applyDreamV2(
       const existing = await getVectorMemory(env, item.target_id, { requireD1Backing: true });
       if (!existing || existing.status !== "active" || existing.pinned) continue;
 
-      if (archiveDeletesToLongtail) {
-        const lt = await createLongtail(env.DB, { namespace, content: existing.content, sourceMessageIds: messageIds });
-        await upsertLongtailEmbedding(env, { id: lt.id, namespace, content: existing.content });
-        longtailCount++;
-      }
-
-      const retired = await retireMemoryRecord(env, { namespace, id: item.target_id });
-      if (retired) deleted++;
+      await createMemoryCandidate(env.DB, {
+        namespace,
+        type: existing.type,
+        content: existing.content,
+        factKey: null,
+        confidence: 0.72,
+        importance: existing.importance,
+        tags: [],
+        sourceMessageIds: messageIds,
+        source: "dream_delete",
+        targetMemoryId: item.target_id,
+        decisionNote: item.reason ?? "dream_delete"
+      });
+      queuedCandidates += 1;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       console.warn("dream: delete failed", { namespace, target_id: item.target_id, reason });
@@ -937,17 +1093,7 @@ async function applyDreamV2(
     excerpts: digest.important_excerpts ?? [],
     fallbackMessageIds: messageIds
   });
-
-  if (digest.summary) {
-    const digestContent = [
-      digest.title ? `【${digest.title}】` : "",
-      digest.summary,
-      ...(digest.sections ?? []).map((s) => (s.heading ? `${s.heading}: ${s.content}` : s.content ?? ""))
-    ]
-      .filter(Boolean)
-      .join("\n");
-    await upsertDigest(env.DB, { namespace, content: truncate(digestContent, 500) });
-  }
+  queuedCandidates += excerpts;
 
   await upsertDailyLog(env.DB, {
     namespace,
@@ -956,7 +1102,7 @@ async function applyDreamV2(
     summary: digest.summary ?? ""
   });
 
-  return { added, updated, deleted, excerpts, longtail: longtailCount, errors };
+  return { added: 0, updated, deleted, queuedCandidates, excerpts, longtail: 0, errors };
 }
 
 const DREAM_CONTEXT_QUERY_MAX_MESSAGES = 20;
@@ -1216,6 +1362,12 @@ export async function runDailyMemoryDigest(
   }
 
   const digest = modelResult.digest;
+  const extractResult = await extractDreamMemoriesFromMessages(env, {
+    namespace,
+    messages
+  });
+  const extractedMemories = extractResult.memories;
+
   if (!digest) {
     console.error("dream: model did not return valid JSON; cursor not advanced", {
       reason: modelResult.reason,
@@ -1250,6 +1402,16 @@ export async function runDailyMemoryDigest(
   }
 
   if (dryRun) {
+    const worldFactUpdateIds = new Set<string>();
+    for (const item of digest.memories_to_update ?? []) {
+      const target = await resolveWorldFactTarget(env, { namespace, targetId: item.target_id });
+      if (target) worldFactUpdateIds.add(item.target_id);
+    }
+    const routingPlan = buildDreamRoutingPlan({
+      extracted: extractedMemories,
+      digest,
+      worldFactUpdateIds
+    });
     await safeFinishDreamRun(env.DB, {
       id: dreamRunId,
       status: "skipped",
@@ -1266,12 +1428,15 @@ export async function runDailyMemoryDigest(
         addedMemories: 0,
         updatedMemories: 0,
         deletedMemories: 0,
+        queuedCandidates: routingPlan.summary.to_candidates,
         savedExcerpts: 0,
         cleanedEmptyMemories,
         cursorAdvanced: false,
         hasMore
       },
-      proposal: digest
+      proposal: digest,
+      routing_plan: routingPlan,
+      extracted_memories: extractedMemories
     };
   }
 
@@ -1286,7 +1451,8 @@ export async function runDailyMemoryDigest(
       dateLabel,
       messages,
       digest,
-      messageIds
+      messageIds,
+      extracted: extractedMemories
     });
 
     await writeCursor(env.DB, cursorName, hasMore ? lastMessage.created_at : `done:${lastMessage.created_at}`);
@@ -1308,6 +1474,7 @@ export async function runDailyMemoryDigest(
         addedMemories: v2Result.added,
         updatedMemories: v2Result.updated,
         deletedMemories: v2Result.deleted,
+        queuedCandidates: v2Result.queuedCandidates,
         savedExcerpts: v2Result.excerpts,
         cleanedEmptyMemories,
         cursorAdvanced: true,
@@ -1363,6 +1530,7 @@ export async function runDailyMemoryDigest(
       addedMemories,
       updatedMemories: updates.updated,
       deletedMemories: updates.deleted,
+      queuedCandidates: 0,
       savedExcerpts,
       cleanedEmptyMemories,
       cursorAdvanced: true,

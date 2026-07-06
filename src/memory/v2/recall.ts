@@ -11,7 +11,6 @@
 //   闸三: last_injected_at 近期注入过的降权 (不动 importance)。
 
 import {
-  getDigest,
   getDailyLog,
   listPrecious,
   listGlossary,
@@ -63,7 +62,7 @@ function decayForLastInjected(
 
 // =====================================================================
 // 闸二: 注入前与核心层去重。
-// 核心层 = boot 包里的 digest(L1) + precious(L3)。
+// 核心层 = boot 包里的 precious(L3)。
 // 召回命中如果跟核心层内容高度重叠, 模型这轮已知道, 不重复喂。
 // 用归一化文本的包含/重叠检测: 召回命中内容被核心层文本包含,
 // 或与核心层某条 Jaccard 词集重叠超阈值, 则判为重复, 降到 0 分剔除。
@@ -97,18 +96,13 @@ function jaccardOverlap(a: Set<string>, b: Set<string>): number {
   return union > 0 ? inter / union : 0;
 }
 
-// 构建核心层指纹: digest + precious 的文本词集, 供闸二比对。
+// 构建核心层指纹: precious 的文本词集, 供闸二比对。
 export interface CoreFingerprint {
-  digestTokens: Set<string> | null;
   preciousTokens: Set<string>[];
 }
 
-export function buildCoreFingerprint(
-  digestContent: string | null,
-  preciousContents: string[]
-): CoreFingerprint {
+export function buildCoreFingerprint(preciousContents: string[]): CoreFingerprint {
   return {
-    digestTokens: digestContent ? tokenize(digestContent) : null,
     preciousTokens: preciousContents.filter(Boolean).map(tokenize)
   };
 }
@@ -118,13 +112,6 @@ function isDuplicateWithCore(content: string, core: CoreFingerprint): boolean {
   const hitTokens = tokenize(content);
   if (hitTokens.size === 0) return false;
 
-  // 召回命中被 digest 包含: digest 文本里出现了命中的大部分词
-  if (core.digestTokens && core.digestTokens.size > 0) {
-    if (jaccardOverlap(hitTokens, core.digestTokens) >= DEDUP_OVERLAP_THRESHOLD) {
-      return true;
-    }
-  }
-  // 与某条 precious 高度重叠
   for (const pt of core.preciousTokens) {
     if (jaccardOverlap(hitTokens, pt) >= DEDUP_OVERLAP_THRESHOLD) {
       return true;
@@ -139,7 +126,6 @@ function isDuplicateWithCore(content: string, core: CoreFingerprint): boolean {
 // =====================================================================
 
 export interface BootPackage {
-  digest: { content: string; updated_at: string } | null;
   yesterday_log: { date: string; title: string; summary: string } | null;
   precious: Array<{ id: string; content: string; created_at: string }>;
   glossary: Array<{ term: string; definition: string; aliases: string[] }>;
@@ -147,13 +133,12 @@ export interface BootPackage {
   cache_prefix_end: true;
 }
 
-const BOOT_SCHEMA_VERSION = "v2-1";
+const BOOT_SCHEMA_VERSION = "v3-0";
 
 export async function buildBootPackage(
   env: Env,
   input: { namespace: string }
 ): Promise<BootPackage> {
-  const digest = await getDigest(env.DB, input.namespace);
   const preciousRows = await listPrecious(env.DB, {
     namespace: input.namespace,
     limit: 20
@@ -186,7 +171,6 @@ export async function buildBootPackage(
   const dailyLog = await getDailyLog(env.DB, { namespace: input.namespace, date: yesterdayLabel });
 
   return {
-    digest: digest ? { content: digest.content, updated_at: digest.updated_at } : null,
     yesterday_log: dailyLog ? { date: dailyLog.date, title: dailyLog.title, summary: dailyLog.summary } : null,
     precious,
     glossary: allGlossary,
@@ -195,18 +179,13 @@ export async function buildBootPackage(
   };
 }
 
-// 服务端自建核心层指纹: 读 digest + precious, 供闸二在调用方没传指纹时用。
-// 让闸二默认生效, 不依赖 MCP 客户端配合。
+// 服务端自建核心层指纹: 读 precious, 供闸二在调用方没传指纹时用。
 async function buildCoreFingerprintFromDb(
   env: Env,
   namespace: string
 ): Promise<CoreFingerprint> {
-  const digest = await getDigest(env.DB, namespace);
   const preciousRows = await listPrecious(env.DB, { namespace, limit: 50 });
-  return buildCoreFingerprint(
-    digest?.content ?? null,
-    preciousRows.map((r) => r.content)
-  );
+  return buildCoreFingerprint(preciousRows.map((r) => r.content));
 }
 
 async function listAllGlossary(
@@ -303,7 +282,7 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
 
   // 2. memories 向量召回 (L4 + L6 world_fact，active only)
   //    闸一: 不查 precious。precious 归 boot 固定供给, 不进每轮 query 召回池。
-  const k = Math.min(Math.max(Math.floor(input.k ?? 20), 1), 100);
+  const k = Math.min(Math.max(Math.floor(input.k ?? 3), 1), 100);
   const searchResult = await searchMemoriesWithProvenance(env, {
     namespace: input.namespace,
     query,
@@ -314,11 +293,7 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
   // 严格模式下 (RECALL_REQUIRE_D1_BACKING=true) 已经在 search 层丢弃的孤儿向量命中数。
   const unbackedDropped = searchResult.unbacked_dropped;
 
-  // 2.5. 三重管线: reranker 重排 + 小模型压缩 (v1 的 filter.ts 现成逻辑)
-  //      prepareCandidates: 去重、sanitize、min score 过滤、按质量排序
-  //      rerankMemories: Workers AI bge-reranker-base 重排
-  //      LLM compress: 小模型把每条压缩成短句，无关的输出 null 剔除
-  //      filterAndCompressMemories 内部全程 {...memory} 展开，backed/source provenance 字段原样透传。
+  // 2.5. 召回精炼: prepareCandidates + reranker，记忆原文直出
   const memories = (await filterAndCompressMemories(env, {
     query,
     memories: rawMemories
@@ -344,8 +319,8 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
   });
 
   // 4. 闸二: 注入前与核心层去重。
-  //    调用方传 core_fingerprint (boot 包的 digest + precious 文本指纹)；
-  //    不传则服务端自己建 (读 digest + precious), 保证闸二默认生效。
+  //    调用方传 core_fingerprint (boot 包的 precious 文本指纹)；
+  //    不传则服务端自己建 (读 precious), 保证闸二默认生效。
   //    recall 命中与之高度重叠的降到 0 分剔除, 不重复喂。
   const dedupedIds: string[] = [];
   const core = input.core_fingerprint ?? (await buildCoreFingerprintFromDb(env, input.namespace));

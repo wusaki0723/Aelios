@@ -6,10 +6,11 @@
 // 的向量 (superseded/archived/deleted)。这些残留会在 recall 里冒出来当"合法"结果，
 // 让召回质量测试没法做。
 //
-// 枚举方式复用 export.ts 的两阶段做法 (见该文件头注释)：
-//   Phase 1 — query(zeroVector, {topK, namespace, returnMetadata:'indexed'}) 拿全部 ID。
-//             'indexed' metadata 才能突破 topK<=50 的限制。
-//   Phase 2 — getByIds(batch) 分批拿完整 metadata (含 content)。
+// 枚举方式复用 vectorStore.ts 的两阶段做法：
+//   Phase 1 — listVectorIdsViaApi（Vectorize REST /list + cursor 分页）全量枚举 ID，
+//             无 query-topK 天花板；/list 不按 namespace 过滤。
+//   Phase 2 — getByIds（每批 ≤20，平台硬上限）分批拿完整 metadata，再按
+//             metadata.namespace === input.namespace 过滤后进分类。
 // 不发明新的枚举方式，避免两处实现漂移。
 //
 // 分类三类 (以 metadata.ref_id 去查 D1)：
@@ -20,11 +21,13 @@
 //
 // cleanup=true 时只从 Vectorize 删 backed_inactive + orphan，绝不碰 D1——D1 永远是本体。
 
-import { createEmbedding } from "./embedding";
 import type { Env } from "../types";
 import { RETENTION_BATCH_SIZE } from "../db/retention";
+import { listVectorIdsViaApi } from "./vectorStore";
 
-const GETBYIDS_BATCH = 50;
+// Vectorize getByIds platform hard cap (code 40007) — do not raise.
+const GETBYIDS_BATCH = 20;
+const LIST_PAGE_SIZE = 1000;
 // D1 单条语句绑定变量上限，IN (...) 批量查询保持在这个数以下 (跟 db/v2.ts 的
 // SQLITE_BIND_BATCH_SIZE 同一个理由：留出余量，别顶到 D1 的硬限制)。
 const D1_LOOKUP_BATCH = 90;
@@ -125,25 +128,24 @@ async function enumerateNamespaceVectors(
     return { vectors: [], errors: ["missing_vectorize_binding"] };
   }
 
-  const probe = await createEmbedding(env, "vector doctor probe");
-  if (!probe || probe.length === 0) {
-    return { vectors: [], errors: ["embedding_unavailable"] };
-  }
-  const zeroVector = probe.map(() => 0);
-
-  // --- Phase 1: discover vector IDs via indexed-metadata query ---
+  // --- Phase 1: paginated full-index ID discovery via /list ---
   let phase1Ids: string[] = [];
   try {
-    const result = await env.VECTORIZE.query(zeroVector, {
-      topK: input.limit,
-      namespace: input.namespace,
-      returnMetadata: "indexed",
-      returnValues: false,
-      filter: { namespace: input.namespace }
-    });
-    phase1Ids = (result.matches ?? []).map((m) => m.id);
+    let cursor: string | undefined;
+    let hasMore = true;
+    while (hasMore && phase1Ids.length < input.limit) {
+      const remaining = input.limit - phase1Ids.length;
+      const page = await listVectorIdsViaApi(env, {
+        count: Math.min(LIST_PAGE_SIZE, remaining),
+        cursor
+      });
+      if (page.ids.length === 0) break;
+      phase1Ids.push(...page.ids);
+      cursor = page.cursor ?? undefined;
+      hasMore = page.hasMore && Boolean(cursor);
+    }
   } catch (err) {
-    errors.push(`phase1_query_failed: ${err instanceof Error ? err.message : String(err)}`);
+    errors.push(`phase1_list_failed: ${err instanceof Error ? err.message : String(err)}`);
     return { vectors: [], errors };
   }
 
@@ -157,11 +159,13 @@ async function enumerateNamespaceVectors(
       const fetched = await env.VECTORIZE.getByIds(batch);
       for (const v of fetched) {
         const metadata = (v.metadata || {}) as Record<string, unknown>;
+        const metaNamespace = readMetaString(metadata, "namespace");
+        if (metaNamespace !== input.namespace) continue;
         const kindRaw = readMetaString(metadata, "kind");
         const kind: "memory" | "longtail" = kindRaw === "longtail" ? "longtail" : "memory";
         vectors.push({
           vectorId: v.id,
-          namespace: readMetaString(metadata, "namespace") || input.namespace,
+          namespace: metaNamespace,
           kind,
           refId: deriveRefId(v.id, metadata),
           type: readMetaString(metadata, "type") || (kind === "longtail" ? "longtail" : "note"),

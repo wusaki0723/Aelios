@@ -601,7 +601,7 @@ export async function searchVectorMemories(
     .slice(0, topK);
 }
 
-async function listVectorIdsViaApi(
+export async function listVectorIdsViaApi(
   env: Env,
   input: VectorMemoryListInput
 ): Promise<{ ids: string[]; cursor: string | null; hasMore: boolean; totalCount?: number }> {

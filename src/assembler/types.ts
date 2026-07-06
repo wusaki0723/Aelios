@@ -40,7 +40,7 @@ export interface AssemblerContext {
    */
   pinnedPersonaMemories: MemoryApiRecord[] | null;
 
-  /** v2 boot package (digest + yesterday_log + precious + glossary). null = v1 path. */
+  /** v2 boot package (yesterday_log + precious + glossary). null = v1 path. */
   boot: BootPackage | null;
 
   /** RAG hits for the current round (v1) or recall hits (v2). */
@@ -140,7 +140,7 @@ export const BLOCK_ORDER: readonly string[] = [
  * Cache prefix = proxy_static_rules + persona_pinned + preset_lite + client_system.
  * This includes the long persona/system prompt (4096+ tokens for Haiku threshold).
  *
- * boot_stable (glossary, digest, yesterday_log) is AFTER the anchor.
+ * boot_stable (glossary, yesterday_log) is AFTER the anchor.
  * It changes daily but does NOT invalidate the cached system prefix.
  * client_volatile_context (time), dynamic_memory_patch (RAG), vision_context
  * are turn_context blocks — injected into the message stream before current_user,
@@ -163,9 +163,6 @@ export const PERSONA_MEMORY_TYPES: readonly string[] = ["identity", "persona"] a
 
 export function formatBootStable(boot: BootPackage): string {
   const parts: string[] = [];
-  if (boot.digest) {
-    parts.push("<digest>", boot.digest.content, "</digest>");
-  }
   if (boot.yesterday_log) {
     parts.push(
       "<yesterday_log>",

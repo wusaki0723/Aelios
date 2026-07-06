@@ -33,7 +33,7 @@ export interface AssembleInput {
    */
   pinnedPersonaMemories: MemoryApiRecord[] | null;
 
-  /** v2 boot package (digest + yesterday_log + precious + glossary). null = v1 path. */
+  /** v2 boot package (yesterday_log + precious + glossary). null = v1 path. */
   boot: BootPackage | null;
 
   /** RAG hits for the current round (v1) or recall hits (v2). */

@@ -161,20 +161,6 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
           </div>
         </div>
 
-        <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
-          <div class="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <div class="text-sm font-semibold">L1 摘要</div>
-              <div class="text-xs text-zinc-400" x-text="boot.digest && boot.digest.updated_at ? fmt(boot.digest.updated_at) : '尚未写入'"></div>
-            </div>
-            <button type="button" @click="saveDigest()" class="tap inline-flex items-center gap-2 rounded-2xl bg-coral px-4 text-sm font-semibold text-zinc-950 transition duration-150 ease-in-out disabled:opacity-50" :disabled="saving">
-              <i data-lucide="save" class="h-4 w-4"></i><span>保存</span>
-            </button>
-          </div>
-          <textarea x-model="digestDraft" maxlength="500" class="min-h-40 w-full resize-y rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-4 text-sm leading-7 text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral" placeholder="今天的长期上下文摘要"></textarea>
-          <div class="mt-2 text-right text-xs text-zinc-400" x-text="digestDraft.length + ' / 500'"></div>
-        </article>
-
         <div class="space-y-3">
           <div class="flex items-center justify-between">
             <h2 class="text-base font-semibold">今天的 raw 聊天流</h2>
@@ -516,13 +502,13 @@ function memoryAdmin() {
     theme: localStorage.getItem('aelios.admin.colorMode') || 'light',
     boot: {},
     stats: {},
-    digestDraft: '',
+
     todayMessages: [],
     candidates: [],
     memories: [],
     precious: [],
     glossary: [],
-    longtail: [],
+
     worldItems: [],
     worldSelection: {},
     worldQuery: '',
@@ -622,15 +608,12 @@ function memoryAdmin() {
         const data = await this.request(this.withNamespace('/v1/memory_boot?start=' + encodeURIComponent(range.start) + '&end=' + encodeURIComponent(range.end)));
         this.boot = data.data || {};
         this.stats = this.boot.stats || {};
-        this.digestDraft = this.boot.digest && this.boot.digest.content ? this.boot.digest.content.slice(0, 500) : '';
+
         this.todayMessages = this.boot.today_messages || [];
         this.precious = this.boot.precious || [];
         this.glossary = this.boot.glossary || [];
-        this.longtail = (this.boot.longtail || []).map(function(row) {
-          return { id: row.id, type: 'longtail', status: 'v1 longtail', source: row.ts, content: row.content };
-        });
         if (this.moreView === 'world') {
-          this.worldItems = this.longtail;
+          this.worldItems = [];
           this.pruneWorldSelection();
         }
       } catch (error) {
@@ -677,29 +660,16 @@ function memoryAdmin() {
     async loadWorldFacts() {
       try {
         const data = await this.request(this.withNamespace('/v1/memory?status=active&limit=80&type=world_fact'));
-        this.worldItems = (data.data || []).concat(this.longtail);
+        this.worldItems = data.data || [];
         this.pruneWorldSelection();
       } catch (error) {
-        this.worldItems = this.longtail;
+        this.worldItems = [];
         this.pruneWorldSelection();
         this.notify(error.message);
       }
       this.icons();
     },
-    async saveDigest() {
-      this.saving = true;
-      try {
-        await this.request(this.withNamespace('/v1/memory_boot'), {
-          method: 'PATCH',
-          body: JSON.stringify({ namespace: this.namespace, content: this.digestDraft.slice(0, 500) })
-        });
-        await this.loadBoot();
-        this.notify('摘要已保存');
-      } catch (error) {
-        this.notify(error.message);
-      }
-      this.saving = false;
-    },
+
     async pinMessage(message) {
       try {
         await this.request(this.withNamespace('/v1/precious'), {
@@ -1000,7 +970,7 @@ function memoryAdmin() {
           method: 'POST',
           body: JSON.stringify({ namespace: this.namespace, query: this.worldQuery, top_k: 30, filter: false })
         });
-        this.worldItems = (data.data || []).concat(this.longtail);
+        this.worldItems = data.data || [];
         this.pruneWorldSelection();
       } catch (error) {
         this.notify(error.message);

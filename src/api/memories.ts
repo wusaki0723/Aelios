@@ -19,18 +19,15 @@ import {
   deleteLongtail,
   deletePrecious,
   fetchMemoryLifecycleRows,
-  getDigest,
   getDailyLog,
   getMemoryCandidateById,
   listGlossary,
-  listLongtail,
   listMemoryCandidates,
   listPrecious,
   type MemoryCandidateRow,
   supersedeMemory,
   updateGlossary,
   updateMemoryCandidateStatus,
-  upsertDigest,
   upsertGlossary,
   upsertMemoryByFactKey
 } from "../db/v2";
@@ -368,33 +365,20 @@ export async function handleMemoryBoot(request: Request, env: Env): Promise<Resp
   const auth = await authenticate(request, env);
   if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
 
+  if (request.method !== "GET") return openAiError("Not found", 404);
+
   const url = new URL(request.url);
   const namespace = resolveNamespace(auth.profile, url.searchParams.get("namespace"));
-
-  if (request.method === "PATCH") {
-    const scopeError = requireScope(auth.profile, "memory:write");
-    if (scopeError) return scopeError;
-    const body = await readJsonObject(request);
-    if (!body) return openAiError("Request body must be a JSON object", 400);
-    const content = readString(body.content);
-    if (!content) return openAiError("content is required", 400);
-    const digest = await upsertDigest(env.DB, { namespace, content: content.slice(0, 1200) });
-    return json({ data: digest });
-  }
-
-  if (request.method !== "GET") return openAiError("Not found", 404);
   const scopeError = requireScope(auth.profile, "memory:read");
   if (scopeError) return scopeError;
 
   const start = readString(url.searchParams.get("start")) || new Date().toISOString().slice(0, 10) + "T00:00:00.000Z";
   const end = readString(url.searchParams.get("end")) || new Date().toISOString();
   const dailyDate = readString(url.searchParams.get("daily_date")) || yesterdayDateLabel();
-  const [digest, dailyLog, precious, glossary, longtail, todayMessages, todayRawCount, pendingCount, typeCounts] = await Promise.all([
-    getDigest(env.DB, namespace),
+  const [dailyLog, precious, glossary, todayMessages, todayRawCount, pendingCount, typeCounts] = await Promise.all([
     getDailyLog(env.DB, { namespace, date: dailyDate }),
     listPrecious(env.DB, { namespace, limit: 100 }),
     listGlossary(env.DB, { namespace }),
-    listLongtail(env.DB, { namespace, limit: 80 }),
     listMessagesByNamespaceInRange(env.DB, {
       namespace,
       startCreatedAt: start,
@@ -409,11 +393,9 @@ export async function handleMemoryBoot(request: Request, env: Env): Promise<Resp
   return json({
     data: {
       namespace,
-      digest,
       daily_log: dailyLog,
       precious,
       glossary,
-      longtail,
       today_messages: todayMessages,
       stats: {
         today_raw_count: todayRawCount,
@@ -422,6 +404,54 @@ export async function handleMemoryBoot(request: Request, env: Env): Promise<Resp
       }
     }
   });
+}
+
+function formatDateLabel(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function readDiaryTimeZone(env: Env): string {
+  return env.DREAM_TIME_ZONE?.trim() || env.DAILY_DIGEST_TIME_ZONE?.trim() || "Asia/Singapore";
+}
+
+export async function handleDiaryApi(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+  if (request.method !== "GET") return openAiError("Not found", 404);
+
+  const scopeError = requireScope(auth.profile, "memory:read");
+  if (scopeError) return scopeError;
+
+  const url = new URL(request.url);
+  const namespace = resolveNamespace(auth.profile, url.searchParams.get("namespace"));
+  const timeZone = readDiaryTimeZone(env);
+
+  if (url.pathname === "/v1/diary/recent") {
+    const today = formatDateLabel(new Date(), timeZone);
+    const yesterday = formatDateLabel(new Date(Date.now() - 24 * 60 * 60 * 1000), timeZone);
+    const rows = await Promise.all([
+      getDailyLog(env.DB, { namespace, date: today }),
+      getDailyLog(env.DB, { namespace, date: yesterday })
+    ]);
+    const data = rows.filter((row): row is NonNullable<typeof row> => Boolean(row));
+    return json({ data });
+  }
+
+  const date = readString(url.searchParams.get("date"));
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return openAiError("date query parameter is required (YYYY-MM-DD)", 400);
+  }
+
+  const row = await getDailyLog(env.DB, { namespace, date });
+  if (!row) {
+    return json({ data: null }, { status: 404 });
+  }
+  return json({ data: row });
 }
 
 export async function handlePrecious(request: Request, env: Env): Promise<Response> {

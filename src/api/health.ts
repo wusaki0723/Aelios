@@ -8,7 +8,6 @@ const requiredTextVars = [
   "CLOUDFLARE_ACCOUNT_ID",
   "CLOUDFLARE_API_TOKEN",
   "CHAT_MODEL",
-  "MEMORY_FILTER_MODEL",
   "VISION_MODEL"
 ] as const;
 
@@ -24,9 +23,7 @@ const optionalBindings = [
 
 export function handleHealth(env: Env): Response {
   const missing_text_vars: string[] = requiredTextVars.filter((name) => !env[name]);
-  if (!env.DREAM_MODEL && !env.SUMMARY_MODEL && !env.DAILY_DIGEST_MODEL) {
-    missing_text_vars.push("DREAM_MODEL");
-  }
+
   const missing_bindings = requiredBindings
     .filter(([, binding]) => !env[binding])
     .map(([name]) => name);

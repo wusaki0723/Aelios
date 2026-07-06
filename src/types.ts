@@ -50,15 +50,10 @@ export interface Env {
   DREAM_MEMORY_CONTEXT_LIMIT?: string;
   DREAM_EXCERPT_LIMIT?: string;
   DREAM_TIME_ZONE?: string;
-  EXTRACT_MODEL?: string;
-  EXTRACT_MAX_MESSAGES?: string;
-  EXTRACT_MAX_RUNS?: string;
-  EXTRACT_MAX_TOKENS?: string;
-  EXTRACT_REVIEW_CONFIDENCE?: string;
   DEDUP_COSINE?: string;
   // L4 每区（type）active 条数硬上限，0 或不设 = 关闭（母帖第一节，对抗膨胀的闸）
   MEMORY_ZONE_CAP?: string;
-  // 候选队列自动评审（judge），默认关闭；开启后 4 小时 cron 在抽取后跑一轮
+  // 候选队列自动评审（judge），默认关闭
   CANDIDATE_JUDGE_ENABLED?: string;
   JUDGE_MODEL?: string;
   JUDGE_MAX_CANDIDATES?: string;
@@ -76,15 +71,12 @@ export interface Env {
   EMPTY_MEMORY_MIN_CHARS?: string;
   MEMORY_MODE?: string;
   ENABLE_MEMORY_FILTER?: string;
-  MEMORY_FILTER_MODEL?: string;
   ENABLE_MEMORY_RERANKER?: string;
   MEMORY_RERANKER_MODEL?: string;
   VISION_MODEL?: string;
   MEMORY_FILTER_MAX_CANDIDATES?: string;
   MEMORY_FILTER_MAX_OUTPUT?: string;
   MEMORY_FILTER_MAX_CONTENT_CHARS?: string;
-  MEMORY_FILTER_OUTPUT_CHARS?: string;
-  MEMORY_FILTER_MAX_TOKENS?: string;
   MEMORY_FILTER_MIN_SCORE?: string;
   MEMORY_FILTER_FAIL_OPEN?: string;
   MEMORY_EXTRACT_EVERY_N_MESSAGES?: string;

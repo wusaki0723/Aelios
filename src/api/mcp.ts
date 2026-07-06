@@ -7,17 +7,16 @@ import {
   createPrecious,
   deleteMemoryV2,
   fetchMemoryLifecycleRows,
-  getDigest,
+  getDailyLog,
   getPreciousById,
   supersedeMemory,
-  upsertDigest,
   upsertGlossary,
   upsertMemoryByFactKey
 } from "../db/v2";
 import { filterAndCompressMemories } from "../memory/filter";
 import { exportMemories } from "../memory/export";
-import { runExtractionDryRun } from "../memory/extractPipeline";
 import { buildBootPackage, isV2Enabled, runRecall } from "../memory/v2/recall";
+import { readDreamTimeZoneFromEnv } from "../memory/dailyDigest";
 import { toMemoryApiRecord } from "../memory/search";
 import {
   createVectorMemory,
@@ -191,37 +190,12 @@ function getTools(): Array<Record<string, unknown>> {
         required: ["messages"]
       }
     },
-    {
-      name: "memory_extract_dryrun",
-      description:
-        "Dry-run the real extraction pipeline (same prompt, same model, same normalization) against " +
-        "a synthetic message window. Returns candidate memories WITHOUT persisting, touching cursors, " +
-        "or writing candidates. For eval harnesses.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          messages: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                role: { type: "string" },
-                content: {}
-              },
-              required: ["role", "content"]
-            }
-          },
-          namespace: { type: "string" }
-        },
-        required: ["messages"]
-      }
-    },
     // --- Aelios 记忆库 v2 端点 (母帖 #11 第 2 步) ---
     // 全部走 MEMORY_LIFECYCLE_ENABLED 总闸；关时返回未启用。
     {
       name: "memory_boot",
       description:
-        "Cold-start package: L1 digest + yesterday log + top pinned precious + all glossary. " +
+        "Cold-start package: yesterday log + top pinned precious + all glossary. " +
         "Output is stable and deterministically ordered so the client can cache it. " +
         "Call once on SessionStart.",
       inputSchema: {
@@ -236,7 +210,7 @@ function getTools(): Array<Record<string, unknown>> {
       description:
         "Per-turn dynamic recall: glossary literal hits + memories(active) vector + world_fact " +
         "+ longtail fallback. Gate 3 inject-decay on last_injected_at. Gate 2 dedups hits against " +
-        "the core layer (digest + precious) so the model isn't re-fed what it already knows this turn. " +
+        "the core layer (precious) so the model isn't re-fed what it already knows this turn. " +
         "Precious is NOT queried here (gate 1: it lives in boot). Call on UserPromptSubmit.",
       inputSchema: {
         type: "object",
@@ -333,25 +307,16 @@ function getTools(): Array<Record<string, unknown>> {
       }
     },
     {
-      name: "digest_get",
-      description: "Read the L1 digest (single row per namespace, <=500 chars).",
+      name: "diary_get",
+      description:
+        "Read daily_log diary entries. Omit date for today+yesterday (recent). " +
+        "Diary is never auto-injected; fetch explicitly when needed.",
       inputSchema: {
         type: "object",
         properties: {
+          date: { type: "string", description: "YYYY-MM-DD; omit for recent (today+yesterday)" },
           namespace: { type: "string" }
         }
-      }
-    },
-    {
-      name: "digest_set",
-      description: "Overwrite the L1 digest (covering write, <=500 chars).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          content: { type: "string" },
-          namespace: { type: "string" }
-        },
-        required: ["content"]
       }
     }
   ];
@@ -553,20 +518,7 @@ async function callTool(
     });
   }
 
-  if (params.name === "memory_extract_dryrun") {
-    if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
-    const messages = readMessages(args.messages);
-    if (messages.length === 0) return toolError("messages must contain at least one message");
-    const namespace = resolveNamespace(profile, args.namespace);
-    const result = await runExtractionDryRun(env, {
-      namespace,
-      messages: messages.map((message) => ({
-        role: message.role,
-        content: typeof message.content === "string" ? message.content : ""
-      }))
-    });
-    return textToolResult({ data: result });
-  }
+
 
   // --- Aelios 记忆库 v2 端点 (母帖 #11 第 2 步) ---
   // 全部走 MEMORY_LIFECYCLE_ENABLED 总闸；关时返回未启用，不碰 v2 表。
@@ -682,24 +634,39 @@ async function callTool(
     return textToolResult({ data: { id, archived: true } });
   }
 
-  if (params.name === "digest_get") {
-    if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
-    if (!isV2Enabled(env)) return toolError("digest_get requires MEMORY_LIFECYCLE_ENABLED=true");
-    const row = await getDigest(env.DB, resolveNamespace(profile, args.namespace));
-    return textToolResult({ data: row });
+  if (params.name === "digest_get" || params.name === "digest_set") {
+    return toolError(
+      `${params.name} is deprecated in v3; digest lives in the client system prompt. Use diary_get for daily_log.`
+    );
   }
 
-  if (params.name === "digest_set") {
-    if (!hasScope(profile, "memory:write")) return toolError("Missing memory:write scope");
-    if (!isV2Enabled(env)) return toolError("digest_set requires MEMORY_LIFECYCLE_ENABLED=true");
-    const content = readString(args.content);
-    if (!content) return toolError("content is required");
-    if (content.length > 500) return toolError("digest content must be <= 500 chars (L1 摘要字数自检)");
-    const row = await upsertDigest(env.DB, {
-      namespace: resolveNamespace(profile, args.namespace),
-      content
-    });
-    return textToolResult({ data: row });
+  if (params.name === "diary_get") {
+    if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
+    const namespace = resolveNamespace(profile, args.namespace);
+    const date = readString(args.date);
+    if (date) {
+      const row = await getDailyLog(env.DB, { namespace, date });
+      if (!row) return textToolResult({ data: null });
+      return textToolResult({ data: row });
+    }
+    const timeZone = readDreamTimeZoneFromEnv(env);
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(new Date());
+    const yesterday = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(new Date(Date.now() - 24 * 60 * 60 * 1000));
+    const rows = await Promise.all([
+      getDailyLog(env.DB, { namespace, date: today }),
+      getDailyLog(env.DB, { namespace, date: yesterday })
+    ]);
+    return textToolResult({ data: rows.filter((row) => row !== null) });
   }
 
   return toolError(`Unknown tool: ${String(params.name || "")}`);

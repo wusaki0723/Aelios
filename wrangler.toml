@@ -20,7 +20,7 @@ head_sampling_rate = 1
 
 [triggers]
 # Cloudflare cron uses UTC. 20:10 UTC is 04:10 in Singapore/China time.
-crons = ["0 */4 * * *", "10 20 * * *"]
+crons = ["10 20 * * *"]
 
 [ai]
 binding = "AI"
@@ -30,18 +30,14 @@ binding = "AI"
 # up in Cloudflare Variables and can be changed without touching code.
 PUBLIC_MODEL_NAME = "companion"
 CHAT_MODEL = "deepseek/deepseek-v4-pro"
-MEMORY_FILTER_MODEL = "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 MEMORY_FILTER_MAX_CANDIDATES = "12"
-MEMORY_FILTER_MAX_OUTPUT = "5"
+MEMORY_FILTER_MAX_OUTPUT = "3"
 MEMORY_FILTER_MAX_CONTENT_CHARS = "700"
-MEMORY_FILTER_OUTPUT_CHARS = "300"
-MEMORY_FILTER_MAX_TOKENS = "1400"
 # Recall floor on the raw embedding score, applied BEFORE the reranker. Low on
 # purpose: embeddinggemma under-scores reworded-but-relevant hits (~0.15-0.20).
-# The reranker (bge-reranker-base) + LLM compressor own precision downstream.
+# Precision is handled by the reranker downstream.
 MEMORY_FILTER_MIN_SCORE = "0.1"
-DREAM_MODEL = "deepseek/deepseek-v4-pro"
-EXTRACT_MODEL = "deepseek/deepseek-v4-flash"
+DREAM_MODEL = "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 DEDUP_COSINE = "0.9"
 VISION_MODEL = "google-ai-studio/gemini-3-flash-preview"
 # Vector recall floor (see MEMORY_FILTER_MIN_SCORE note above). Precision is

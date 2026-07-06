@@ -9,8 +9,9 @@ import {
   getProcessingCursor,
   setProcessingCursor,
 } from "../db/conversations";
+import { upsertMemoryByFactKey } from "../db/v2";
 import { extractMemoriesFromMessages, type ExtractedMemory } from "./extract";
-import { persistMemoryWithMerge, persistMemoryWithFactKey } from "./merge";
+import { createVectorMemory } from "./vectorStore";
 import { isV2Enabled } from "./v2/recall";
 import type { Env, MemoryMaintenanceQueueMessage, MessageRecord } from "../types";
 
@@ -60,16 +61,6 @@ function buildExplicitMemoryFallback(messages: MessageRecord[]): ExtractedMemory
   });
 }
 
-/**
- * runMemoryMaintenance — now accumulates messages and only extracts every 50.
- *
- * Flow:
- * 1. Always scan the current 2-message batch for explicit memory keywords.
- * 2. Count unprocessed messages since last cursor for this namespace.
- * 3. If < 50 unprocessed → skip LLM extraction, return { processed: false }.
- * 4. If >= 50 → fetch the oldest 50 unprocessed messages, write one summary
- *    memory for the batch, update cursor, return { processed: true }.
- */
 export async function runMemoryMaintenance(
   env: Env,
   message: MemoryMaintenanceQueueMessage
@@ -83,7 +74,6 @@ export async function runMemoryMaintenance(
   if (!started) return { processed: false };
 
   try {
-    // Always scan current batch for explicit memory keywords (即时记忆).
     const currentBatch = await getMessagesByIds(env.DB, {
       namespace: message.namespace,
       ids: [message.fromMessageId, message.toMessageId]
@@ -95,15 +85,18 @@ export async function runMemoryMaintenance(
       if (memory.confidence < 0.6) continue;
       if (await isDuplicateMemory(env, { namespace: message.namespace, memory })) continue;
 
-      await persistMemoryWithMerge(env, {
+      await createVectorMemory(env, {
         namespace: message.namespace,
-        memory,
+        type: memory.type,
+        content: memory.content,
+        importance: memory.importance,
+        confidence: memory.confidence,
+        tags: memory.tags,
         source: message.source,
         sourceMessageIds: memory.source_message_ids
       });
     }
 
-    // Check how many messages are pending extraction since last cursor.
     const cursor = await getProcessingCursor(env.DB, message.namespace);
     const pendingCount = await countMessagesAfterTimestamp(
       env.DB,
@@ -119,7 +112,6 @@ export async function runMemoryMaintenance(
       return { processed: false };
     }
 
-    // We have >= 50 unprocessed messages. Fetch the oldest 50 and extract.
     const batch = await listMessagesByNamespace(env.DB, message.namespace, cursor?.value ?? null, EXTRACT_BATCH_SIZE);
     if (batch.length === 0) {
       await finishIdempotentTask(env.DB, {
@@ -138,17 +130,25 @@ export async function runMemoryMaintenance(
       if (await isDuplicateMemory(env, { namespace: message.namespace, memory })) continue;
 
       if (writeMode === "upsert" && memory.fact_key) {
-        await persistMemoryWithFactKey(env, {
+        await upsertMemoryByFactKey(env, {
           namespace: message.namespace,
-          memory,
+          factKey: memory.fact_key,
+          content: memory.content,
+          type: memory.type,
+          importance: memory.importance,
+          confidence: memory.confidence,
+          tags: memory.tags,
           source: message.source,
-          sourceMessageIds: memory.source_message_ids,
-          factKey: memory.fact_key
+          sourceMessageIds: memory.source_message_ids
         });
       } else {
-        await persistMemoryWithMerge(env, {
+        await createVectorMemory(env, {
           namespace: message.namespace,
-          memory,
+          type: memory.type,
+          content: memory.content,
+          importance: memory.importance,
+          confidence: memory.confidence,
+          tags: memory.tags,
           source: message.source,
           sourceMessageIds: memory.source_message_ids
         });
@@ -166,16 +166,19 @@ export async function runMemoryMaintenance(
         source_message_ids: batch.map((m) => m.id),
       };
       if (!(await isDuplicateMemory(env, { namespace: message.namespace, memory: summaryMemory }))) {
-        await persistMemoryWithMerge(env, {
+        await createVectorMemory(env, {
           namespace: message.namespace,
-          memory: summaryMemory,
+          type: summaryMemory.type,
+          content: summaryMemory.content,
+          importance: summaryMemory.importance,
+          confidence: summaryMemory.confidence,
+          tags: summaryMemory.tags,
           source: "batch_summary",
-          sourceMessageIds: summaryMemory.source_message_ids,
+          sourceMessageIds: summaryMemory.source_message_ids
         });
       }
     }
 
-    // Advance cursor to the last message's created_at.
     const lastMessage = batch[batch.length - 1];
     if (lastMessage?.created_at) {
       await setProcessingCursor(env.DB, message.namespace, lastMessage.created_at);

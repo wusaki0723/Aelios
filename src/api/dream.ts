@@ -92,8 +92,12 @@ export async function handleDreamRun(request: Request, env: Env): Promise<Respon
       result
     };
 
-    if (dryRun && result.ran && "proposal" in result && result.proposal) {
-      response.proposal = result.proposal;
+    if (dryRun && result.ran) {
+      if ("proposal" in result && result.proposal) response.proposal = result.proposal;
+      if ("routing_plan" in result && result.routing_plan) response.routing_plan = result.routing_plan;
+      if ("extracted_memories" in result && result.extracted_memories) {
+        response.extracted_memories = result.extracted_memories;
+      }
     }
 
     return json({ data: response });

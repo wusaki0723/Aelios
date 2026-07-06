@@ -6,6 +6,7 @@
 
 import { getMessagesByIds } from "../db/messages";
 import {
+  archiveMemory,
   getActiveMemoryByFactKey,
   listMemoryCandidates,
   supersedeMemory,
@@ -67,7 +68,7 @@ function parseJsonArray(raw: string | null): string[] {
   return [];
 }
 
-// 和 extractPipeline.ts 的 extractJsonObject 同样的容错解析：模型偶尔会在 JSON 外面裹一层文字。
+// 和 dreamExtract.ts 的 extractJsonObject 同样的容错解析：模型偶尔会在 JSON 外面裹一层文字。
 function extractJsonObject(text: string): unknown | null {
   try {
     return JSON.parse(text) as unknown;
@@ -157,7 +158,7 @@ async function callJudgeModel(env: Env, model: string, prompt: string): Promise<
   };
 }
 
-// approve 的落库语义跟 extractPipeline.persistCandidate 的 fact_key 分支一致：
+// approve 的落库语义跟 dream 候选队列的 fact_key 分支一致：
 // 有 fact_key 先查是否已有 active 同 key 记忆，有就 supersede (保留历史链)，没有就 upsert 新建；
 // 没有 fact_key 就走向量库直接建条目。admin 后台 /v1/candidates/:id/approve 的私有
 // createApprovedMemoryFromCandidate 目前是"有 fact_key 就直接 upsertMemoryByFactKey"，
@@ -170,6 +171,12 @@ async function approveCandidate(
   tags: string[],
   sourceMessageIds: string[]
 ): Promise<string> {
+  if (candidate.source === "dream_delete" && candidate.target_memory_id) {
+    const archived = await archiveMemory(env, { namespace, id: candidate.target_memory_id });
+    if (!archived) throw new Error("target memory not found");
+    return candidate.target_memory_id;
+  }
+
   const factKey = candidate.fact_key?.trim() || null;
 
   if (factKey) {
@@ -227,7 +234,7 @@ export async function runCandidateJudge(
     return { ran: false, judged: 0, approved: 0, discarded: 0, kept: 0, failed: 0, reason: "judge_disabled" };
   }
 
-  const model = env.JUDGE_MODEL?.trim() || env.EXTRACT_MODEL?.trim() || "";
+  const model = env.JUDGE_MODEL?.trim() || env.DREAM_MODEL?.trim() || "";
   if (!model) {
     return { ran: false, judged: 0, approved: 0, discarded: 0, kept: 0, failed: 0, reason: "missing_model" };
   }

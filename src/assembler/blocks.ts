@@ -181,7 +181,7 @@ const presetLiteBlock: Block = {
 
 // ---------------------------------------------------------------------------
 // Block 3.5: boot_stable (stable)
-// v2 boot package: digest + yesterday_log + glossary.
+// v2 boot package: yesterday_log + glossary.
 // Sits before cache anchor — stable content that rarely changes.
 // ---------------------------------------------------------------------------
 

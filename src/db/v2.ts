@@ -537,6 +537,8 @@ export interface CreateMemoryCandidateInput {
   tags?: string[];
   sourceMessageIds?: string[];
   source?: string;
+  targetMemoryId?: string | null;
+  decisionNote?: string | null;
 }
 
 export async function createMemoryCandidate(
@@ -557,8 +559,8 @@ export async function createMemoryCandidate(
     source_message_ids: JSON.stringify(input.sourceMessageIds ?? []),
     source: input.source ?? "extract",
     status: "pending",
-    target_memory_id: null,
-    decision_note: null,
+    target_memory_id: input.targetMemoryId ?? null,
+    decision_note: input.decisionNote ?? null,
     created_at: now,
     updated_at: now
   };

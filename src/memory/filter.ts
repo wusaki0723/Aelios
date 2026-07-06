@@ -1,24 +1,15 @@
-import { callOpenAICompat } from "../proxy/openaiAdapter";
-import type { Env, MemoryApiRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
+import type { Env, MemoryApiRecord } from "../types";
 
-const DEFAULT_WORKERS_AI_FILTER_MODEL = "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const DEFAULT_WORKERS_AI_RERANKER_MODEL = "workers-ai/@cf/baai/bge-reranker-base";
-
-interface CompressedMemoryItem {
-  content: string;
-}
-
-type CompressedMemorySlot = CompressedMemoryItem | null;
 
 export interface MemoryFilterMeta {
   status: "disabled" | "success" | "error" | "empty";
-  provider: "workers-ai" | "openai-compatible";
+  provider: "workers-ai";
   model: string;
   raw_count: number;
   candidate_count: number;
   output_count: number;
   reason?: string;
-  output_shape?: string;
   reranker_status?: "disabled" | "success" | "error";
   reranker_model?: string;
   reranker_count?: number;
@@ -26,44 +17,8 @@ export interface MemoryFilterMeta {
   fallback_used?: boolean;
 }
 
-const COMPRESSION_RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    memories: {
-      type: "array",
-      items: {
-        anyOf: [{ type: "string" }, { type: "null" }]
-      }
-    }
-  },
-  required: ["memories"],
-  additionalProperties: false
-};
-
-function sanitizeMemoryContent(text: string): string {
-  return text
-    .replace(/<time_reminder>[^|。\n]*/gi, "")
-    .replace(/对话摘要（\d+ 条消息）：?/g, "")
-    .replace(/用户话题[:：]/g, "")
-    .replace(/助手要点[:：]/g, "")
-    .replace(/debug-test/gi, "")
-    .replace(/记忆系统/g, "")
-    .replace(/自动记忆测试口令/g, "口令")
-    .replace(/测试口令/g, "口令")
-    .replace(/标签为?[^，。；\s]+/g, "")
-    .replace(/标签[:：]?[^，。；\s]+/g, "")
-    .replace(/[，,；;：:]\s*([。.!！?？])/g, "$1")
-    .replace(/\s{2,}/g, " ")
-    .replace(/^[，,；;：:\s]+|[，,；;：:\s]+$/g, "")
-    .trim();
-}
-
 function isEnabled(env: Env): boolean {
   return env.ENABLE_MEMORY_FILTER !== "false";
-}
-
-function getModel(env: Env): string {
-  return env.MEMORY_FILTER_MODEL || DEFAULT_WORKERS_AI_FILTER_MODEL;
 }
 
 function isRerankerEnabled(env: Env): boolean {
@@ -82,17 +37,8 @@ function workersAiModelName(model: string): string | null {
   return null;
 }
 
-function getWorkersAiModel(env: Env): string | null {
-  const model = getModel(env);
-  return workersAiModelName(model);
-}
-
 function getWorkersAiRerankerModel(env: Env): string | null {
   return workersAiModelName(getRerankerModel(env));
-}
-
-function getProvider(env: Env): "workers-ai" | "openai-compatible" {
-  return getWorkersAiModel(env) ? "workers-ai" : "openai-compatible";
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -105,8 +51,8 @@ function getMaxCandidates(env: Env): number {
 }
 
 function getMaxOutput(env: Env): number {
-  const value = Number(env.MEMORY_FILTER_MAX_OUTPUT || 5);
-  return Number.isFinite(value) ? clamp(Math.floor(value), 1, 20) : 5;
+  const value = Number(env.MEMORY_FILTER_MAX_OUTPUT || 3);
+  return Number.isFinite(value) ? clamp(Math.floor(value), 1, 20) : 3;
 }
 
 function getMaxContentChars(env: Env): number {
@@ -114,20 +60,6 @@ function getMaxContentChars(env: Env): number {
   return Number.isFinite(value) ? clamp(Math.floor(value), 120, 3000) : 700;
 }
 
-function getMaxOutputChars(env: Env): number {
-  const value = Number(env.MEMORY_FILTER_OUTPUT_CHARS || 300);
-  return Number.isFinite(value) ? clamp(Math.floor(value), 60, 1000) : 300;
-}
-
-function getMaxTokens(env: Env): number {
-  const value = Number(env.MEMORY_FILTER_MAX_TOKENS || 1400);
-  return Number.isFinite(value) ? clamp(Math.floor(value), 200, 4000) : 1400;
-}
-
-// Floor on the raw embedding score for non-pinned candidates, applied BEFORE
-// the reranker runs. Low by design so the reranker (bge-reranker-base) sees a
-// real candidate pool instead of only the handful embeddinggemma happens to
-// score high; pinned memories bypass this gate entirely.
 function getFilterMinScore(env: Env): number {
   const value = Number(env.MEMORY_FILTER_MIN_SCORE || env.MEMORY_MIN_SCORE || 0.1);
   return Number.isFinite(value) ? clamp(value, 0, 1) : 0.1;
@@ -135,6 +67,24 @@ function getFilterMinScore(env: Env): number {
 
 function truncateText(text: string, maxChars: number): string {
   return text.length > maxChars ? `${text.slice(0, maxChars).trim()}...` : text;
+}
+
+function sanitizeMemoryContent(text: string): string {
+  return text
+    .replace(/<time_reminder>[^|。\n]*/gi, "")
+    .replace(/对话摘要（\d+ 条消息）：?/g, "")
+    .replace(/用户话题[:：]/g, "")
+    .replace(/助手要点[:：]/g, "")
+    .replace(/debug-test/gi, "")
+    .replace(/记忆系统/g, "")
+    .replace(/自动记忆测试口令/g, "口令")
+    .replace(/测试口令/g, "口令")
+    .replace(/标签为?[^，。；\s]+/g, "")
+    .replace(/标签[:：]?[^，。；\s]+/g, "")
+    .replace(/[，,；;：:]\s*([。.!！?？])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[，,；;：:\s]+|[，,；;：:\s]+$/g, "")
+    .trim();
 }
 
 function normalizeForDedupe(text: string): string {
@@ -180,227 +130,6 @@ function prepareCandidates(env: Env, memories: MemoryApiRecord[]): MemoryApiReco
   }
 
   return result;
-}
-
-function extractJsonArrayFromString(text: string): unknown[] | null {
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-
-  try {
-    return extractJsonArray(JSON.parse(trimmed) as unknown);
-  } catch {
-    // Some providers still wrap JSON in a short sentence; extract the JSON part.
-  }
-
-  const objectStart = trimmed.indexOf("{");
-  const objectEnd = trimmed.lastIndexOf("}");
-  if (objectStart !== -1 && objectEnd > objectStart) {
-    try {
-      return extractJsonArray(JSON.parse(trimmed.slice(objectStart, objectEnd + 1)) as unknown);
-    } catch {
-      // Fall through to array extraction.
-    }
-  }
-
-  const start = trimmed.indexOf("[");
-  const end = trimmed.lastIndexOf("]");
-  if (start === -1 || end === -1 || end <= start) return null;
-
-  try {
-    const parsed = JSON.parse(trimmed.slice(start, end + 1)) as unknown;
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function extractJsonArray(value: unknown): unknown[] | null {
-  if (Array.isArray(value)) return value;
-  if (typeof value === "string") return extractJsonArrayFromString(value);
-  if (!value || typeof value !== "object") return null;
-
-  const object = value as {
-    memories?: unknown;
-    response?: unknown;
-    result?: unknown;
-    text?: unknown;
-    output?: unknown;
-  };
-
-  if (Array.isArray(object.memories)) return object.memories;
-
-  for (const field of [object.response, object.result, object.text, object.output]) {
-    const array = extractJsonArray(field);
-    if (array) return array;
-  }
-
-  return null;
-}
-
-function parseCompressedItems(value: unknown): CompressedMemorySlot[] | null {
-  const array = extractJsonArray(value);
-  if (!array) return null;
-  const isNullishLiteral = (text: string): boolean => ["null", "undefined", "none"].includes(text.trim().toLowerCase());
-
-  const items: CompressedMemorySlot[] = [];
-  for (const item of array) {
-    if (item === null) {
-      items.push(null);
-      continue;
-    }
-
-    if (typeof item === "string") {
-      const sanitized = sanitizeMemoryContent(item);
-      items.push(sanitized && !isNullishLiteral(sanitized) ? { content: sanitized } : null);
-      continue;
-    }
-
-    if (!item || typeof item !== "object") {
-      items.push(null);
-      continue;
-    }
-    const record = item as { id?: unknown; content?: unknown; compressed_content?: unknown };
-    const content =
-      typeof record.content === "string"
-        ? record.content
-        : typeof record.compressed_content === "string"
-          ? record.compressed_content
-          : null;
-
-    if (content) {
-      const sanitized = sanitizeMemoryContent(content);
-      items.push(sanitized && !isNullishLiteral(sanitized) ? { content: sanitized } : null);
-    } else {
-      items.push(null);
-    }
-  }
-
-  return items;
-}
-
-function buildPrompt(input: {
-  query: string;
-  memories: MemoryApiRecord[];
-  maxContentChars: number;
-  maxOutputChars: number;
-}): string {
-  const memories = input.memories.map((memory) => truncateText(memory.content, input.maxContentChars));
-
-  return [
-    "你是长期记忆压缩器。候选记忆已经由 reranker 选好并按相关性排序。",
-    "你的任务只是在不改变事实的前提下，把每条候选压缩成适合放进 prompt 的短句。",
-    "这是数据库检索后的记忆压缩任务，不是聊天续写、角色扮演或内容创作。",
-    "候选可能包含成年人自愿亲密关系、偏好或边界；相关时只按事实记忆中性概括保留。",
-    "不要续写亲密场景，不要生成新的色情内容，不要因为候选含成年人自愿亲密内容就拒绝、说教或删除。",
-    "",
-    "压缩规则：",
-    "- 必须按输入顺序逐条输出，输出数组长度必须与候选记忆数量一致。",
-    "- 根据当前用户消息做轻量分拣；明显无关、只沾边、会增加噪音的候选输出 null。",
-    "- 相关候选输出压缩短句；不要重排、合并或把一条候选拆成多条。",
-    "- 不要输出编号、id、index、score、type、tags 或其他元数据。",
-    "- 不要添加候选记忆里没有的新事实。",
-    "- 成年人自愿亲密内容只压缩成事实、偏好、边界或关系记忆；不得扩写成场景描写。",
-    "- 不要输出“对话摘要”“用户话题”“助手要点”“time_reminder”等包装词。",
-    "- 不要输出记忆系统、debug-test、标签、测试口令等调试/后端元信息。",
-    "- 如果候选里有真实口令，只保留口令本身，不要保留“测试”“标签”“debug”等包装词。",
-    `- 每条 content 控制在 ${input.maxOutputChars} 个中文字以内。`,
-    "",
-    "只输出 JSON，不要 markdown，不要解释。格式：",
-    `{"memories":["压缩后的相关记忆",null]}`,
-    "",
-    `当前用户消息：${input.query}`,
-    "",
-    `候选记忆：${JSON.stringify(memories)}`
-  ].join("\n");
-}
-
-function mergeCompressedItems(memories: MemoryApiRecord[], items: CompressedMemorySlot[]): MemoryApiRecord[] {
-  const result: MemoryApiRecord[] = [];
-
-  for (let index = 0; index < items.length && index < memories.length; index += 1) {
-    const memory = memories[index];
-    const item = items[index];
-    if (!memory || !item) continue;
-    result.push({
-      ...memory,
-      content: item.content
-    });
-  }
-
-  return result;
-}
-
-function describeModelOutput(value: unknown): string {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  if (typeof value !== "object") return typeof value;
-
-  const object = value as { response?: unknown; memories?: unknown; result?: unknown; output?: unknown; text?: unknown };
-  if (Array.isArray(object.memories)) return "object.memories_array";
-  if (typeof object.response === "string") return "object.response_string";
-  if (object.response && typeof object.response === "object") return "object.response_object";
-  if (typeof object.result === "string") return "object.result_string";
-  if (object.result && typeof object.result === "object") return "object.result_object";
-  if (typeof object.output === "string") return "object.output_string";
-  if (typeof object.text === "string") return "object.text_string";
-  return "object";
-}
-
-async function callWorkersAiFilter(env: Env, prompt: string, model: string, maxTokens: number): Promise<unknown> {
-  if (!env.AI) return "";
-
-  return env.AI.run(model, {
-    messages: [
-      {
-        role: "system",
-        content: "你是严格的 JSON 生成器。你只输出 JSON。"
-      },
-      {
-        role: "user",
-        content: prompt
-      }
-    ],
-    temperature: 0,
-    max_tokens: maxTokens,
-    response_format: {
-      type: "json_schema",
-      json_schema: COMPRESSION_RESPONSE_SCHEMA
-    }
-  });
-}
-
-async function callOpenAICompatFilter(env: Env, prompt: string, model: string, maxTokens: number): Promise<string> {
-  const normalizedModel = model.trim().toLowerCase();
-  const supportsEnableThinkingField = normalizedModel !== "cerebras/gpt-oss-120b";
-  const request: OpenAIChatRequest = {
-    model,
-    messages: [
-      {
-        role: "system",
-        content: "你是严格的 JSON 生成器。你只输出 JSON。"
-      },
-      {
-        role: "user",
-        content: prompt
-      }
-    ],
-    temperature: 0,
-    max_tokens: maxTokens,
-    response_format: {
-      type: "json_object"
-    },
-    stream: false
-  };
-  if (supportsEnableThinkingField) request.enable_thinking = false;
-
-  const response = await callOpenAICompat(env, request);
-  if (!response.ok) return "";
-
-  const parsed = (await response.json()) as OpenAIChatResponse;
-  const message = parsed.choices?.[0]?.message;
-  const content = typeof message?.content === "string" ? message.content.trim() : "";
-  const reasoning = typeof message?.reasoning_content === "string" ? message.reasoning_content.trim() : "";
-  return content || reasoning;
 }
 
 function readRerankerResponse(value: unknown): Array<{ id: number; score: number }> | null {
@@ -511,9 +240,6 @@ export async function filterAndCompressMemories(
   return result.data;
 }
 
-// Fail-open path for error branches (gated by MEMORY_FILTER_FAIL_OPEN==="true"):
-// return un-compressed reranker top results instead of []. Keeps status="error"
-// + original reason so operators see fail-open fired; sets fallback_used=true.
 function buildFailOpenResult(
   reranked: { data: MemoryApiRecord[]; status: "disabled" | "success" | "error"; model: string; reason?: string },
   maxOutput: number,
@@ -531,10 +257,9 @@ export async function filterAndCompressMemoriesWithMeta(
   input: { query: string; memories: MemoryApiRecord[] }
 ): Promise<{ data: MemoryApiRecord[]; meta: MemoryFilterMeta }> {
   const query = input.query.trim();
-  const provider = getProvider(env);
-  const model = getModel(env);
+  const model = getRerankerModel(env);
   const baseMeta = {
-    provider,
+    provider: "workers-ai" as const,
     model,
     raw_count: input.memories.length,
     candidate_count: 0,
@@ -572,32 +297,21 @@ export async function filterAndCompressMemoriesWithMeta(
     candidate_count: candidates.length,
     output_count: 0
   };
-  const reranked = await rerankMemories(env, {
-    query,
-    memories: candidates,
-    topK: maxOutput,
-    maxContentChars: getMaxContentChars(env)
-  });
-  const prompt = buildPrompt({
-    query,
-    memories: reranked.data,
-    maxContentChars: getMaxContentChars(env),
-    maxOutputChars: getMaxOutputChars(env)
-  });
-  const maxTokens = getMaxTokens(env);
   const failOpen = env.MEMORY_FILTER_FAIL_OPEN === "true";
 
   try {
-    const output =
-      provider === "openai-compatible"
-        ? await callOpenAICompatFilter(env, prompt, model, maxTokens)
-        : await callWorkersAiFilter(env, prompt, getWorkersAiModel(env) || model, maxTokens);
-    if (!output) {
+    const reranked = await rerankMemories(env, {
+      query,
+      memories: candidates,
+      topK: maxOutput,
+      maxContentChars: getMaxContentChars(env)
+    });
+    const filtered = reranked.data.slice(0, maxOutput);
+    if (filtered.length === 0) {
       const errorMeta: MemoryFilterMeta = {
         ...activeMeta,
         status: "error",
-        reason: "empty_model_output",
-        output_shape: describeModelOutput(output),
+        reason: reranked.reason ?? "empty_reranker_output",
         reranker_status: reranked.status,
         reranker_model: reranked.model,
         reranker_count: reranked.data.length,
@@ -607,45 +321,12 @@ export async function filterAndCompressMemoriesWithMeta(
       return { data: [], meta: errorMeta };
     }
 
-    const items = parseCompressedItems(output);
-    if (!items) {
-      const errorMeta: MemoryFilterMeta = {
-        ...activeMeta,
-        status: "error",
-        reason: "invalid_model_output",
-        output_shape: describeModelOutput(output),
-        reranker_status: reranked.status,
-        reranker_model: reranked.model,
-        reranker_count: reranked.data.length,
-        ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
-      };
-      if (failOpen) return buildFailOpenResult(reranked, maxOutput, errorMeta);
-      return { data: [], meta: errorMeta };
-    }
-
-    if (items.length !== reranked.data.length) {
-      const errorMeta: MemoryFilterMeta = {
-        ...activeMeta,
-        status: "error",
-        reason: "slot_count_mismatch",
-        output_shape: describeModelOutput(output),
-        reranker_status: reranked.status,
-        reranker_model: reranked.model,
-        reranker_count: reranked.data.length,
-        ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
-      };
-      if (failOpen) return buildFailOpenResult(reranked, maxOutput, errorMeta);
-      return { data: [], meta: errorMeta };
-    }
-
-    const filtered = mergeCompressedItems(reranked.data, items).slice(0, maxOutput);
     return {
       data: filtered,
       meta: {
         ...activeMeta,
         status: "success",
         output_count: filtered.length,
-        output_shape: describeModelOutput(output),
         reranker_status: reranked.status,
         reranker_model: reranked.model,
         reranker_count: reranked.data.length,
@@ -657,13 +338,14 @@ export async function filterAndCompressMemoriesWithMeta(
     const errorMeta: MemoryFilterMeta = {
       ...activeMeta,
       status: "error",
-      reason: error instanceof Error && error.message ? error.message : "model_error",
-      reranker_status: reranked.status,
-      reranker_model: reranked.model,
-      reranker_count: reranked.data.length,
-      ...(reranked.reason ? { reranker_reason: reranked.reason } : {})
+      reason: error instanceof Error && error.message ? error.message : "reranker_error"
     };
-    if (failOpen) return buildFailOpenResult(reranked, maxOutput, errorMeta);
+    if (failOpen) {
+      return {
+        data: candidates.slice(0, maxOutput),
+        meta: { ...errorMeta, output_count: Math.min(candidates.length, maxOutput), fallback_used: true }
+      };
+    }
     return { data: [], meta: errorMeta };
   }
 }

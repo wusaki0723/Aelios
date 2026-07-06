@@ -287,9 +287,6 @@ function assemble(ctx) {
     } else if (blockId === "boot_stable") {
       if (ctx.boot) {
         const parts = [];
-        if (ctx.boot.digest) {
-          parts.push("<digest>", ctx.boot.digest.content, "</digest>");
-        }
         if (ctx.boot.yesterday_log) {
           parts.push(
             "<yesterday_log>",

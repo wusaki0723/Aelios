@@ -13,19 +13,17 @@ import {
   handleMemoryCandidates,
   handleLongtailApi,
   handlePrecious,
-  handleSearchMemoriesApi
+  handleSearchMemoriesApi,
+  handleDiaryApi
 } from "./api/memories";
 import { handleMcp } from "./api/mcp";
 import { handleModels } from "./api/models";
-import { runCandidateJudge } from "./memory/candidateJudge";
 import { runDailyMemoryDigest, runDreamBackfill } from "./memory/dailyDigest";
-import { runMemoryExtractionBatches } from "./memory/extractPipeline";
 import { runMemoryRetention } from "./memory/retention";
 import { handleQueueMessage } from "./queue/consumer";
 import type { Env, QueueMessage } from "./types";
 import { openAiError } from "./utils/json";
 
-const EXTRACT_CRON = "0 */4 * * *";
 const DAILY_MAINTENANCE_CRON = "10 20 * * *";
 
 function getDailyDigestNamespace(env: Env): string {
@@ -103,6 +101,10 @@ export default {
       return handleMemoryBoot(request, env);
     }
 
+    if (url.pathname === "/v1/diary" || url.pathname === "/v1/diary/recent") {
+      return handleDiaryApi(request, env);
+    }
+
     if (url.pathname === "/v1/precious" || url.pathname.startsWith("/v1/precious/")) {
       return handlePrecious(request, env);
     }
@@ -176,32 +178,10 @@ export default {
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const namespace = getDailyDigestNamespace(env);
     const cron = controller.cron;
-    const shouldRunExtract = !cron || cron === EXTRACT_CRON;
     const shouldRunDailyMaintenance = !cron || cron === DAILY_MAINTENANCE_CRON;
     const tasks: Array<Promise<unknown>> = [];
 
-    if (shouldRunExtract) {
-      // 候选队列自动评审跟在抽取批次后面跑，同一个 namespace，避免跟本轮刚写入的
-      // pending 候选抢跑。CANDIDATE_JUDGE_ENABLED 默认关闭，关闭时这里直接跳过，
-      // 不调用 runCandidateJudge，disabled = 零额外开销。
-      tasks.push(
-        runMemoryExtractionBatches(env, namespace, { scheduledTime: controller.scheduledTime }).then(
-          async (extraction) => {
-            if (env.CANDIDATE_JUDGE_ENABLED !== "true") return { extraction };
-            const judge = await runCandidateJudge(env, namespace);
-            return { extraction, judge };
-          }
-        )
-      );
-    }
-
     if (shouldRunDailyMaintenance) {
-      // Run dream and retention as independent tasks. Retention is best-effort
-      // cleanup: if it throws (e.g. a transient D1 error), it must NOT take the
-      // dream down with it — otherwise the dream's cursor never advances and
-      // the whole nightly maintenance silently fails. So retention gets its own
-      // .catch that swallows the rejection into a logged result, and dream is
-      // a separate top-level task that settles on its own.
       tasks.push(runDailyMemoryDigestBatches(env, namespace));
       tasks.push(
         runMemoryRetention(env, namespace).then(

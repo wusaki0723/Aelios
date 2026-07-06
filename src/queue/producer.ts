@@ -27,7 +27,6 @@ export async function enqueueMemoryMaintenanceIfNeeded(
 ): Promise<void> {
   if (env.ENABLE_AUTO_MEMORY === "false") return;
   if (isV2Enabled(env)) return;
-  if (env.ENABLE_INCREMENTAL_MEMORY !== "true") return;
   if ((env.MEMORY_MODE || "external") === "none") return;
   if (!input.fromMessageId) return;
 

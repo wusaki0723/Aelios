@@ -160,12 +160,14 @@ async function enumerateNamespaceVectors(
       for (const v of fetched) {
         const metadata = (v.metadata || {}) as Record<string, unknown>;
         const metaNamespace = readMetaString(metadata, "namespace");
-        if (metaNamespace !== input.namespace) continue;
+        // null = v1 向量缺 namespace 元数据：按 input.namespace 兜底纳入扫描，
+        // 让它仍能被分类（通常 orphan）并清理。非 null 但不匹配的才丢弃。
+        if (metaNamespace !== null && metaNamespace !== input.namespace) continue;
         const kindRaw = readMetaString(metadata, "kind");
         const kind: "memory" | "longtail" = kindRaw === "longtail" ? "longtail" : "memory";
         vectors.push({
           vectorId: v.id,
-          namespace: metaNamespace,
+          namespace: metaNamespace ?? input.namespace,
           kind,
           refId: deriveRefId(v.id, metadata),
           type: readMetaString(metadata, "type") || (kind === "longtail" ? "longtail" : "note"),

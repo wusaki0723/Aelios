@@ -271,6 +271,19 @@ dream 夜间（cron `10 20 * * *`）：
 
 **日记：** `GET /v1/diary` 或 MCP `diary_get`——agent 自己 fetch，**永不自动注入**。
 
+### GitHub daily source
+
+cmh-lite 客户端每天 23:50（本地时区）会把 `archive/daily/YYYY-MM-DD.md` push 到 GitHub 私库。Aelios 在现有 cron（`10 20 * * *` UTC = 04:10 SGT，晚于 push 约 4 小时）里顺带拉取**昨天**的 daily 文件，解析 turn 行与 checkpoint writer 摘要，走与 `/v1/ingest/messages` 相同的 `saveIngestMessages` 管道入库，供夜间 dream 整理。
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `GITHUB_DAILY_REPO` | 空（禁用） | `owner/repo` 格式 |
+| `GITHUB_DAILY_PATH` | `archive/daily` | 仓库内目录 |
+| `GITHUB_DAILY_NAMESPACE` | `DREAM_NAMESPACE` 或 `default` | 入库 namespace |
+| `GITHUB_DAILY_TOKEN` | Secret | fine-grained PAT，**只读**目标仓库 Contents |
+
+对接 cmh-lite 时把 Worker 的 `GITHUB_DAILY_REPO` 指到同一私库即可（客户端仓库说明见 [cmh-lite](https://github.com/PLACEHOLDER/cmh-lite)）。
+
 **清理（后台 Queue，24h 节流）：**
 
 ```
@@ -328,6 +341,10 @@ hard delete: deleted/superseded/expired 超 30 天 → 先删 Vectorize 再删 D
 | `DREAM_MAX_TOKENS` | `8000` | dream 输出上限 |
 | `DREAM_MEMORY_CONTEXT_LIMIT` | `40` | dream 参考旧记忆数 |
 | `DREAM_EXCERPT_LIMIT` | `8` | 每天最多原文段落数 |
+| `GITHUB_DAILY_REPO` | 空 | GitHub daily 源仓库，`owner/repo`；空 = 禁用 |
+| `GITHUB_DAILY_PATH` | `archive/daily` | daily markdown 目录 |
+| `GITHUB_DAILY_NAMESPACE` | 空 | 入库 namespace，默认跟 `DREAM_NAMESPACE` |
+| `GITHUB_DAILY_TOKEN` | Secret | fine-grained PAT，只读目标仓库 Contents |
 
 ### Claude 缓存
 

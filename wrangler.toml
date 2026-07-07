@@ -63,6 +63,10 @@ ANTHROPIC_CACHE_TTL = "5m"
 # keep this as "messages". If the base_url is only the root domain, use
 # "v1/messages".
 CUSTOM_ANTHROPIC_MESSAGES_PATH = "messages"
+# GitHub daily archive pull. Leave GITHUB_DAILY_REPO empty to disable.
+# Token: `wrangler secret put GITHUB_DAILY_TOKEN` (fine-grained PAT, read-only contents on target repo).
+GITHUB_DAILY_REPO = ""
+GITHUB_DAILY_PATH = "archive/daily"
 
 # Private/account-specific variables live in the Cloudflare Dashboard:
 # AI_GATEWAY_BASE_URL, CHATBOX_API_KEY, MEMORY_MCP_API_KEY,

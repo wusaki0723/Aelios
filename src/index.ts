@@ -19,6 +19,7 @@ import {
 import { handleMcp } from "./api/mcp";
 import { handleModels } from "./api/models";
 import { runDailyMemoryDigest, runDreamBackfill } from "./memory/dailyDigest";
+import { runGithubDailyPull } from "./memory/githubDaily";
 import { runMemoryRetention } from "./memory/retention";
 import { handleQueueMessage } from "./queue/consumer";
 import type { Env, QueueMessage } from "./types";
@@ -189,6 +190,19 @@ export default {
           (error) => {
             console.error("scheduled memory retention failed", { namespace, error: String(error) });
             return { ok: false as const, error: String(error) };
+          }
+        )
+      );
+      // 04:10 SGT cron (20:10 UTC) runs ~4h after cmh-lite's 23:50 local push — safe to pull yesterday's daily.
+      tasks.push(
+        runGithubDailyPull(env).then(
+          (r) => {
+            console.log("github daily pull", r);
+            return r;
+          },
+          (e) => {
+            console.error("github daily pull failed", String(e));
+            return { ok: false };
           }
         )
       );

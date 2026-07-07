@@ -67,6 +67,11 @@ export interface Env {
   DAILY_DIGEST_MEMORY_CONTEXT_LIMIT?: string;
   DAILY_DIGEST_EXCERPT_LIMIT?: string;
   DAILY_DIGEST_TIME_ZONE?: string;
+  // GitHub daily archive pull (cmh-lite client → private repo → nightly cron ingest)
+  GITHUB_DAILY_REPO?: string;
+  GITHUB_DAILY_PATH?: string;
+  GITHUB_DAILY_NAMESPACE?: string;
+  GITHUB_DAILY_TOKEN?: string;
   EMPTY_MEMORY_MIN_CHARS?: string;
   MEMORY_MODE?: string;
   ENABLE_MEMORY_FILTER?: string;

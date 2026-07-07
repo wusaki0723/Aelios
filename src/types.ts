@@ -106,6 +106,22 @@ export interface Env {
   ENABLE_CACHE_API?: string;
   CACHE_DEFAULT_TTL_SECONDS?: string;
   CACHE_MAX_VALUE_BYTES?: string;
+  // --- Telegram bot layer (docs/telegram-bot.md) ---
+  // Secrets: bot token from BotFather; webhook secret_token; persona prompt
+  // (env var instead of a repo file so public forks don't leak personas).
+  TG_BOT_TOKEN?: string;
+  TG_WEBHOOK_SECRET?: string;
+  TG_SYSTEM_PROMPT?: string;
+  // Overflow slot: single CF env values cap at ~5KB; EXTRA is concatenated after.
+  TG_SYSTEM_PROMPT_EXTRA?: string;
+  // Comma-separated chat ids allowed to talk to the bot; "*" = everyone.
+  TG_ALLOWED_CHAT_IDS?: string;
+  // Debounce window (seconds) merging rapid consecutive messages. Default 3.
+  TG_DEBOUNCE_SECONDS?: string;
+  // Rolling-context size (messages) kept verbatim before folding. Default 12.
+  TG_RECENT_MAX_TURNS?: string;
+  // Model for summary folding; falls back to DREAM_MODEL then CHAT_MODEL.
+  TG_SUMMARY_MODEL?: string;
 }
 
 export interface MemoryMaintenanceQueueMessage {
@@ -123,7 +139,12 @@ export interface RetentionQueueMessage {
   namespace: string;
 }
 
-export type QueueMessage = MemoryMaintenanceQueueMessage | RetentionQueueMessage;
+export interface TgProcessQueueMessage {
+  type: "tg_process";
+  chatId: string;
+}
+
+export type QueueMessage = MemoryMaintenanceQueueMessage | RetentionQueueMessage | TgProcessQueueMessage;
 
 export type Scope =
   | "chat:proxy"

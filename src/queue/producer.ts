@@ -7,12 +7,26 @@ import { isV2Enabled } from "../memory/v2/recall";
  * Send a queue message. Uses real Cloudflare Queue when MEMORY_QUEUE binding
  * is available; falls back to direct handleQueueMessage for local dev / no-queue.
  */
-async function sendQueueMessage(env: Env, message: QueueMessage): Promise<void> {
+async function sendQueueMessage(
+  env: Env,
+  message: QueueMessage,
+  options?: { delaySeconds?: number }
+): Promise<void> {
   if (env.MEMORY_QUEUE) {
-    await env.MEMORY_QUEUE.send(message);
+    await env.MEMORY_QUEUE.send(message, options);
   } else {
     await handleQueueMessage(message, env);
   }
+}
+
+/**
+ * Enqueue a Telegram processing task. delaySeconds is the debounce window:
+ * rapid consecutive messages each enqueue a task, and the first task to fire
+ * claims the whole buffered batch (later ones claim an empty set and no-op).
+ * Without a queue binding the message is handled inline (no debounce).
+ */
+export async function enqueueTgProcess(env: Env, chatId: string, delaySeconds: number): Promise<void> {
+  await sendQueueMessage(env, { type: "tg_process", chatId }, { delaySeconds });
 }
 
 export async function enqueueMemoryMaintenanceIfNeeded(

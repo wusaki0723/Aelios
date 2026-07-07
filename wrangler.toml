@@ -71,6 +71,15 @@ CUSTOM_ANTHROPIC_MESSAGES_PATH = "messages"
 GITHUB_DAILY_REPO = ""
 GITHUB_DAILY_PATH = "archive/daily"
 
+# Telegram bot layer (docs/telegram-bot.md). Secrets in the Dashboard:
+# TG_BOT_TOKEN, TG_WEBHOOK_SECRET, TG_SYSTEM_PROMPT (persona; env var on
+# purpose — public forks must not carry persona files), TG_SYSTEM_PROMPT_EXTRA
+# (optional overflow past the ~5KB per-var cap), TG_ALLOWED_CHAT_IDS
+# (comma-separated, "*" = everyone; dropped chats are logged so you can copy
+# your chat_id from the logs), and IM_API_KEY (the bot's internal chat key).
+TG_DEBOUNCE_SECONDS = "3"
+TG_RECENT_MAX_TURNS = "12"
+
 # Private/account-specific variables live in the Cloudflare Dashboard:
 # AI_GATEWAY_BASE_URL, CHATBOX_API_KEY, MEMORY_MCP_API_KEY,
 # GUIDE_DOG_API_KEY, CF_AIG_TOKEN.

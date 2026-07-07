@@ -22,6 +22,7 @@ import { runDailyMemoryDigest, runDreamBackfill } from "./memory/dailyDigest";
 import { runGithubDailyPull } from "./memory/githubDaily";
 import { runMemoryRetention } from "./memory/retention";
 import { handleQueueMessage } from "./queue/consumer";
+import { handleTelegramWebhook } from "./tg/webhook";
 import type { Env, QueueMessage } from "./types";
 import { openAiError } from "./utils/json";
 
@@ -73,6 +74,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
       return handleChatCompletions(request, env, ctx);
+    }
+
+    if (request.method === "POST" && url.pathname === "/tg/webhook") {
+      return handleTelegramWebhook(request, env);
     }
 
     if (
@@ -164,10 +169,10 @@ export default {
     return openAiError("Not found", 404);
   },
 
-  async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
+  async queue(batch: MessageBatch<QueueMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
     for (const message of batch.messages) {
       try {
-        await handleQueueMessage(message.body, env);
+        await handleQueueMessage(message.body, env, ctx);
         message.ack();
       } catch (error) {
         console.error("queue message failed", error);

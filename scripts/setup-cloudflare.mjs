@@ -17,7 +17,9 @@ const vectorizeBinding =
   process.env.CMP_VECTORIZE_BINDING || readVectorizeValue("binding") || "VECTORIZE";
 const vectorizeDimensions = process.env.CMP_VECTORIZE_DIMENSIONS || "768";
 const vectorizeMetric = process.env.CMP_VECTORIZE_METRIC || "cosine";
-const queueName = process.env.CMP_QUEUE_NAME || "companion-memory";
+// tg-bot branch: the twin worker has its own queue (one consumer per queue);
+// keep in sync with [[queues.*]] in wrangler.toml.
+const queueName = process.env.CMP_QUEUE_NAME || "companion-memory-tg";
 // Variables that are safe to persist as visible Worker config in wrangler.toml
 // [vars]. Credentials are intentionally excluded — they must be provisioned
 // via `wrangler secret put <NAME>` (or the Cloudflare Dashboard) so plaintext

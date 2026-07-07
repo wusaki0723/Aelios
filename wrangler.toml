@@ -1,4 +1,11 @@
-name = "companion-memory-proxy"
+# Twin-worker deployment (tg-bot branch): a second worker beside the main
+# companion-memory-proxy, sharing the SAME D1 database and Vectorize index
+# (looked up by name), so the bot and Chatbox share one memory. Divergences
+# from memory-v2 kept deliberate and minimal:
+#   - name: its own worker
+#   - no [triggers]: nightly dream/digest/retention run ONLY in the main worker
+#   - its own queue: one queue allows exactly one consumer worker
+name = "aelios-tgbot"
 main = "src/index.ts"
 compatibility_date = "2026-04-01"
 keep_vars = true
@@ -18,9 +25,9 @@ enabled = false
 persist = true
 head_sampling_rate = 1
 
-[triggers]
-# Cloudflare cron uses UTC. 20:10 UTC is 04:10 in Singapore/China time.
-crons = ["10 20 * * *"]
+# No [triggers] here on purpose: scheduled maintenance (dream digest,
+# retention, GitHub daily pull) belongs to the main worker only. A cron here
+# would run it twice against the shared D1.
 
 [ai]
 binding = "AI"
@@ -89,11 +96,13 @@ TG_RECENT_MAX_TURNS = "12"
 binding = "VECTORIZE"
 index_name = "memo-kb"
 
+# Own queue: "companion-memory" is consumed by the main worker, and Cloudflare
+# allows exactly one consumer worker per queue.
 [[queues.producers]]
 binding = "MEMORY_QUEUE"
-queue = "companion-memory"
+queue = "companion-memory-tg"
 
 [[queues.consumers]]
-queue = "companion-memory"
+queue = "companion-memory-tg"
 max_batch_size = 10
 max_batch_timeout = 30

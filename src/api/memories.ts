@@ -32,9 +32,9 @@ import {
   upsertGlossary,
   upsertMemoryByFactKey
 } from "../db/v2";
-import { isV2Enabled } from "../memory/v2/recall";
+import { isV2Enabled, runRecall } from "../memory/v2/recall";
 import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
-import type { Env, KeyProfile } from "../types";
+import type { Env, KeyProfile, MemoryApiRecord } from "../types";
 import { json, openAiError } from "../utils/json";
 import {
   readBoolean,
@@ -214,6 +214,100 @@ async function handleSearchMemories(request: Request, env: Env, profile: KeyProf
       ...(readBoolean(body.include_filter_debug) && filterResult ? { memory_filter: filterResult.meta } : {})
     },
     ...(readBoolean(body.include_prompt) ? { prompt: formatMemoryPatch(data) } : {})
+  });
+}
+
+function readRecallK(body: Record<string, unknown>, env: Env): number {
+  const raw = body.k !== undefined ? body.k : body.top_k;
+  const fallback = Number(env.MEMORY_TOP_K || 50);
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.floor(raw);
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return Math.floor(parsed);
+  }
+  return Number.isFinite(fallback) ? Math.floor(fallback) : 50;
+}
+
+async function handleRecallMemories(request: Request, env: Env, profile: KeyProfile): Promise<Response> {
+  const scopeError = requireScope(profile, "memory:read");
+  if (scopeError) return scopeError;
+
+  if (!isV2Enabled(env)) {
+    return handleSearchMemories(request, env, profile);
+  }
+
+  const body = await readJsonObject(request);
+  if (!body) return openAiError("Request body must be a JSON object", 400);
+
+  const query = readString(body.query) || "";
+  if (!query) return openAiError("query is required", 400);
+
+  const namespace = resolveNamespace(profile, body.namespace);
+  const k = readRecallK(body, env);
+  const minScore = typeof body.min_score === "number" && Number.isFinite(body.min_score)
+    ? body.min_score
+    : undefined;
+  const types = readStringArray(body.types);
+  const includePrompt = readBoolean(body.include_prompt);
+
+  const result = await runRecall(env, { namespace, query, k, min_score: minScore, types });
+  const data = result.hits.map((h) => ({
+    id: h.id,
+    content: h.content,
+    type: h.type,
+    score: h.score,
+    importance: 0.5,
+    source: h.source,
+    source_layer: h.source_layer
+  }));
+
+  let prompt: string | undefined;
+  if (includePrompt && data.length > 0) {
+    const promptRecords: MemoryApiRecord[] = data.map((d) => ({
+      id: d.id,
+      namespace,
+      type: d.type,
+      content: d.content,
+      summary: null,
+      importance: d.importance,
+      confidence: 0.8,
+      status: "active",
+      pinned: false,
+      tags: [],
+      source: d.source,
+      source_message_ids: [],
+      vector_id: null,
+      last_recalled_at: null,
+      recall_count: 0,
+      created_at: "",
+      updated_at: "",
+      expires_at: null,
+      score: d.score
+    }));
+    const patch = formatMemoryPatch(promptRecords);
+    if (result.glossary_hits.length > 0) {
+      const glossaryLines = result.glossary_hits.map(
+        (g) => `- [glossary] ${g.term}: ${g.definition}`
+      );
+      prompt = patch ? `${patch}\n${glossaryLines.join("\n")}` : glossaryLines.join("\n");
+    } else {
+      prompt = patch || undefined;
+    }
+  }
+
+  return json({
+    data,
+    meta: {
+      namespace,
+      backend: "v2-recall",
+      top_k: k,
+      count: data.length,
+      glossary_hits: result.glossary_hits.length,
+      ...result.meta
+    },
+    ...(prompt ? { prompt } : {})
   });
 }
 
@@ -876,6 +970,10 @@ export async function handleMemories(request: Request, env: Env, ctx: ExecutionC
 
   if (tail.length === 1 && tail[0] === "search" && request.method === "POST") {
     return handleSearchMemories(request, env, auth.profile);
+  }
+
+  if (tail.length === 1 && tail[0] === "recall" && request.method === "POST") {
+    return handleRecallMemories(request, env, auth.profile);
   }
 
   if (tail.length === 1 && (tail[0] === "digest" || tail[0] === "dream") && request.method === "POST") {

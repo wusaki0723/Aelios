@@ -208,7 +208,8 @@ workers-ai/@cf/...         → env.AI.run（不走 AI Gateway）
 | GET / POST | `/mcp` `/memory-mcp` | MCP 端点 |
 | GET / POST | `/v1/memories` `/v1/memory` | 记忆列表 / 新建（v2 必须带 `fact_key`，走 upsert） |
 | GET / PATCH / DELETE | `/v1/memories/:id` `/v1/memory/:id` | 单条记忆操作 |
-| POST | `/v1/search/memories` | 记忆搜索（召回用，reranker 后原文直出；`filter:false` 跳 reranker，`include_prompt:true` 拿可注入文本） |
+| POST | `/v1/search/memories` `/v1/memory/search` | 记忆搜索（reranker 后原文直出；`filter:false` 跳 reranker，`include_prompt:true` 拿可注入文本；**无**注入记账） |
+| POST | `/v1/memory/recall` | v2 动态召回（见下节）；hook 客户端应优先使用 |
 | POST | `/v1/ingest/messages` `/v1/messages/ingest` | 写入原始聊天（v2 只落 raw） |
 | GET | `/v1/memory_boot` | 冷启动包：昨日日志 + precious + glossary + 今日消息 + 统计 |
 | GET | `/v1/diary?date=YYYY-MM-DD` | 读单日日记（`daily_log`）；无记录 404 |
@@ -227,6 +228,21 @@ workers-ai/@cf/...         → env.AI.run（不走 AI Gateway）
 | POST | `/v1/debug/vector_reindex` | 向量重建 |
 
 所有非 `/health` `/admin` `/v1/models` 端点都要 `Authorization: Bearer <CHATBOX_API_KEY>`，按 scope（`memory:read` / `memory:write`）鉴权。
+
+### POST `/v1/memory/recall`
+
+与 `/v1/memory/search` 相同鉴权（`memory:read`）。JSON body：
+
+| 字段 | 说明 |
+|---|---|
+| `query` | 必填，当前轮用户文本 |
+| `namespace` | 可选，默认 profile namespace |
+| `k` / `top_k` | 可选，召回条数上限（默认 `MEMORY_TOP_K`，服务端钳 1–100） |
+| `min_score` | 可选，0–1 分数地板 |
+| `types` | 可选，记忆类型过滤 |
+| `include_prompt` | 可选，为 true 且有命中时返回可注入 `prompt` |
+
+走 v2 `runRecall` 管线，含三道去重闸（珍贵不进召回池、与核心层指纹去重、近期注入 decay）并更新 `last_injected_at`；每轮 hook 客户端应优先用此端点而非 `/search`（后者为原始搜索，不做注入记账）。
 
 ## MCP 工具（`/mcp`）
 

@@ -44,6 +44,9 @@ VISION_MODEL = "google-ai-studio/gemini-3-flash-preview"
 # handled by the reranker + compressor, so keep this as a garbage gate only.
 MEMORY_MIN_SCORE = "0.1"
 MEMORY_TOP_K = "50"
+# 闸三降权系数: 命中分×factor 低于 RECALL_MIN_SCORE(0.15) 地板即被压下。
+# 典型命中分 0.85-0.9，0.5 默认压不过地板（0.425>0.15），0.15 才能真正抑制窗口内重复注入 (0.9*0.15=0.135<0.15)。
+MEMORY_INJECT_DECAY_FACTOR = "0.15"
 MEMORY_RERANKER_MODEL = "workers-ai/@cf/baai/bge-reranker-base"
 VECTORIZE_INDEX_NAME = "memo-kb"
 EMBEDDING_MODEL = "workers-ai/@cf/google/embeddinggemma-300m"

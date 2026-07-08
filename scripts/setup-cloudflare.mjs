@@ -15,7 +15,7 @@ const vectorizeName =
   process.env.CMP_VECTORIZE_NAME || readVectorizeValue("index_name") || "memo-kb";
 const vectorizeBinding =
   process.env.CMP_VECTORIZE_BINDING || readVectorizeValue("binding") || "VECTORIZE";
-const vectorizeDimensions = process.env.CMP_VECTORIZE_DIMENSIONS || "768";
+const vectorizeDimensions = process.env.CMP_VECTORIZE_DIMENSIONS || "1024";
 const vectorizeMetric = process.env.CMP_VECTORIZE_METRIC || "cosine";
 const queueName = process.env.CMP_QUEUE_NAME || "companion-memory";
 // Variables that are safe to persist as visible Worker config in wrangler.toml

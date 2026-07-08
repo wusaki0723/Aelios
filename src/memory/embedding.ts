@@ -1,7 +1,7 @@
 import type { Env, MemoryRecord } from "../types";
 import { callOpenAICompatEmbeddings } from "../proxy/openaiAdapter";
 
-const DEFAULT_EMBEDDING_MODEL = "workers-ai/@cf/google/embeddinggemma-300m";
+const DEFAULT_EMBEDDING_MODEL = "workers-ai/@cf/baai/bge-m3";
 
 function workersAiModelName(model: string): string | null {
   const normalized = model.trim();

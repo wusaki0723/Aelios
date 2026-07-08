@@ -62,7 +62,7 @@ function embeddingNorm(vector: number[]): number {
 }
 
 function readEmbeddingModel(env: Env): string {
-  return env.EMBEDDING_MODEL?.trim() || "workers-ai/@cf/google/embeddinggemma-300m";
+  return env.EMBEDDING_MODEL?.trim() || "workers-ai/@cf/baai/bge-m3";
 }
 
 function readEmbeddingProvider(model: string): string {

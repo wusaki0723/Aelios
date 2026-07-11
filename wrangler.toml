@@ -84,8 +84,10 @@ GITHUB_DAILY_PATH = "archive/daily"
 # (optional overflow past the ~5KB per-var cap), TG_ALLOWED_CHAT_IDS
 # (comma-separated, "*" = everyone; dropped chats are logged so you can copy
 # your chat_id from the logs), and IM_API_KEY (the bot's internal chat key).
+# Rolling window defaults (unset = code defaults): TG_FOLD_TRIGGER_TURNS=50,
+# TG_RECENT_KEEP_TURNS=10. Legacy TG_RECENT_MAX_TURNS still accepted as a
+# fold-trigger alias with a deprecation warning.
 TG_DEBOUNCE_SECONDS = "3"
-TG_RECENT_MAX_TURNS = "12"
 
 # Private/account-specific variables live in the Cloudflare Dashboard:
 # AI_GATEWAY_BASE_URL, CHATBOX_API_KEY, MEMORY_MCP_API_KEY,

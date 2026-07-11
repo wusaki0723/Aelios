@@ -66,7 +66,9 @@ Send another message. The bot should type, then reply.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `TG_DEBOUNCE_SECONDS` | `3` | Window merging rapid consecutive messages into one turn |
-| `TG_RECENT_MAX_TURNS` | `12` | Verbatim messages kept before the oldest half folds into the summary |
+| `TG_FOLD_TRIGGER_TURNS` | `50` | Fold when `recent` reaches this many turns; everything except the keep window goes into the rolling summary |
+| `TG_RECENT_KEEP_TURNS` | `10` | Verbatim turns kept after a fold (the rest are evicted into the summary) |
+| `TG_RECENT_MAX_TURNS` | — | Deprecated alias for `TG_FOLD_TRIGGER_TURNS`; used only when the new var is unset (emits a console warning) |
 | `TG_SUMMARY_MODEL` | `DREAM_MODEL` → `CHAT_MODEL` | Model used for summary folding |
 
 ## Behavior notes

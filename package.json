@@ -9,7 +9,7 @@
     "setup:cloudflare": "node scripts/setup-cloudflare.mjs",
     "deploy:cloudflare": "npm run setup:cloudflare && wrangler deploy --keep-vars",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && node scripts/verify-assembler.mjs && node scripts/verify-vector-memory-write.mjs && node scripts/verify-extract-pipeline.mjs",
+    "verify": "npm run typecheck && node scripts/verify-assembler.mjs && node scripts/verify-vector-memory-write.mjs && node scripts/verify-extract-pipeline.mjs && node scripts/verify-tg-window.mjs",
     "vectorize:clean": "node scripts/clean-vectorize-memory.mjs",
     "vectorize:clean:llm": "node scripts/llm-clean-vectorize-memory.mjs",
     "memory:deep-clean": "node scripts/deep-clean-memories.mjs",

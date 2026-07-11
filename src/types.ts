@@ -118,7 +118,11 @@ export interface Env {
   TG_ALLOWED_CHAT_IDS?: string;
   // Debounce window (seconds) merging rapid consecutive messages. Default 3.
   TG_DEBOUNCE_SECONDS?: string;
-  // Rolling-context size (messages) kept verbatim before folding. Default 12.
+  // Fold when recent.length reaches this many turns. Default 50.
+  TG_FOLD_TRIGGER_TURNS?: string;
+  // After a fold, keep this many most-recent turns verbatim. Default 10.
+  TG_RECENT_KEEP_TURNS?: string;
+  // Deprecated alias for TG_FOLD_TRIGGER_TURNS (warn + fallback when new var unset).
   TG_RECENT_MAX_TURNS?: string;
   // Model for summary folding; falls back to DREAM_MODEL then CHAT_MODEL.
   TG_SUMMARY_MODEL?: string;

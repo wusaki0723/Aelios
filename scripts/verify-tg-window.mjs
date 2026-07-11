@@ -29,9 +29,13 @@ function planRecentFold(recent, foldTrigger, keepTurns) {
     return { shouldFold: false, evicted: [], kept: recent };
   }
   const keep = Math.min(Math.max(keepTurns, 1), recent.length);
+  const evicted = recent.slice(0, recent.length - keep);
+  if (evicted.length === 0) {
+    return { shouldFold: false, evicted: [], kept: recent };
+  }
   return {
     shouldFold: true,
-    evicted: recent.slice(0, recent.length - keep),
+    evicted,
     kept: recent.slice(recent.length - keep)
   };
 }
@@ -118,6 +122,15 @@ check("50 turns: fold → recent=10, evicted=40", () => {
     plan.evicted.map((t) => t.content),
     turns.slice(0, 40).map((t) => t.content)
   );
+});
+
+check("keepTurns >= recent.length: empty fold treated as no-fold", () => {
+  const plan = planRecentFold(makeTurns(50), 50, 50);
+  assert.equal(plan.shouldFold, false);
+  assert.equal(plan.evicted.length, 0);
+  assert.equal(plan.kept.length, 50);
+  const plan2 = planRecentFold(makeTurns(50), 50, 999);
+  assert.equal(plan2.shouldFold, false);
 });
 
 await checkAsync("fold failure (null): state unchanged", async () => {

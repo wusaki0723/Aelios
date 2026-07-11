@@ -19,15 +19,19 @@ const BUBBLE_FORMAT_RULE =
  */
 function readFoldTriggerTurns(env: Env): number {
   const fresh = env.TG_FOLD_TRIGGER_TURNS;
-  if (fresh != null && String(fresh).trim() !== "") {
+  const freshSet = fresh != null && String(fresh).trim() !== "";
+  if (freshSet) {
     const parsed = Number(fresh);
     if (Number.isFinite(parsed) && parsed >= 2) return Math.floor(parsed);
+    console.warn(`tg: TG_FOLD_TRIGGER_TURNS=${String(fresh)} is invalid (need integer >= 2), falling back`);
   }
   const legacy = env.TG_RECENT_MAX_TURNS;
   if (legacy != null && String(legacy).trim() !== "") {
-    console.warn(
-      "tg: TG_RECENT_MAX_TURNS is deprecated; rename to TG_FOLD_TRIGGER_TURNS (keep-after-fold is now TG_RECENT_KEEP_TURNS)"
-    );
+    if (!freshSet) {
+      console.warn(
+        "tg: TG_RECENT_MAX_TURNS is deprecated; rename to TG_FOLD_TRIGGER_TURNS (keep-after-fold is now TG_RECENT_KEEP_TURNS)"
+      );
+    }
     const parsed = Number(legacy);
     if (Number.isFinite(parsed) && parsed >= 2) return Math.floor(parsed);
   }
@@ -54,9 +58,15 @@ export function planRecentFold<T>(
     return { shouldFold: false, evicted: [], kept: recent };
   }
   const keep = Math.min(Math.max(keepTurns, 1), recent.length);
+  const evicted = recent.slice(0, recent.length - keep);
+  // keepTurns >= recent.length（错误配置）时 evicted 为空：空折叠只会白烧一次
+  // LLM 调用并把摘要重写成"无新增"，按不折叠处理。
+  if (evicted.length === 0) {
+    return { shouldFold: false, evicted: [], kept: recent };
+  }
   return {
     shouldFold: true,
-    evicted: recent.slice(0, recent.length - keep),
+    evicted,
     kept: recent.slice(recent.length - keep)
   };
 }

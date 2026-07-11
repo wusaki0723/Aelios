@@ -162,8 +162,8 @@ Cloudflare Workers 上的 OpenAI-compatible Memory Proxy。帮用户部署时：
 | D1 | `companion_memory_proxy` |
 | Vectorize | `memo-kb`（768 维 cosine） |
 | Queue | `companion-memory` |
-| Embedding | `workers-ai/@cf/google/embeddinggemma-300m` |
-| Dimensions | 768（覆盖 `EMBEDDING_MODEL` 时输出维度需匹配） |
+| Embedding | `workers-ai/@cf/baai/bge-m3` |
+| Dimensions | 1024（覆盖 `EMBEDDING_MODEL` 时输出维度需匹配） |
 
 记忆库默认走 **v2**（`MEMORY_LIFECYCLE_ENABLED` 隐式开启）：D1 是本体，Vectorize 是镜像。兼容/回退开关默认隐藏。
 
@@ -336,8 +336,8 @@ hard delete: deleted/superseded/expired 超 30 天 → 先删 Vectorize 再删 D
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天 |
 | `DREAM_MODEL` | `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 夜间 dream（抽取+整理） |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
-| `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 嵌入 |
-| `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 目标维度 |
+| `EMBEDDING_MODEL` | `workers-ai/@cf/baai/bge-m3` | 嵌入 |
+| `EMBEDDING_DIMENSIONS` | `1024` | 非 Workers AI embedding 目标维度 |
 | `MEMORY_RERANKER_MODEL` | `workers-ai/@cf/baai/bge-reranker-base` | reranker |
 | `ENABLE_MEMORY_RERANKER` | `true` | `false` 跳过 |
 

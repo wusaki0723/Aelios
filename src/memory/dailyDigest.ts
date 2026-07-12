@@ -165,7 +165,7 @@ function readFirstEnvValue(...values: unknown[]): unknown {
   return undefined;
 }
 
-const DEFAULT_DREAM_MODEL = "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";
 
 function readDreamModel(env: Env): string | null {
   return (

@@ -5,7 +5,7 @@ import { clampMemoryType } from "./canonicalTypes";
 import type { ExtractedMemory } from "./extract";
 
 const DEFAULT_DREAM_EXTRACT_MAX_TOKENS = 1200;
-const DEFAULT_WORKERS_AI_DREAM_MODEL = "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_WORKERS_AI_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";
 
 interface DreamExtractModelResult {
   memories: ExtractedMemory[];

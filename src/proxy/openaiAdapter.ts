@@ -12,13 +12,73 @@ function workersAiModelName(model: string): string | null {
 
 function readWorkersAiChatContent(result: unknown): string {
   if (!result || typeof result !== "object") return "";
-  const value = result as { response?: unknown; choices?: unknown };
+  const value = result as { response?: unknown; choices?: unknown; answer?: unknown; caption?: unknown };
   if (typeof value.response === "string") return value.response;
+  if (typeof value.answer === "string") return value.answer;
+  if (typeof value.caption === "string") return value.caption;
   if (Array.isArray(value.choices)) {
     const first = value.choices[0] as { message?: { content?: unknown } } | undefined;
     if (typeof first?.message?.content === "string") return first.message.content;
   }
   return "";
+}
+
+// Moondream takes {task, image, question} instead of OpenAI-style messages.
+function isMoondreamModel(model: string): boolean {
+  return model.toLowerCase().includes("moondream");
+}
+
+function buildMoondreamRunInput(body: OpenAIChatRequest): Record<string, unknown> {
+  let image: string | undefined;
+  const textParts: string[] = [];
+  for (const message of body.messages ?? []) {
+    const content = (message as { content?: unknown }).content;
+    if (typeof content === "string") {
+      if (content.trim()) textParts.push(content.trim());
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const typed = part as { type?: unknown; text?: unknown; image_url?: unknown };
+      if (typed.type === "text" && typeof typed.text === "string" && typed.text.trim()) {
+        textParts.push(typed.text.trim());
+      }
+      if (typed.type === "image_url" || typed.type === "input_image") {
+        const raw = typed.image_url;
+        const url =
+          typeof raw === "string" ? raw : raw && typeof raw === "object" ? (raw as { url?: unknown }).url : undefined;
+        if (typeof url === "string" && url) image = url;
+      }
+    }
+  }
+  const input: Record<string, unknown> = {
+    task: "query",
+    question: textParts.join("\n") || "What's in this image?",
+    reasoning: false,
+    stream: false
+  };
+  if (image) input.image = image;
+  if (body.temperature !== undefined) input.temperature = body.temperature;
+  if (body.max_tokens !== undefined) input.max_tokens = body.max_tokens;
+  return input;
+}
+
+function toSingleChunkSse(response: OpenAIChatResponse): string {
+  const chunk = {
+    id: response.id,
+    object: "chat.completion.chunk",
+    created: response.created,
+    model: response.model,
+    choices: [
+      {
+        index: 0,
+        delta: { role: "assistant", content: response.choices?.[0]?.message?.content ?? "" },
+        finish_reason: "stop"
+      }
+    ]
+  };
+  return `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
 }
 
 function buildWorkersAiRunInput(body: OpenAIChatRequest): Record<string, unknown> {
@@ -126,6 +186,21 @@ export async function callOpenAICompat(env: Env, body: OpenAIChatRequest): Promi
     }
 
     try {
+      if (isMoondreamModel(workersAiModel)) {
+        const result = await env.AI.run(workersAiModel as never, buildMoondreamRunInput(body));
+        const wrapped = wrapWorkersAiChatResponse(body.model, result);
+        if (body.stream) {
+          return new Response(toSingleChunkSse(wrapped), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" }
+          });
+        }
+        return new Response(JSON.stringify(wrapped), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
       if (body.stream) {
         const stream = await env.AI.run(workersAiModel as never, {
           ...buildWorkersAiRunInput(body),

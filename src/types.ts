@@ -193,6 +193,8 @@ export interface OpenAIChatRequest {
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
+  /** vLLM 系模型的模板开关，如 {enable_thinking: false} 关闭思考链。 */
+  chat_template_kwargs?: Record<string, unknown>;
   [key: string]: unknown;
 }
 

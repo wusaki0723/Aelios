@@ -101,6 +101,7 @@ function buildWorkersAiRunInput(body: OpenAIChatRequest): Record<string, unknown
   };
   if (body.temperature !== undefined) input.temperature = body.temperature;
   if (body.max_tokens !== undefined) input.max_tokens = body.max_tokens;
+  if (body.chat_template_kwargs !== undefined) input.chat_template_kwargs = body.chat_template_kwargs;
   const responseFormat = body.response_format;
   if (responseFormat && typeof responseFormat === "object") {
     input.response_format = responseFormat;

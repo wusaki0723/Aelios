@@ -209,6 +209,8 @@ async function describePhoto(env: Env, fileId: string, caption: string): Promise
       }
     ],
     max_tokens: 512,
+    // gemma-4 这类推理模型：关思考链直出描述；moondream 适配器会忽略此字段。
+    chat_template_kwargs: { enable_thinking: false },
     stream: false
   };
 

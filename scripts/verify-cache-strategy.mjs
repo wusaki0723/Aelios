@@ -85,26 +85,30 @@ function assemble(ctx) {
   systemBlocks.push({ role: "system", text: PROXY_STATIC_RULES });
   blockIds.push("proxy_static_rules");
 
-  // Block 2: persona_pinned (stable, NO cache_control)
-  if (ctx.personaText) {
-    systemBlocks.push({ role: "system", text: ctx.personaText });
-    blockIds.push("persona_pinned");
-  }
-
-  // Block 3: preset_lite (stable)
+  // Block 2: preset_lite (stable)
   systemBlocks.push({ role: "system", text: PRESET_LITE });
   blockIds.push("preset_lite");
 
-  // Block 4: client_system (stable, cache_anchor = true)
-  // This is the long persona/system text — big enough for 4096 token minimum.
+  // Block 3: client_system (stable, NO cache_control)
+  // Deploy-level / long persona text — before slow-changing memory.
   if (ctx.clientSystem) {
     systemBlocks.push({
       role: "system",
       text: ctx.clientSystem,
+    });
+    blockIds.push("client_system");
+  }
+
+  // Block 4: persona_pinned (stable, cache_anchor = true)
+  // Last of the four-block Anthropic cache prefix.
+  if (ctx.personaText) {
+    systemBlocks.push({
+      role: "system",
+      text: ctx.personaText,
       cache_control: { type: "ephemeral", ttl: "5m" },
     });
     anchorIndex = systemBlocks.length - 1;
-    blockIds.push("client_system");
+    blockIds.push("persona_pinned");
   }
 
   // Messages: history only (breakpoints computed before turn_context)
@@ -320,8 +324,8 @@ test("T1: resend → identical breakpoints", () => {
   assert.deepStrictEqual(a1.meta.cache_breakpoints, a2.meta.cache_breakpoints);
 });
 
-// T2: system anchor is on client_system (long persona text, 4096+ tokens)
-test("T2: system anchor on client_system", () => {
+// T2: system anchor is on persona_pinned (last of the four-block prefix)
+test("T2: system anchor on persona_pinned", () => {
   const ctx = {
     ...BASE_CTX,
     history: [userMsg("h1"), assistantMsg("a1")],
@@ -334,7 +338,7 @@ test("T2: system anchor on client_system", () => {
   assert.ok(sysBP, "has system breakpoint");
 
   const anchorId = assembled.meta.block_ids[sysBP.system_block_index];
-  assert.strictEqual(anchorId, "client_system");
+  assert.strictEqual(anchorId, "persona_pinned");
 });
 
 // T3: change current user → system anchor unchanged

@@ -208,6 +208,7 @@ async function describePhoto(env: Env, fileId: string, caption: string): Promise
         ]
       }
     ],
+    max_tokens: 512,
     stream: false
   };
 
@@ -220,7 +221,9 @@ async function describePhoto(env: Env, fileId: string, caption: string): Promise
       return "[图片：识别失败]";
     }
     const parsed = (await response.json()) as OpenAIChatResponse;
-    const description = extractAssistantText(parsed).trim();
+    let description = extractAssistantText(parsed).trim();
+    // 复读劣化兜底：识别文字只该有一两段，超长一律硬截。
+    if (description.length > 800) description = `${description.slice(0, 800)}…`;
     console.log("tg: photo described", {
       downloadMs,
       visionMs: Date.now() - visionStart,

@@ -26,7 +26,7 @@ MEMORY_FILTER_MAX_TOKENS = "1400"
 # The reranker (bge-reranker-base) + LLM compressor own precision downstream.
 MEMORY_FILTER_MIN_SCORE = "0.1"
 DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b"
-VISION_MODEL = "workers-ai/@cf/moondream/moondream3.1-9B-A2B"
+VISION_MODEL = "workers-ai/@cf/google/gemma-4-26b-a4b-it"
 MEMORY_BACKEND = "vectorize"
 # Vector recall floor (see MEMORY_FILTER_MIN_SCORE note above). Precision is
 # handled by the reranker + compressor, so keep this as a garbage gate only.

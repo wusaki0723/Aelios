@@ -93,72 +93,7 @@ const proxyStaticRulesBlock: Block = {
 };
 
 // ---------------------------------------------------------------------------
-// Block 2: persona_pinned (stable)
-// Pinned memories where type ∈ {persona, identity}.
-// Sort: type asc, importance desc, id asc (deterministic).
-// ---------------------------------------------------------------------------
-
-function formatPersonaPinned(memories: MemoryApiRecord[]): string {
-  return memories
-    .map((m) => ({ ...m, content: sanitizeMemoryContent(m.content) }))
-    .filter((m) => m.content)
-    .map((m) => `- [${m.type}][importance=${m.importance.toFixed(2)}] ${m.content}`)
-    .join("\n");
-}
-
-const personaPinnedBlock: Block = {
-  id: "persona_pinned",
-  kind: "stable",
-  role: "system",
-  cache_anchor: false,
-  content_fn: (ctx: AssemblerContext): string | null => {
-    const personaMemories = ctx.pinnedPersonaMemories ?? [];
-    const preciousMemories = ctx.boot?.precious.map((p) => ({
-      id: p.id,
-      namespace: "",
-      type: "precious",
-      content: p.content,
-      summary: null,
-      importance: 1,
-      confidence: 1,
-      status: "active",
-      pinned: true,
-      tags: [],
-      source: "precious",
-      source_message_ids: [],
-      vector_id: null,
-      last_recalled_at: null,
-      recall_count: 0,
-      created_at: p.created_at,
-      updated_at: p.created_at,
-      expires_at: null,
-      fact_key: null,
-      supersedes_id: null,
-      superseded_by_id: null,
-      review_reason: null,
-      valid_as_of: null,
-      last_seen_at: null,
-      seen_count: 0,
-      last_injected_at: null,
-      score: undefined,
-    })) ?? [];
-    const all = [...personaMemories, ...preciousMemories];
-    if (all.length === 0) return null;
-
-    const sorted = [...all].sort((a, b) => {
-      const typeCmp = a.type.localeCompare(b.type);
-      if (typeCmp !== 0) return typeCmp;
-      if (b.importance !== a.importance) return b.importance - a.importance;
-      return a.id.localeCompare(b.id);
-    });
-
-    const text = formatPersonaPinned(sorted);
-    return text || null;
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Block 3: preset_lite (stable)
+// Block 2: preset_lite (stable)
 // Fixed string from plan §5.1, ≤300 chars, hardcoded constant.
 // ---------------------------------------------------------------------------
 
@@ -180,25 +115,7 @@ const presetLiteBlock: Block = {
 };
 
 // ---------------------------------------------------------------------------
-// Block 3.5: boot_stable (stable)
-// v2 boot package: yesterday_log + glossary.
-// Sits before cache anchor — stable content that rarely changes.
-// ---------------------------------------------------------------------------
-
-const bootStableBlock: Block = {
-  id: "boot_stable",
-  kind: "stable",
-  role: "system",
-  cache_anchor: false,
-  content_fn: (ctx: AssemblerContext): string | null => {
-    if (!ctx.boot) return null;
-    const text = formatBootStable(ctx.boot);
-    return text || null;
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Block 4: client_system (stable, cache_anchor = true)
+// Block 3: client_system (stable)
 // Frontend system messages concatenated.
 // ---------------------------------------------------------------------------
 
@@ -280,7 +197,7 @@ const clientSystemBlock: Block = {
   id: "client_system",
   kind: "stable",
   role: "system",
-  cache_anchor: true,
+  cache_anchor: false,
   content_fn: (ctx: AssemblerContext): string | null => {
     const { stable } = splitClientSystemTexts(extractSystemTexts(ctx.systemMessages));
     if (stable.length === 0) return null;
@@ -289,7 +206,91 @@ const clientSystemBlock: Block = {
 };
 
 // ---------------------------------------------------------------------------
-// Block 4.5: client_volatile_context (turn_context)
+// Block 4: persona_pinned (stable, cache_anchor = true)
+// Pinned memories where type ∈ {persona, identity}, plus boot precious.
+// Sort: type asc, importance desc, id asc (deterministic).
+// Last block of the Anthropic explicit-cache prefix (after constants + client_system).
+// ---------------------------------------------------------------------------
+
+function formatPersonaPinned(memories: MemoryApiRecord[]): string {
+  return memories
+    .map((m) => ({ ...m, content: sanitizeMemoryContent(m.content) }))
+    .filter((m) => m.content)
+    .map((m) => `- [${m.type}][importance=${m.importance.toFixed(2)}] ${m.content}`)
+    .join("\n");
+}
+
+const personaPinnedBlock: Block = {
+  id: "persona_pinned",
+  kind: "stable",
+  role: "system",
+  cache_anchor: true,
+  content_fn: (ctx: AssemblerContext): string | null => {
+    const personaMemories = ctx.pinnedPersonaMemories ?? [];
+    const preciousMemories = ctx.boot?.precious.map((p) => ({
+      id: p.id,
+      namespace: "",
+      type: "precious",
+      content: p.content,
+      summary: null,
+      importance: 1,
+      confidence: 1,
+      status: "active",
+      pinned: true,
+      tags: [],
+      source: "precious",
+      source_message_ids: [],
+      vector_id: null,
+      last_recalled_at: null,
+      recall_count: 0,
+      created_at: p.created_at,
+      updated_at: p.created_at,
+      expires_at: null,
+      fact_key: null,
+      supersedes_id: null,
+      superseded_by_id: null,
+      review_reason: null,
+      valid_as_of: null,
+      last_seen_at: null,
+      seen_count: 0,
+      last_injected_at: null,
+      score: undefined,
+    })) ?? [];
+    const all = [...personaMemories, ...preciousMemories];
+    if (all.length === 0) return null;
+
+    const sorted = [...all].sort((a, b) => {
+      const typeCmp = a.type.localeCompare(b.type);
+      if (typeCmp !== 0) return typeCmp;
+      if (b.importance !== a.importance) return b.importance - a.importance;
+      return a.id.localeCompare(b.id);
+    });
+
+    const text = formatPersonaPinned(sorted);
+    return text || null;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Block 5: boot_stable (stable)
+// v2 boot package: yesterday_log + glossary.
+// Sits after cache anchor — changes daily, must not invalidate the cached prefix.
+// ---------------------------------------------------------------------------
+
+const bootStableBlock: Block = {
+  id: "boot_stable",
+  kind: "stable",
+  role: "system",
+  cache_anchor: false,
+  content_fn: (ctx: AssemblerContext): string | null => {
+    if (!ctx.boot) return null;
+    const text = formatBootStable(ctx.boot);
+    return text || null;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Block 5.5: client_volatile_context (turn_context)
 // Frontend time/date lines split out of client_system; injected into the
 // message stream before current_user so they do not poison the cache prefix.
 // ---------------------------------------------------------------------------
@@ -432,7 +433,7 @@ const TURN_CONTEXT_ID_SET = new Set<string>(TURN_CONTEXT_BLOCK_IDS);
  * - turn_context blocks → single user message before current_user (message stream)
  * - passthrough blocks → messages (original content preserved)
  * - null content_fn → block skipped
- * - anchor_index points to the position of client_system in system_blocks
+ * - anchor_index points to the position of persona_pinned in system_blocks
  * - client_system_hash is a deterministic hash of the client_system text
  *
  * Determinism: block order is fixed by BLOCK_ORDER array, never Map iteration.

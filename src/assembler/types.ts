@@ -124,9 +124,9 @@ export interface AssembledPrompt {
 
 export const BLOCK_ORDER: readonly string[] = [
   "proxy_static_rules",
-  "persona_pinned",
   "preset_lite",
   "client_system",
+  "persona_pinned",
   "boot_stable",
   "client_volatile_context",
   "dynamic_memory_patch",
@@ -136,9 +136,11 @@ export const BLOCK_ORDER: readonly string[] = [
 ] as const;
 
 /**
- * The cache anchor falls after client_system (index 3).
- * Cache prefix = proxy_static_rules + persona_pinned + preset_lite + client_system.
- * This includes the long persona/system prompt (4096+ tokens for Haiku threshold).
+ * The cache anchor falls after persona_pinned (index 3).
+ * Cache prefix = proxy_static_rules + preset_lite + client_system + persona_pinned.
+ * Same four blocks as before, ordered by volatility (pure constants → deploy-level
+ * → slow-changing memory) so OpenAI/DeepSeek implicit prefix cache survives
+ * persona/memory edits without invalidating the stable head.
  *
  * boot_stable (glossary, yesterday_log) is AFTER the anchor.
  * It changes daily but does NOT invalidate the cached system prefix.
@@ -146,7 +148,7 @@ export const BLOCK_ORDER: readonly string[] = [
  * are turn_context blocks — injected into the message stream before current_user,
  * after all cache breakpoints, never cached.
  */
-export const CACHE_ANCHOR_AFTER_ID = "client_system";
+export const CACHE_ANCHOR_AFTER_ID = "persona_pinned";
 
 /** Per-turn dynamic blocks routed into the message stream, not system_blocks. */
 export const TURN_CONTEXT_BLOCK_IDS: readonly string[] = [
@@ -156,7 +158,7 @@ export const TURN_CONTEXT_BLOCK_IDS: readonly string[] = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// Allowed memory types for persona_pinned (block 2)
+// Allowed memory types for persona_pinned
 // ---------------------------------------------------------------------------
 
 export const PERSONA_MEMORY_TYPES: readonly string[] = ["identity", "persona"] as const;

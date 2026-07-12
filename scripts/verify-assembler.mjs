@@ -14,7 +14,7 @@
  * Tests:
  *   1. Determinism — same ctx twice → identical output
  *   2. Pinned sort — different insertion order → identical output
- *   3. Cache anchor — falls on client_system position
+ *   3. Cache anchor — falls on persona_pinned position
  *   4. Image passthrough — image_url content preserved in messages
  *   5. Tool filtering — tool messages excluded from history
  */
@@ -39,9 +39,9 @@ function simpleHash(text) {
 
 const BLOCK_ORDER = [
   "proxy_static_rules",
-  "persona_pinned",
   "preset_lite",
   "client_system",
+  "persona_pinned",
   "boot_stable",
   "client_volatile_context",
   "dynamic_memory_patch",
@@ -339,9 +339,11 @@ function assemble(ctx) {
 
     const systemBlock = { role: "system", text };
     if (blockId === "client_system") {
+      clientSystemText = text;
+    }
+    if (blockId === "persona_pinned") {
       systemBlock.cache_control = { type: "ephemeral", ttl: "5m" };
       anchorIndex = systemBlocks.length;
-      clientSystemText = text;
     }
 
     systemBlocks.push(systemBlock);
@@ -552,26 +554,26 @@ check("different importance → sorted desc, not by insertion", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 3: Cache anchor on client_system
+// Test 3: Cache anchor on persona_pinned
 // ---------------------------------------------------------------------------
 
 console.log("\n--- Test 3: Cache anchor position ---");
 
-check("anchor_index points to client_system in system_blocks", () => {
+check("anchor_index points to persona_pinned in system_blocks", () => {
   const ctx = makeBaseCtx();
   const result = assemble(ctx);
 
-  const csIdx = result.meta.block_ids.indexOf("client_system");
-  assert.ok(csIdx >= 0, "client_system should be in block_ids");
-  assert.strictEqual(result.meta.anchor_index, csIdx);
+  const ppIdx = result.meta.block_ids.indexOf("persona_pinned");
+  assert.ok(ppIdx >= 0, "persona_pinned should be in block_ids");
+  assert.strictEqual(result.meta.anchor_index, ppIdx);
 });
 
-check("client_system block has cache_control", () => {
+check("persona_pinned block has cache_control", () => {
   const ctx = makeBaseCtx();
   const result = assemble(ctx);
 
-  const csIdx = result.meta.block_ids.indexOf("client_system");
-  const block = result.system_blocks[csIdx];
+  const ppIdx = result.meta.block_ids.indexOf("persona_pinned");
+  const block = result.system_blocks[ppIdx];
   assert.deepStrictEqual(block.cache_control, { type: "ephemeral", ttl: "5m" });
 });
 
@@ -589,18 +591,18 @@ check("no other block has cache_control", () => {
   }
 });
 
-check("stable blocks come before client_system; turn_context not in system_blocks", () => {
+check("stable blocks come before persona_pinned; turn_context not in system_blocks", () => {
   const ctx = makeBaseCtx();
   ctx.ragMemories = [{ type: "note", importance: 0.8, content: "用户喜欢猫" }];
   const result = assemble(ctx);
 
-  const csPos = result.meta.block_ids.indexOf("client_system");
-  const stableBefore = ["proxy_static_rules", "persona_pinned", "preset_lite"];
+  const ppPos = result.meta.block_ids.indexOf("persona_pinned");
+  const stableBefore = ["proxy_static_rules", "preset_lite", "client_system"];
 
   for (const id of stableBefore) {
     const pos = result.meta.block_ids.indexOf(id);
     if (pos >= 0) {
-      assert.ok(pos < csPos, `${id} should come before client_system`);
+      assert.ok(pos < ppPos, `${id} should come before persona_pinned`);
     }
   }
 
@@ -953,11 +955,11 @@ check("system blocks preserve cache_control", () => {
   const assembled = assemble(ctx);
   const anthropicSystem = assembledToAnthropicSystem(assembled.system_blocks);
 
-  // Find the client_system block (cache anchor)
-  const csIdx = assembled.meta.block_ids.indexOf("client_system");
-  assert.ok(csIdx >= 0);
+  // Find the persona_pinned block (cache anchor)
+  const ppIdx = assembled.meta.block_ids.indexOf("persona_pinned");
+  assert.ok(ppIdx >= 0);
 
-  const block = anthropicSystem[csIdx];
+  const block = anthropicSystem[ppIdx];
   assert.strictEqual(block.type, "text");
   assert.deepStrictEqual(block.cache_control, { type: "ephemeral", ttl: "5m" });
 });
@@ -1319,7 +1321,7 @@ function applyCacheOverrides(systemBlocks, env) {
 
 console.log("\n--- Test 9: Anthropic path ---");
 
-check("cache_control on client_system block only", () => {
+check("cache_control on persona_pinned block only", () => {
   const ctx = makeBaseCtx();
   const assembled = assemble(ctx);
   const anthropicSystem = assembledToAnthropicSystem(assembled.system_blocks);
@@ -1474,7 +1476,7 @@ check("Anthropic path: full pipeline produces valid system + messages", () => {
   assert.ok(systemBlocks[0].text.includes("前端提供的角色"));
   const anchor = systemBlocks.find((b) => b.cache_control);
   assert.ok(anchor);
-  assert.ok(anchor.text.includes("咲咲的伴侣"));
+  assert.ok(anchor.text.includes("性格温柔") || anchor.text.includes("名字是咲咲"));
   assert.ok(!systemBlocks.some((b) => b.text.includes("<memories>")));
 
   const { wire: messages } = assembledToAnthropicMessages(assembled.messages);
@@ -1871,7 +1873,7 @@ check("OpenAI helper: strips Claude native thinking but keeps reasoning_effort",
   assert.strictEqual(req.reasoning_effort, "high");
 });
 
-check("Anthropic helper: system cache_control on client_system", () => {
+check("Anthropic helper: system cache_control on persona_pinned", () => {
   const ctx = makeBaseCtx();
   ctx.systemMessages = [{ role: "system", content: "角色卡" }];
   ctx.ragMemories = [{ type: "note", importance: 0.7, content: "喜欢猫" }];
@@ -1884,8 +1886,8 @@ check("Anthropic helper: system cache_control on client_system", () => {
   );
   const withCache = req.system.filter((b) => b.cache_control);
   assert.strictEqual(withCache.length, 1);
-  // Cache is on client_system (long persona text)
-  assert.ok(withCache[0].text.includes("角色卡"));
+  // Cache is on persona_pinned (last block of the four-block prefix)
+  assert.ok(withCache[0].text.includes("性格温柔") || withCache[0].text.includes("名字是咲咲"));
 });
 
 check("Anthropic helper: no top-level cache_control by default", () => {
@@ -2150,7 +2152,7 @@ check("no system messages → client_system_hash is sentinel", () => {
   }
 });
 
-check("Anthropic assembler path: cacheAnchorBlock = 'client_system' when anchor_index >= 0", () => {
+check("Anthropic assembler path: cacheAnchorBlock = 'persona_pinned' when anchor_index >= 0", () => {
   // Simulates chatCompletions.ts Anthropic assembler branch
   const ctx = makeBaseCtx();
   ctx.systemMessages = [{ role: "system", content: "角色卡" }];
@@ -2158,11 +2160,11 @@ check("Anthropic assembler path: cacheAnchorBlock = 'client_system' when anchor_
 
   // chatCompletions.ts sets these when using assembler:
   const clientSystemHash = assembled.meta.client_system_hash;
-  const cacheAnchorBlock = assembled.meta.anchor_index >= 0 ? "client_system" : null;
+  const cacheAnchorBlock = assembled.meta.anchor_index >= 0 ? "persona_pinned" : null;
 
   assert.ok(clientSystemHash.length > 0);
-  assert.ok(assembled.meta.anchor_index >= 0, "anchor_index should be >= 0 with system messages");
-  assert.strictEqual(cacheAnchorBlock, "client_system");
+  assert.ok(assembled.meta.anchor_index >= 0, "anchor_index should be >= 0 with pinned persona");
+  assert.strictEqual(cacheAnchorBlock, "persona_pinned");
 });
 
 check("Anthropic assembler path: cacheAnchorBlock = null when anchor_index < 0", () => {
@@ -2173,7 +2175,7 @@ check("Anthropic assembler path: cacheAnchorBlock = null when anchor_index < 0",
   const assembled = assemble(ctx);
 
   const clientSystemHash = assembled.meta.client_system_hash;
-  const cacheAnchorBlock = assembled.meta.anchor_index >= 0 ? "client_system" : null;
+  const cacheAnchorBlock = assembled.meta.anchor_index >= 0 ? "persona_pinned" : null;
 
   assert.strictEqual(assembled.meta.anchor_index, -1);
   assert.strictEqual(cacheAnchorBlock, null);

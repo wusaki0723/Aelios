@@ -402,3 +402,7 @@ npm run vectorize:clean:llm
 ## License
 
 MIT
+
+## 交流与反馈
+
+有问题、想交流，欢迎来 QQ 群：**1091783659**

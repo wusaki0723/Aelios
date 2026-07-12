@@ -73,7 +73,8 @@ function buildMoondreamRunInput(body: OpenAIChatRequest): Record<string, unknown
   };
   if (image) input.image = image;
   if (body.temperature !== undefined) input.temperature = body.temperature;
-  if (body.max_tokens !== undefined) input.max_tokens = body.max_tokens;
+  // 无上限时 moondream 会在低信息量图片上复读到天荒地老，必须封顶。
+  input.max_tokens = body.max_tokens !== undefined ? body.max_tokens : 768;
   return input;
 }
 

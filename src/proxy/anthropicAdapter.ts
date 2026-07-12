@@ -26,7 +26,15 @@ interface AnthropicTextBlock {
 type AnthropicContentBlock =
   | AnthropicTextBlock
   | AnthropicToolUseBlock
-  | { type: "tool_result"; tool_use_id: string; content: string | Array<{ type: "text"; text: string }> };
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string | Array<{ type: "text"; text: string }>;
+      cache_control?: {
+        type: "ephemeral";
+        ttl?: "5m" | "1h";
+      };
+    };
 
 interface AnthropicMessage {
   role: "user" | "assistant";

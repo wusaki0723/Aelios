@@ -28,6 +28,10 @@ export interface AnthropicToolUseBlock {
   id: string;
   name: string;
   input: unknown;
+  cache_control?: {
+    type: "ephemeral";
+    ttl?: "5m" | "1h";
+  };
 }
 
 export interface AnthropicToolResultBlock {

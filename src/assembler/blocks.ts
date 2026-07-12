@@ -209,7 +209,7 @@ const clientSystemBlock: Block = {
 // Block 4: persona_pinned (stable, cache_anchor = true)
 // Pinned memories where type ∈ {persona, identity}, plus boot precious.
 // Sort: type asc, importance desc, id asc (deterministic).
-// Last block of the Anthropic explicit-cache prefix (after constants + client_system).
+// First Anthropic explicit-cache system breakpoint (after constants + client_system).
 // ---------------------------------------------------------------------------
 
 function formatPersonaPinned(memories: MemoryApiRecord[]): string {
@@ -272,16 +272,18 @@ const personaPinnedBlock: Block = {
 };
 
 // ---------------------------------------------------------------------------
-// Block 5: boot_stable (stable)
+// Block 5: boot_stable (stable, cache_anchor = true)
 // v2 boot package: yesterday_log + glossary.
-// Sits after cache anchor — changes daily, must not invalidate the cached prefix.
+// Second Anthropic explicit-cache system breakpoint — changes daily, so it
+// sits after persona_pinned and forms its own cached prefix tier.
+// When content_fn returns null the block is skipped (single-anchor fallback).
 // ---------------------------------------------------------------------------
 
 const bootStableBlock: Block = {
   id: "boot_stable",
   kind: "stable",
   role: "system",
-  cache_anchor: false,
+  cache_anchor: true,
   content_fn: (ctx: AssemblerContext): string | null => {
     if (!ctx.boot) return null;
     const text = formatBootStable(ctx.boot);
@@ -433,7 +435,9 @@ const TURN_CONTEXT_ID_SET = new Set<string>(TURN_CONTEXT_BLOCK_IDS);
  * - turn_context blocks → single user message before current_user (message stream)
  * - passthrough blocks → messages (original content preserved)
  * - null content_fn → block skipped
- * - anchor_index points to the position of persona_pinned in system_blocks
+ * - anchor_index = persona_pinned's system_blocks index when that block is
+ *   enabled; otherwise -1 (boot_stable alone must not occupy anchor_index)
+ * - all cache_anchor blocks emit system breakpoints (persona_pinned, boot_stable, …)
  * - client_system_hash is a deterministic hash of the client_system text
  *
  * Determinism: block order is fixed by BLOCK_ORDER array, never Map iteration.
@@ -443,7 +447,8 @@ export function assemble(ctx: AssemblerContext): AssembledPrompt {
   const messages: Array<{ role: "user" | "assistant"; content: string | unknown[] | null }> = [];
   const enabledBlockIds: string[] = [];
   const turnContextParts: string[] = [];
-  let anchorIndex = -1;
+  const anchorIndices: number[] = [];
+  let personaPinnedIndex = -1;
   let clientSystemText: string | null = null;
 
   for (const block of ALL_BLOCKS) {
@@ -479,7 +484,10 @@ export function assemble(ctx: AssemblerContext): AssembledPrompt {
 
     if (block.cache_anchor) {
       systemBlock.cache_control = { type: "ephemeral", ttl: "5m" };
-      anchorIndex = systemBlocks.length;
+      anchorIndices.push(systemBlocks.length);
+      if (block.id === "persona_pinned") {
+        personaPinnedIndex = systemBlocks.length;
+      }
     }
 
     if (block.id === "client_system") {
@@ -490,7 +498,9 @@ export function assemble(ctx: AssemblerContext): AssembledPrompt {
     enabledBlockIds.push(block.id);
   }
 
-  const breakpoints = computeCacheBreakpoints(messages, anchorIndex);
+  // Backward-compatible: only persona_pinned owns anchor_index; boot_stable alone → -1
+  const anchorIndex = personaPinnedIndex;
+  const breakpoints = computeCacheBreakpoints(messages, anchorIndices);
 
   let turnContextMessageIndex: number | null = null;
   const turnContextText = turnContextParts.join("\n\n").trim();
@@ -545,12 +555,12 @@ export function assemble(ctx: AssemblerContext): AssembledPrompt {
  */
 function computeCacheBreakpoints(
   historyMessages: Array<{ role: "user" | "assistant"; content: string | unknown[] | null }>,
-  anchorIndex: number
+  anchorIndices: number[]
 ): CacheBreakpoint[] {
   const LOOKBACK = 16;
   const breakpoints: CacheBreakpoint[] = [];
 
-  if (anchorIndex >= 0) {
+  for (const anchorIndex of anchorIndices) {
     breakpoints.push({
       target: "system",
       system_block_index: anchorIndex,
@@ -641,6 +651,15 @@ function assertCacheSafePlacement(
         );
       }
     }
+  }
+
+  // Assembler self-check only: counts system + bridge + tail from this module.
+  // Does NOT include the tools breakpoint added later by anthropicAdapter.
+  // Wire-level ≤4 guarantee (system + tools + messages) is enforced in
+  // buildAnthropicRequestFromAssembled via budgetMessageBreakpoints.
+  // Worst case here: 2 system (persona_pinned + boot_stable) + bridge + tail = 4.
+  if (breakpoints.length > 4) {
+    violations.push(`cache breakpoints exceed Anthropic limit of 4 (got ${breakpoints.length})`);
   }
 
   if (violations.length === 0) return;

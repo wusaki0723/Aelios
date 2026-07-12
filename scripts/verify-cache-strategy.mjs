@@ -3,8 +3,8 @@
  * CONTRACT MIRROR — tests for the v4 prompt caching strategy.
  *
  * Validates the 4-breakpoint Anthropic prompt caching strategy:
- *   1. tools: cache on last tool definition (stable tools)
- *   2. system: cache on persona_pinned (most stable content)
+ *   1. system: cache on persona_pinned (most stable content)
+ *   2. system: cache on boot_stable (daily glossary/yesterday_log; optional)
  *   3. bridge: mid-history anchor for long conversations
  *   4. tail: last stable block before dynamic content
  *
@@ -79,7 +79,7 @@ function assemble(ctx) {
   const systemBlocks = [];
   const messages = [];
   const blockIds = [];
-  let anchorIndex = -1;
+  const anchorIndices = [];
 
   // Block 1: proxy_static_rules (stable)
   systemBlocks.push({ role: "system", text: PROXY_STATIC_RULES });
@@ -100,15 +100,28 @@ function assemble(ctx) {
   }
 
   // Block 4: persona_pinned (stable, cache_anchor = true)
-  // Last of the four-block Anthropic cache prefix.
+  // First of the Anthropic cache system breakpoints.
+  let personaPinnedIndex = -1;
   if (ctx.personaText) {
     systemBlocks.push({
       role: "system",
       text: ctx.personaText,
       cache_control: { type: "ephemeral", ttl: "5m" },
     });
-    anchorIndex = systemBlocks.length - 1;
+    personaPinnedIndex = systemBlocks.length - 1;
+    anchorIndices.push(personaPinnedIndex);
     blockIds.push("persona_pinned");
+  }
+
+  // Block 5: boot_stable (stable, cache_anchor = true) — optional daily tier
+  if (ctx.bootText) {
+    systemBlocks.push({
+      role: "system",
+      text: ctx.bootText,
+      cache_control: { type: "ephemeral", ttl: "5m" },
+    });
+    anchorIndices.push(systemBlocks.length - 1);
+    blockIds.push("boot_stable");
   }
 
   // Messages: history only (breakpoints computed before turn_context)
@@ -119,7 +132,7 @@ function assemble(ctx) {
   // --- 4-breakpoint computation (history only) ---
   const breakpoints = [];
 
-  if (anchorIndex >= 0) {
+  for (const anchorIndex of anchorIndices) {
     breakpoints.push({
       target: "system",
       system_block_index: anchorIndex,
@@ -180,6 +193,9 @@ function assemble(ctx) {
     messages.push(ctx.currentUser);
   }
 
+  // Backward-compatible: only persona_pinned owns anchor_index; boot_stable alone → -1
+  const anchorIndex = personaPinnedIndex;
+
   return {
     system_blocks: systemBlocks,
     messages,
@@ -234,6 +250,79 @@ function applyMessageCacheBreakpoints(wireMessages, breakpoints, indexMap, cache
       block.cache_control = cacheControl;
     }
   }
+}
+
+/**
+ * Mirror of anthropicAdapter.budgetMessageBreakpoints:
+ * drop bridge first, then tail, when over maxMessageBreakpoints.
+ */
+function budgetMessageBreakpoints(breakpoints, maxMessageBreakpoints) {
+  const system = breakpoints.filter((bp) => bp.target === "system");
+  let message = breakpoints.filter((bp) => bp.target === "message");
+  while (message.length > maxMessageBreakpoints) {
+    const bridgeIdx = message.findIndex((bp) => bp.reason === "bridge");
+    if (bridgeIdx >= 0) {
+      message = message.filter((_, i) => i !== bridgeIdx);
+      continue;
+    }
+    const tailIdx = message.findIndex((bp) => bp.reason === "tail");
+    if (tailIdx >= 0) {
+      message = message.filter((_, i) => i !== tailIdx);
+      continue;
+    }
+    message = message.slice(0, -1);
+  }
+  return [...system, ...message];
+}
+
+function applyToolsCacheBreakpoint(tools) {
+  if (!tools || tools.length === 0) return undefined;
+  const cc = { type: "ephemeral", ttl: "5m" };
+  return tools.map((t, i) =>
+    i === tools.length - 1 ? { ...t, cache_control: cc } : t
+  );
+}
+
+/**
+ * Mirror of buildAnthropicRequestFromAssembled wire-level budget:
+ * system anchors + (tools?1:0) + message breakpoints ≤ 4.
+ */
+function buildWireRequest(assembled, tools) {
+  const system = assembled.system_blocks.map((b) => ({ ...b }));
+  const { wire: messages, indexMap } = assembledToAnthropicMessages(assembled.messages);
+  const anthTools = tools ? openAIToolsToAnthropic(tools) : undefined;
+  const willCacheTools = Boolean(anthTools && anthTools.length > 0);
+  const systemAnchorCount = system.filter((b) => b.cache_control).length;
+  const maxMessageBreakpoints = Math.max(
+    0,
+    4 - systemAnchorCount - (willCacheTools ? 1 : 0)
+  );
+  const trimmed = budgetMessageBreakpoints(
+    assembled.meta.cache_breakpoints,
+    maxMessageBreakpoints
+  );
+  const cc = { type: "ephemeral", ttl: "5m" };
+  applyMessageCacheBreakpoints(messages, trimmed, indexMap, cc);
+  const cachedTools = applyToolsCacheBreakpoint(anthTools);
+  return { system, messages, tools: cachedTools, trimmedBreakpoints: trimmed };
+}
+
+function countWireCacheControls(req) {
+  let n = 0;
+  for (const b of req.system) {
+    if (b.cache_control) n += 1;
+  }
+  for (const m of req.messages) {
+    for (const c of m.content) {
+      if (c.cache_control) n += 1;
+    }
+  }
+  if (req.tools) {
+    for (const t of req.tools) {
+      if (t.cache_control) n += 1;
+    }
+  }
+  return n;
 }
 
 // Apply breakpoints (mirrors adapter logic)
@@ -324,7 +413,7 @@ test("T1: resend → identical breakpoints", () => {
   assert.deepStrictEqual(a1.meta.cache_breakpoints, a2.meta.cache_breakpoints);
 });
 
-// T2: system anchor is on persona_pinned (last of the four-block prefix)
+// T2: system anchor is on persona_pinned (first system breakpoint; no boot)
 test("T2: system anchor on persona_pinned", () => {
   const ctx = {
     ...BASE_CTX,
@@ -334,11 +423,34 @@ test("T2: system anchor on persona_pinned", () => {
   const assembled = assemble(ctx);
   applyBreakpoints(assembled);
 
-  const sysBP = assembled.meta.cache_breakpoints.find((bp) => bp.reason === "system");
-  assert.ok(sysBP, "has system breakpoint");
+  const sysBPs = assembled.meta.cache_breakpoints.filter((bp) => bp.reason === "system");
+  assert.strictEqual(sysBPs.length, 1, "without boot: one system breakpoint");
 
-  const anchorId = assembled.meta.block_ids[sysBP.system_block_index];
+  const anchorId = assembled.meta.block_ids[sysBPs[0].system_block_index];
   assert.strictEqual(anchorId, "persona_pinned");
+  assert.strictEqual(assembled.meta.anchor_index, sysBPs[0].system_block_index);
+});
+
+// T2b: with boot_stable → two system breakpoints
+test("T2b: boot_stable adds second system breakpoint", () => {
+  const ctx = {
+    ...BASE_CTX,
+    bootText: "<yesterday_log>\n【昨日】聊了缓存\n</yesterday_log>",
+    history: [userMsg("h1"), assistantMsg("a1")],
+    currentUser: userMsg("current"),
+  };
+  const assembled = assemble(ctx);
+  applyBreakpoints(assembled);
+
+  const sysBPs = assembled.meta.cache_breakpoints.filter((bp) => bp.reason === "system");
+  assert.strictEqual(sysBPs.length, 2, "with boot: two system breakpoints");
+
+  assert.strictEqual(assembled.meta.block_ids[sysBPs[0].system_block_index], "persona_pinned");
+  assert.strictEqual(assembled.meta.block_ids[sysBPs[1].system_block_index], "boot_stable");
+  assert.strictEqual(assembled.meta.anchor_index, sysBPs[0].system_block_index);
+
+  assert.ok(assembled.system_blocks[sysBPs[0].system_block_index].cache_control);
+  assert.ok(assembled.system_blocks[sysBPs[1].system_block_index].cache_control);
 });
 
 // T3: change current user → system anchor unchanged
@@ -491,6 +603,20 @@ test("T12: no messages → only system breakpoint", () => {
   assert.strictEqual(bps[0].reason, "system");
 });
 
+// T12b: no messages + boot → two system breakpoints only
+test("T12b: no messages with boot → two system breakpoints", () => {
+  const ctx = {
+    ...BASE_CTX,
+    bootText: "<glossary>\nAelios: 记忆系统\n</glossary>",
+    history: [],
+    currentUser: userMsg("first"),
+  };
+  const assembled = assemble(ctx);
+  const bps = assembled.meta.cache_breakpoints;
+  assert.strictEqual(bps.length, 2);
+  assert.ok(bps.every((bp) => bp.reason === "system"));
+});
+
 // T13: tools breakpoint on last tool
 test("T13: tools breakpoint lands on last tool", () => {
   const tools = [
@@ -508,7 +634,7 @@ test("T13: tools breakpoint lands on last tool", () => {
   assert.ok(cached[2].cache_control, "last tool has cache");
 });
 
-// T14: exactly 4 breakpoints max (tools + system + bridge + tail)
+// T14: exactly 4 breakpoints max (2 system + bridge + tail)
 test("T14: at most 4 breakpoints", () => {
   const history = [];
   for (let i = 0; i < 15; i++) {
@@ -517,10 +643,86 @@ test("T14: at most 4 breakpoints", () => {
   }
   const assembled = assemble({
     ...BASE_CTX,
+    bootText: "<glossary>\nAelios: 记忆系统\n</glossary>",
     history,
     currentUser: userMsg("current"),
   });
   assert.ok(assembled.meta.cache_breakpoints.length <= 4, "at most 4 breakpoints");
+  const systemCount = assembled.meta.cache_breakpoints.filter((bp) => bp.reason === "system").length;
+  assert.strictEqual(systemCount, 2, "two system breakpoints with boot");
+  assert.ok(
+    assembled.meta.cache_breakpoints.some((bp) => bp.reason === "bridge"),
+    "has bridge"
+  );
+  assert.ok(
+    assembled.meta.cache_breakpoints.some((bp) => bp.reason === "tail"),
+    "has tail"
+  );
+  assert.strictEqual(assembled.meta.cache_breakpoints.length, 4, "exactly 4 at worst case");
+});
+
+// T14b: wire budget — tools + 2 system + bridge + tail → drop bridge, keep ≤4
+test("T14b: wire budget drops bridge when tools + 2 system + bridge + tail", () => {
+  const history = [];
+  for (let i = 0; i < 15; i++) {
+    history.push(userMsg(`u${i}`));
+    history.push(assistantMsg(`a${i}`));
+  }
+  const assembled = assemble({
+    ...BASE_CTX,
+    bootText: "<glossary>\nAelios: 记忆系统\n</glossary>",
+    history,
+    currentUser: userMsg("current"),
+  });
+  // Assembler still emits all 4 (2 system + bridge + tail)
+  assert.strictEqual(assembled.meta.cache_breakpoints.length, 4);
+  assert.ok(assembled.meta.cache_breakpoints.some((bp) => bp.reason === "bridge"));
+
+  const tools = [
+    {
+      function: {
+        name: "search",
+        description: "Search",
+        parameters: { type: "object", properties: { q: { type: "string" } } },
+      },
+    },
+  ];
+  const req = buildWireRequest(assembled, tools);
+
+  assert.ok(countWireCacheControls(req) <= 4, "wire cache_control total ≤ 4");
+  assert.strictEqual(countWireCacheControls(req), 4, "exactly 4: 2 system + tools + tail");
+
+  // system×2 retained
+  const systemCached = req.system.filter((b) => b.cache_control);
+  assert.strictEqual(systemCached.length, 2, "both system anchors kept");
+
+  // tools breakpoint retained
+  assert.ok(req.tools, "tools present");
+  assert.ok(req.tools[req.tools.length - 1].cache_control, "last tool has cache_control");
+
+  // bridge dropped, tail kept
+  assert.ok(
+    !req.trimmedBreakpoints.some((bp) => bp.reason === "bridge"),
+    "bridge dropped by wire budget"
+  );
+  assert.ok(
+    req.trimmedBreakpoints.some((bp) => bp.reason === "tail"),
+    "tail retained"
+  );
+});
+
+// T14c: boot_stable alone does not occupy anchor_index
+test("T14c: boot_stable alone → anchor_index = -1", () => {
+  const assembled = assemble({
+    ...BASE_CTX,
+    personaText: null,
+    bootText: "<glossary>\nAelios: 记忆系统\n</glossary>",
+    history: [userMsg("h1"), assistantMsg("a1")],
+    currentUser: userMsg("current"),
+  });
+  assert.ok(!assembled.meta.block_ids.includes("persona_pinned"));
+  assert.ok(assembled.meta.block_ids.includes("boot_stable"));
+  assert.strictEqual(assembled.meta.anchor_index, -1);
 });
 
 // T16: wire-level tail breakpoint survives consecutive user merge

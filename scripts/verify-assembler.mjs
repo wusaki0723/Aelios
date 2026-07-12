@@ -172,11 +172,11 @@ function splitClientSystemTexts(texts) {
   return { stable, volatile };
 }
 
-function computeCacheBreakpoints(historyMessages, anchorIndex) {
+function computeCacheBreakpoints(historyMessages, anchorIndices) {
   const LOOKBACK = 16;
   const breakpoints = [];
 
-  if (anchorIndex >= 0) {
+  for (const anchorIndex of anchorIndices) {
     breakpoints.push({
       target: "system",
       system_block_index: anchorIndex,
@@ -236,7 +236,8 @@ function assemble(ctx) {
   const messages = [];
   const enabledBlockIds = [];
   const turnContextParts = [];
-  let anchorIndex = -1;
+  const anchorIndices = [];
+  let personaPinnedIndex = -1;
   let clientSystemText = null;
 
   for (const blockId of BLOCK_ORDER) {
@@ -341,16 +342,21 @@ function assemble(ctx) {
     if (blockId === "client_system") {
       clientSystemText = text;
     }
-    if (blockId === "persona_pinned") {
+    if (blockId === "persona_pinned" || blockId === "boot_stable") {
       systemBlock.cache_control = { type: "ephemeral", ttl: "5m" };
-      anchorIndex = systemBlocks.length;
+      anchorIndices.push(systemBlocks.length);
+      if (blockId === "persona_pinned") {
+        personaPinnedIndex = systemBlocks.length;
+      }
     }
 
     systemBlocks.push(systemBlock);
     enabledBlockIds.push(blockId);
   }
 
-  const breakpoints = computeCacheBreakpoints(messages, anchorIndex);
+  // Backward-compatible: only persona_pinned owns anchor_index; boot_stable alone → -1
+  const anchorIndex = personaPinnedIndex;
+  const breakpoints = computeCacheBreakpoints(messages, anchorIndices);
 
   const turnContextText = turnContextParts.join("\n\n").trim();
   if (turnContextText) {
@@ -577,9 +583,12 @@ check("persona_pinned block has cache_control", () => {
   assert.deepStrictEqual(block.cache_control, { type: "ephemeral", ttl: "5m" });
 });
 
-check("no other block has cache_control", () => {
+check("no other block has cache_control (no boot → single anchor)", () => {
   const ctx = makeBaseCtx();
   const result = assemble(ctx);
+
+  const systemBPs = result.meta.cache_breakpoints.filter((bp) => bp.reason === "system");
+  assert.strictEqual(systemBPs.length, 1, "without boot: exactly one system breakpoint");
 
   for (let i = 0; i < result.system_blocks.length; i++) {
     if (i === result.meta.anchor_index) continue;
@@ -589,6 +598,75 @@ check("no other block has cache_control", () => {
       `block at index ${i} (${result.meta.block_ids[i]}) should not have cache_control`
     );
   }
+});
+
+check("with boot: persona_pinned and boot_stable are both cache anchors", () => {
+  const ctx = makeBaseCtx();
+  ctx.boot = {
+    yesterday_log: { title: "昨日", summary: "聊了缓存" },
+    glossary: [{ term: "Aelios", definition: "记忆系统" }],
+    precious: [],
+  };
+  const result = assemble(ctx);
+
+  const ppIdx = result.meta.block_ids.indexOf("persona_pinned");
+  const bootIdx = result.meta.block_ids.indexOf("boot_stable");
+  assert.ok(ppIdx >= 0, "persona_pinned present");
+  assert.ok(bootIdx >= 0, "boot_stable present");
+  assert.strictEqual(result.meta.anchor_index, ppIdx, "anchor_index stays on persona_pinned");
+
+  assert.deepStrictEqual(result.system_blocks[ppIdx].cache_control, {
+    type: "ephemeral",
+    ttl: "5m",
+  });
+  assert.deepStrictEqual(result.system_blocks[bootIdx].cache_control, {
+    type: "ephemeral",
+    ttl: "5m",
+  });
+
+  const systemBPs = result.meta.cache_breakpoints.filter((bp) => bp.reason === "system");
+  assert.strictEqual(systemBPs.length, 2, "with boot: two system breakpoints");
+  assert.strictEqual(systemBPs[0].system_block_index, ppIdx);
+  assert.strictEqual(systemBPs[1].system_block_index, bootIdx);
+
+  for (let i = 0; i < result.system_blocks.length; i++) {
+    if (i === ppIdx || i === bootIdx) continue;
+    assert.strictEqual(
+      result.system_blocks[i].cache_control,
+      undefined,
+      `non-anchor block ${i} (${result.meta.block_ids[i]}) should not have cache_control`
+    );
+  }
+});
+
+check("boot null skips boot_stable → single system breakpoint", () => {
+  const ctx = makeBaseCtx();
+  ctx.boot = null;
+  const result = assemble(ctx);
+  assert.strictEqual(result.meta.block_ids.includes("boot_stable"), false);
+  const systemBPs = result.meta.cache_breakpoints.filter((bp) => bp.reason === "system");
+  assert.strictEqual(systemBPs.length, 1);
+  assert.strictEqual(systemBPs[0].system_block_index, result.meta.anchor_index);
+});
+
+check("boot_stable alone does not occupy anchor_index", () => {
+  const ctx = makeBaseCtx();
+  ctx.pinnedPersonaMemories = [];
+  ctx.boot = {
+    yesterday_log: { title: "昨日", summary: "只有 boot" },
+    glossary: [{ term: "Aelios", definition: "记忆系统" }],
+    precious: [],
+  };
+  const result = assemble(ctx);
+  assert.ok(!result.meta.block_ids.includes("persona_pinned"), "persona_pinned skipped");
+  assert.ok(result.meta.block_ids.includes("boot_stable"), "boot_stable present");
+  assert.strictEqual(result.meta.anchor_index, -1, "boot alone must not own anchor_index");
+  const systemBPs = result.meta.cache_breakpoints.filter((bp) => bp.reason === "system");
+  assert.strictEqual(systemBPs.length, 1);
+  assert.strictEqual(
+    result.meta.block_ids[systemBPs[0].system_block_index],
+    "boot_stable"
+  );
 });
 
 check("stable blocks come before persona_pinned; turn_context not in system_blocks", () => {
@@ -968,9 +1046,14 @@ check("non-anchor blocks have no cache_control", () => {
   const ctx = makeBaseCtx();
   const assembled = assemble(ctx);
   const anthropicSystem = assembledToAnthropicSystem(assembled.system_blocks);
+  const anchorIndexes = new Set(
+    assembled.meta.cache_breakpoints
+      .filter((bp) => bp.reason === "system")
+      .map((bp) => bp.system_block_index)
+  );
 
   for (let i = 0; i < anthropicSystem.length; i++) {
-    if (i === assembled.meta.anchor_index) continue;
+    if (anchorIndexes.has(i)) continue;
     assert.strictEqual(
       anthropicSystem[i].cache_control,
       undefined,
@@ -1303,16 +1386,18 @@ check("assembler output for image request preserves image_url", () => {
 // ---------------------------------------------------------------------------
 
 function applyCacheOverrides(systemBlocks, env) {
-  const anchor = systemBlocks.find((b) => b.cache_control);
-  if (!anchor) return;
+  const anchors = systemBlocks.filter((b) => b.cache_control);
+  if (anchors.length === 0) return;
 
   if (env.ANTHROPIC_CACHE_ENABLED === "false") {
-    delete anchor.cache_control;
+    for (const anchor of anchors) delete anchor.cache_control;
     return;
   }
 
   const ttl = env.ANTHROPIC_CACHE_TTL === "1h" ? "1h" : "5m";
-  anchor.cache_control = { type: "ephemeral", ttl };
+  for (const anchor of anchors) {
+    anchor.cache_control = { type: "ephemeral", ttl };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1321,12 +1406,12 @@ function applyCacheOverrides(systemBlocks, env) {
 
 console.log("\n--- Test 9: Anthropic path ---");
 
-check("cache_control on persona_pinned block only", () => {
+check("cache_control on persona_pinned block only (no boot)", () => {
   const ctx = makeBaseCtx();
   const assembled = assemble(ctx);
   const anthropicSystem = assembledToAnthropicSystem(assembled.system_blocks);
 
-  // Exactly one block should have cache_control
+  // Without boot: exactly one block should have cache_control
   const withCache = anthropicSystem.filter((b) => b.cache_control);
   assert.strictEqual(withCache.length, 1);
 
@@ -1334,6 +1419,26 @@ check("cache_control on persona_pinned block only", () => {
   const anchorBlock = anthropicSystem[assembled.meta.anchor_index];
   assert.ok(anchorBlock.cache_control);
   assert.strictEqual(anchorBlock.cache_control.type, "ephemeral");
+});
+
+check("cache_control on persona_pinned and boot_stable when boot present", () => {
+  const ctx = makeBaseCtx();
+  ctx.boot = {
+    yesterday_log: { title: "昨日", summary: "聊了缓存" },
+    glossary: [{ term: "Aelios", definition: "记忆系统" }],
+    precious: [],
+  };
+  const assembled = assemble(ctx);
+  const anthropicSystem = assembledToAnthropicSystem(assembled.system_blocks);
+
+  const withCache = anthropicSystem.filter((b) => b.cache_control);
+  assert.strictEqual(withCache.length, 2);
+
+  const ppIdx = assembled.meta.block_ids.indexOf("persona_pinned");
+  const bootIdx = assembled.meta.block_ids.indexOf("boot_stable");
+  assert.ok(anthropicSystem[ppIdx].cache_control);
+  assert.ok(anthropicSystem[bootIdx].cache_control);
+  assert.strictEqual(assembled.meta.anchor_index, ppIdx);
 });
 
 check("dynamic memory patch is in turn_context message, not system blocks", () => {
@@ -1767,6 +1872,7 @@ function applyRollingMessageCache(messages, env, systemBlocks = []) {
   if (env.ANTHROPIC_ROLLING_CACHE_ENABLED !== "true") return;
 
   const systemCacheCount = systemBlocks.filter((block) => block.cache_control).length;
+  // Keep total cache_control markers ≤ 4 (system anchors + message markers).
   const maxMessageMarkers = Math.max(1, 4 - systemCacheCount);
   const userIndices = [];
   const isFullWindow = messages.length >= getRollingCacheWindowSize(env);

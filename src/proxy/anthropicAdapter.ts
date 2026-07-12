@@ -112,19 +112,48 @@ export function getAnthropicCacheMode(env: Env): string | null {
 }
 
 /**
+ * Trim message-level breakpoints to fit Anthropic's 4-breakpoint wire budget.
+ * Drop order when over limit: bridge first, then tail.
+ * System anchors and tools are never dropped here (caller reserves their slots).
+ */
+function budgetMessageBreakpoints<T extends { target: string; reason: string }>(
+  breakpoints: T[],
+  maxMessageBreakpoints: number
+): T[] {
+  const system = breakpoints.filter((bp) => bp.target === "system");
+  let message = breakpoints.filter((bp) => bp.target === "message");
+  while (message.length > maxMessageBreakpoints) {
+    const bridgeIdx = message.findIndex((bp) => bp.reason === "bridge");
+    if (bridgeIdx >= 0) {
+      message = message.filter((_, i) => i !== bridgeIdx);
+      continue;
+    }
+    const tailIdx = message.findIndex((bp) => bp.reason === "tail");
+    if (tailIdx >= 0) {
+      message = message.filter((_, i) => i !== tailIdx);
+      continue;
+    }
+    message = message.slice(0, -1);
+  }
+  return [...system, ...message];
+}
+
+/**
  * Apply explicit cache breakpoints from the assembler to system blocks
  * and wire messages.
  *
  * System breakpoint (history_read_anchor) is already applied by the
  * assembler via SystemBlock.cache_control. This function handles
- * message-level breakpoints (forward_write_anchor).
+ * message-level breakpoints (forward_write_anchor), trimmed to
+ * maxMessageBreakpoints so system + tools + messages ≤ 4 on the wire.
  */
 function applyExplicitCacheBreakpoints(
   systemBlocks: AnthropicTextBlock[],
   wireMessages: AnthropicWireMessage[],
   indexMap: Map<number, AnthropicMessageWireMapping>,
   assembled: AssembledPrompt,
-  env: Env
+  env: Env,
+  maxMessageBreakpoints: number
 ): void {
   const cc = buildCacheControl(env);
   if (!cc) {
@@ -140,8 +169,13 @@ function applyExplicitCacheBreakpoints(
     }
   }
 
+  const trimmed = budgetMessageBreakpoints(
+    assembled.meta.cache_breakpoints,
+    maxMessageBreakpoints
+  );
+
   // Apply message-level breakpoints using the original→wire index mapping
-  applyMessageCacheBreakpoints(wireMessages, assembled.meta.cache_breakpoints, indexMap, cc);
+  applyMessageCacheBreakpoints(wireMessages, trimmed, indexMap, cc);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +194,10 @@ function applyRollingMessageCache(messages: AnthropicWireMessage[], env: Env, sy
   if (env.ANTHROPIC_ROLLING_CACHE_ENABLED !== "true") return; // default off now
 
   const systemCacheCount = systemBlocks?.filter((block) => block.cache_control).length ?? 0;
+  // Legacy path only (ANTHROPIC_ROLLING_CACHE_ENABLED) — not used by the assembler path.
+  // Caps rolling message markers at (4 - systemCacheCount). Does not reserve slots for
+  // tools, assembler bridge, or assembler tail; those are handled in the assembler path
+  // by buildAnthropicRequestFromAssembled's wire-level budget.
   const maxMessageMarkers = Math.max(1, 4 - systemCacheCount);
   const userIndices: number[] = [];
 
@@ -505,29 +543,33 @@ export async function buildAnthropicNativeRequest(
 // ---------------------------------------------------------------------------
 // buildAnthropicRequestFromAssembled — v4 assembler path
 // ---------------------------------------------------------------------------
-// Cache strategy — 4 explicit breakpoints (Anthropic prompt caching)
+// Cache strategy — ≤4 explicit breakpoints (Anthropic prompt caching)
 //
 // Anthropic caches the full prefix: tools → system → messages.
 // Up to 4 explicit cache_control breakpoints. Each looks back up to
 // 20 content blocks for a previous cache entry.
 //
-//   1. tools (last tool): cache_control on the last tool definition.
-//      Tool definitions must be stable (no dates, no timestamps).
-//   2. system (persona_pinned): cache_control on persona_pinned block.
-//      This is the most stable content. boot_stable (glossary, digest)
-//      is OUTSIDE the cache prefix — it changes daily.
+// Candidate breakpoints (assembler may emit all of these):
+//   1. system (persona_pinned): most stable cache tier.
+//   2. system (boot_stable): daily glossary/yesterday_log tier.
+//      Skipped when boot content is null → single system anchor.
 //   3. bridge (message): for long conversations (>16 message blocks),
 //      a mid-history anchor so the tail's 20-block lookback doesn't
 //      lose older cached prefix.
 //   4. tail (message): last stable block before dynamic content.
-//      Default mode A: last block of the message before current_user.
-//      Opt-in mode B: first text block of current_user.
+//   5. tools (last tool): when tool definitions are present.
+//
+// Wire-level budget (enforced here): system anchors + (tools?1:0) + message
+// breakpoints ≤ 4. System anchors and tools are never dropped. When over
+// budget, drop bridge first, then tail. Without tools, worst case is
+// exactly 4 (2 system + bridge + tail). With tools + 2 system anchors,
+// only 1 message slot remains → bridge is dropped, tail kept.
 //
 // Per-turn dynamic content (turn_context blocks) lives in the message stream
 // immediately before current_user — after all breakpoints, never cached.
 //
 // Top-level cache_control (automatic) is NEVER set.
-// Rolling cache is OFF by default (opt-in via env).
+// Rolling cache is OFF by default (opt-in via env; legacy path only).
 // ---------------------------------------------------------------------------
 
 /**
@@ -572,16 +614,38 @@ export function buildAnthropicRequestFromAssembled(
   const system = assembledToAnthropicSystem(assembled.system_blocks);
   const { wire: messages, indexMap } = assembledToAnthropicMessages(assembled.messages);
 
-  // Apply explicit cache breakpoints (system + message level).
-  // turn_context blocks are already in assembled.messages before current_user.
-  applyExplicitCacheBreakpoints(system, messages, indexMap, assembled, env);
-
   // Stable tools JSON: keys sorted, so Anthropic's cache sees identical bytes
   const stableToolsJson = tools
     ? (JSON.parse(stableStringify(tools)) as AnthropicTool[])
     : undefined;
 
-  // Breakpoint 1: tools — cache on last tool if definitions are stable
+  // Wire budget: system anchors + tools slot + message breakpoints ≤ 4.
+  // Reserve tools before applying message breakpoints so over-budget drops
+  // hit bridge/tail, never system or tools.
+  const willCacheTools = Boolean(
+    stableToolsJson &&
+      stableToolsJson.length > 0 &&
+      env.ANTHROPIC_CACHE_ENABLED !== "false" &&
+      buildCacheControl(env)
+  );
+  const systemAnchorCount = system.filter((b) => b.cache_control).length;
+  const maxMessageBreakpoints = Math.max(
+    0,
+    4 - systemAnchorCount - (willCacheTools ? 1 : 0)
+  );
+
+  // Apply explicit cache breakpoints (system + message level).
+  // turn_context blocks are already in assembled.messages before current_user.
+  applyExplicitCacheBreakpoints(
+    system,
+    messages,
+    indexMap,
+    assembled,
+    env,
+    maxMessageBreakpoints
+  );
+
+  // tools — cache on last tool if definitions are stable
   const cachedTools = applyToolsCacheBreakpoint(stableToolsJson, env);
 
   return {

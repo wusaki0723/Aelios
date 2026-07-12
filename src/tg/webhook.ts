@@ -7,7 +7,7 @@ interface TgUpdate {
     message_id?: number;
     text?: string;
     caption?: string;
-    photo?: Array<{ file_id?: string; file_size?: number }>;
+    photo?: Array<{ file_id?: string; file_size?: number; width?: number }>;
     from?: { id?: number; is_bot?: boolean };
     chat?: { id?: number | string; type?: string };
   };
@@ -16,6 +16,18 @@ interface TgUpdate {
 /** Marker consumed by process.ts, which resolves it through the vision model. */
 export function encodePhotoMarker(fileId: string): string {
   return `[[tg-photo:${fileId}]]`;
+}
+
+/**
+ * Telegram sends photo sizes smallest-first. Description doesn't need the
+ * original: take the largest size up to 1024px wide — smaller download,
+ * smaller base64, fewer vision prefill tokens.
+ */
+export function pickPhotoFileId(photo?: Array<{ file_id?: string; width?: number }>): string | undefined {
+  if (!photo?.length) return undefined;
+  const capped = photo.filter((size) => size.file_id && (size.width ?? 0) <= 1024);
+  const chosen = capped.length > 0 ? capped[capped.length - 1] : photo[0];
+  return chosen?.file_id;
 }
 
 const DEFAULT_DEBOUNCE_SECONDS = 3;
@@ -61,8 +73,7 @@ export async function handleTelegramWebhook(request: Request, env: Env): Promise
 
   const message = update.message;
   const chatIdRaw = message?.chat?.id;
-  // Telegram sends photo sizes smallest-first; the last entry is the original.
-  const photoFileId = message?.photo?.length ? message.photo[message.photo.length - 1]?.file_id : undefined;
+  const photoFileId = pickPhotoFileId(message?.photo);
   const caption = message?.caption?.trim();
   let text = message?.text?.trim();
   if (!text && photoFileId) {

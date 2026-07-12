@@ -189,8 +189,10 @@ async function describePhoto(env: Env, fileId: string, caption: string): Promise
   const model = env.VISION_MODEL?.trim();
   if (!model) return "[图片：未配置视觉模型，无法识别]";
 
+  const downloadStart = Date.now();
   const dataUri = await fetchTelegramFileAsDataUri(env, fileId);
   if (!dataUri) return "[图片：下载失败，无法识别]";
+  const downloadMs = Date.now() - downloadStart;
 
   const question = caption
     ? `请具体描述这张图片的内容。发送者的附言：${caption}`
@@ -210,6 +212,7 @@ async function describePhoto(env: Env, fileId: string, caption: string): Promise
   };
 
   try {
+    const visionStart = Date.now();
     const response = await callOpenAICompat(env, request);
     if (!response.ok) {
       const body = await response.text();
@@ -218,6 +221,12 @@ async function describePhoto(env: Env, fileId: string, caption: string): Promise
     }
     const parsed = (await response.json()) as OpenAIChatResponse;
     const description = extractAssistantText(parsed).trim();
+    console.log("tg: photo described", {
+      downloadMs,
+      visionMs: Date.now() - visionStart,
+      imageChars: dataUri.length,
+      descriptionChars: description.length
+    });
     return description ? `[图片，内容：${description}]` : "[图片：识别结果为空]";
   } catch (error) {
     console.error("tg: vision call failed", { error: String(error) });
@@ -286,7 +295,9 @@ export async function processTgChat(env: Env, chatId: string, ctx?: ExecutionCon
       body: JSON.stringify(body)
     });
 
+    const chatStart = Date.now();
     const response = await handleChatCompletions(syntheticRequest, env, execCtx);
+    console.log("tg: chat pipeline done", { chatMs: Date.now() - chatStart });
     if (!response.ok) {
       const errBody = await response.text();
       throw new Error(`chat pipeline returned ${response.status}: ${errBody.slice(0, 300)}`);

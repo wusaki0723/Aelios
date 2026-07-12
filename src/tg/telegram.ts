@@ -94,6 +94,60 @@ export async function sendMessageChunks(env: Env, chatId: string, text: string):
   }
 }
 
+const MIME_BY_EXT: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif"
+};
+
+function bytesToBase64(bytes: Uint8Array): string {
+  // btoa 只吃 latin1 字符串；分块拼接避免大图撑爆调用栈。
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Resolve a Telegram file_id to a base64 data URI. Returns null on any
+ * failure — callers degrade to a "photo unavailable" placeholder instead of
+ * failing the whole turn. Data URI (not the Telegram file URL) is what goes
+ * to the vision model, so the bot token never leaves this worker.
+ */
+export async function fetchTelegramFileAsDataUri(env: Env, fileId: string): Promise<string | null> {
+  try {
+    const infoResponse = await tgApi(env, "getFile", { file_id: fileId });
+    if (!infoResponse.ok) {
+      console.error("tg: getFile failed", { status: infoResponse.status });
+      return null;
+    }
+    const info = (await infoResponse.json()) as { ok?: boolean; result?: { file_path?: string } };
+    const filePath = info.result?.file_path;
+    if (!info.ok || !filePath) {
+      console.error("tg: getFile returned no file_path");
+      return null;
+    }
+
+    const token = requireBotToken(env);
+    const fileResponse = await fetch(`${TG_API_BASE}/file/bot${token}/${filePath}`);
+    if (!fileResponse.ok) {
+      console.error("tg: file download failed", { status: fileResponse.status });
+      return null;
+    }
+    const bytes = new Uint8Array(await fileResponse.arrayBuffer());
+    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+    const mime = MIME_BY_EXT[ext] ?? "image/jpeg";
+    return `data:${mime};base64,${bytesToBase64(bytes)}`;
+  } catch (error) {
+    console.error("tg: fetchTelegramFileAsDataUri failed", { error: String(error) });
+    return null;
+  }
+}
+
 export async function sendChatAction(env: Env, chatId: string, action = "typing"): Promise<void> {
   try {
     await tgApi(env, "sendChatAction", { chat_id: chatId, action });

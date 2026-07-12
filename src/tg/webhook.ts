@@ -6,9 +6,16 @@ interface TgUpdate {
   message?: {
     message_id?: number;
     text?: string;
+    caption?: string;
+    photo?: Array<{ file_id?: string; file_size?: number }>;
     from?: { id?: number; is_bot?: boolean };
     chat?: { id?: number | string; type?: string };
   };
+}
+
+/** Marker consumed by process.ts, which resolves it through the vision model. */
+export function encodePhotoMarker(fileId: string): string {
+  return `[[tg-photo:${fileId}]]`;
 }
 
 const DEFAULT_DEBOUNCE_SECONDS = 3;
@@ -53,8 +60,14 @@ export async function handleTelegramWebhook(request: Request, env: Env): Promise
   }
 
   const message = update.message;
-  const text = message?.text?.trim();
   const chatIdRaw = message?.chat?.id;
+  // Telegram sends photo sizes smallest-first; the last entry is the original.
+  const photoFileId = message?.photo?.length ? message.photo[message.photo.length - 1]?.file_id : undefined;
+  const caption = message?.caption?.trim();
+  let text = message?.text?.trim();
+  if (!text && photoFileId) {
+    text = caption ? `${encodePhotoMarker(photoFileId)}\n${caption}` : encodePhotoMarker(photoFileId);
+  }
   if (!message || !text || chatIdRaw == null || message.from?.is_bot) {
     // edits, stickers, joins, channel posts, bot echoes — acknowledge and drop
     return new Response("ok");

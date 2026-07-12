@@ -2,7 +2,7 @@ import { handleChatCompletions } from "../api/chatCompletions";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 import { claimInbox, getChatState, saveChatState, unclaimInbox, type TgChatState, type TgRecentTurn } from "./state";
-import { sendChatAction, sendMessageChunks } from "./telegram";
+import { fetchTelegramFileAsDataUri, sendChatAction, sendMessageChunks } from "./telegram";
 
 /** recent 条数达到此阈值才折叠进摘要。默认 50。 */
 const DEFAULT_FOLD_TRIGGER_TURNS = 50;
@@ -178,6 +178,65 @@ function buildExecutionContextStub(pending: Promise<unknown>[]): ExecutionContex
   } as ExecutionContext;
 }
 
+/** Must match encodePhotoMarker in webhook.ts. */
+const PHOTO_MARKER_PATTERN = /\[\[tg-photo:([^\]]+)\]\]/;
+
+/**
+ * Describe one photo through VISION_MODEL. Every failure degrades to a
+ * placeholder string — a broken photo must never block the text turn.
+ */
+async function describePhoto(env: Env, fileId: string, caption: string): Promise<string> {
+  const model = env.VISION_MODEL?.trim();
+  if (!model) return "[图片：未配置视觉模型，无法识别]";
+
+  const dataUri = await fetchTelegramFileAsDataUri(env, fileId);
+  if (!dataUri) return "[图片：下载失败，无法识别]";
+
+  const question = caption
+    ? `请具体描述这张图片的内容。发送者的附言：${caption}`
+    : "请具体描述这张图片的内容。";
+  const request: OpenAIChatRequest = {
+    model,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: dataUri } },
+          { type: "text", text: question }
+        ]
+      }
+    ],
+    stream: false
+  };
+
+  try {
+    const response = await callOpenAICompat(env, request);
+    if (!response.ok) {
+      const body = await response.text();
+      console.error("tg: vision model returned non-ok", { status: response.status, body: body.slice(0, 300) });
+      return "[图片：识别失败]";
+    }
+    const parsed = (await response.json()) as OpenAIChatResponse;
+    const description = extractAssistantText(parsed).trim();
+    return description ? `[图片，内容：${description}]` : "[图片：识别结果为空]";
+  } catch (error) {
+    console.error("tg: vision call failed", { error: String(error) });
+    return "[图片：识别失败]";
+  }
+}
+
+/**
+ * Replace the photo marker written by webhook.ts with a vision-model
+ * description, so the chat model sees "[图片，内容：…]" plus the caption.
+ */
+async function resolvePhotoMarker(env: Env, text: string): Promise<string> {
+  const match = text.match(PHOTO_MARKER_PATTERN);
+  if (!match) return text;
+  const caption = text.replace(PHOTO_MARKER_PATTERN, "").trim();
+  const described = await describePhoto(env, match[1], caption);
+  return text.replace(PHOTO_MARKER_PATTERN, described);
+}
+
 /**
  * Consume one tg_process queue task: claim the chat's buffered messages (empty
  * claim = an earlier task already handled them), run the full chat pipeline via
@@ -193,10 +252,14 @@ export async function processTgChat(env: Env, chatId: string, ctx?: ExecutionCon
     return;
   }
 
-  const userText = claimed.map((row) => row.text).join("\n");
-
   try {
     await sendChatAction(env, chatId, "typing");
+
+    const resolvedTexts: string[] = [];
+    for (const row of claimed) {
+      resolvedTexts.push(await resolvePhotoMarker(env, row.text));
+    }
+    const userText = resolvedTexts.join("\n");
 
     const state = await getChatState(env.DB, chatId);
     // 消息本身不加时间前缀；易变上下文（时间戳/召回）由管线 assembler 注入，不进 tg system。

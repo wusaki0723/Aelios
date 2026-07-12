@@ -12,10 +12,23 @@ function workersAiModelName(model: string): string | null {
 
 function readWorkersAiChatContent(result: unknown): string {
   if (!result || typeof result !== "object") return "";
-  const value = result as { response?: unknown; choices?: unknown; answer?: unknown; caption?: unknown };
+  const value = result as {
+    response?: unknown;
+    choices?: unknown;
+    answer?: unknown;
+    caption?: unknown;
+    result?: unknown;
+  };
   if (typeof value.response === "string") return value.response;
   if (typeof value.answer === "string") return value.answer;
   if (typeof value.caption === "string") return value.caption;
+  // Moondream nests its payload one level down: {result: {answer, caption, …}, usage}.
+  if (value.result && typeof value.result === "object") {
+    const nested = value.result as { answer?: unknown; caption?: unknown; response?: unknown };
+    if (typeof nested.answer === "string") return nested.answer;
+    if (typeof nested.caption === "string") return nested.caption;
+    if (typeof nested.response === "string") return nested.response;
+  }
   if (Array.isArray(value.choices)) {
     const first = value.choices[0] as { message?: { content?: unknown } } | undefined;
     if (typeof first?.message?.content === "string") return first.message.content;

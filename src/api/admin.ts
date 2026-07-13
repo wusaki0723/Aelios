@@ -74,6 +74,10 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
   .starmap-shell { min-height: min(70dvh, 720px); }
   .starmap-canvas { touch-action: none; display: block; width: 100%; height: 100%; }
   .starmap-legend-btn.is-off { opacity: .35; text-decoration: line-through; }
+  .starmap-caption { color: rgba(140, 140, 150, .55); transition: color .3s ease; }
+  .starmap-caption:hover { color: rgba(244, 160, 124, .9); }
+  :root[data-theme="light"] .starmap-caption { color: rgba(100, 100, 110, .5); }
+  :root[data-theme="light"] .starmap-caption:hover { color: rgba(217, 119, 87, .9); }
   .starmap-drawer {
     max-height: min(48dvh, 360px);
   }
@@ -498,6 +502,7 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
           <div x-show="!starmapLoading && starmapNodes.length > 0 && starmapEdges.length === 0" class="pointer-events-none absolute bottom-3 left-3 right-3 z-10 md:right-auto">
             <div class="rounded-2xl border border-zinc-800 bg-zinc-900/90 px-3 py-2 text-xs text-zinc-400 shadow-sm">星星还没牵手——今晚做梦之后再来看</div>
           </div>
+          <div x-show="!starmapLoading && starmapNodes.length > 0" class="starmap-caption absolute bottom-2 right-3 z-10 select-none text-[11px] tracking-wide">每颗星都是我记得你的一次。</div>
 
           <aside x-show="starmapSelected" x-transition.opacity.duration.150ms class="starmap-drawer absolute inset-x-0 bottom-0 z-20 overflow-y-auto border-t border-zinc-800 bg-zinc-900/95 p-4 backdrop-blur md:inset-x-auto md:bottom-3 md:right-3 md:top-3 md:w-80 md:rounded-2xl md:border md:shadow-sm">
             <div class="mb-2 flex items-start justify-between gap-2">
@@ -616,7 +621,10 @@ var starmapEngine = (function() {
     onSelect: null,
     ro: null,
     pointers: {},
-    pinch: null
+    pinch: null,
+    dust: [],
+    fitDone: false,
+    lastDraw: 0
   };
 
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -675,11 +683,47 @@ var starmapEngine = (function() {
       node.r = nodeRadius(node.importance);
       node.fx = null;
       node.fy = null;
+      // twinkle: per-star phase/speed so the sky breathes out of sync
+      node.twPhase = ((i * 2654435761) % 628) / 100;
+      node.twSpeed = 0.5 + ((i * 40503) % 100) / 100;
+    }
+    // backdrop dust: deterministic faint mini-stars behind the graph, parallax layer
+    s.dust = [];
+    var seed = 48271;
+    var rnd = function() { seed = (seed * 69621) % 2147483647; return seed / 2147483647; };
+    var dustCount = 140;
+    var DR = R * 2.6 + 300;
+    for (var d = 0; d < dustCount; d++) {
+      s.dust.push({
+        x: (rnd() * 2 - 1) * DR,
+        y: (rnd() * 2 - 1) * DR,
+        r: 0.4 + rnd() * 0.9,
+        a: 0.08 + rnd() * 0.22,
+        phase: rnd() * Math.PI * 2
+      });
     }
     s.camX = 0;
     s.camY = 0;
     s.scale = 1;
     s.energy = 1;
+    s.fitDone = false;
+  }
+  function fitView() {
+    var n = s.nodes.length;
+    if (!n || !s.w || !s.h) return;
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (var i = 0; i < n; i++) {
+      var node = s.nodes[i];
+      if (node.x < minX) minX = node.x;
+      if (node.x > maxX) maxX = node.x;
+      if (node.y < minY) minY = node.y;
+      if (node.y > maxY) maxY = node.y;
+    }
+    var bw = Math.max(maxX - minX, 40);
+    var bh = Math.max(maxY - minY, 40);
+    s.scale = clamp(Math.min((s.w - 120) / bw, (s.h - 120) / bh), 0.35, 2.2);
+    s.camX = -(minX + maxX) / 2;
+    s.camY = -(minY + maxY) / 2;
   }
   function stepPhysics() {
     var nodes = s.nodes;
@@ -790,6 +834,25 @@ var starmapEngine = (function() {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, s.w, s.h);
 
+    var now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+    // backdrop dust: slower camera (parallax) so the sky has depth
+    if (s.dust.length && !light) {
+      ctx.save();
+      ctx.translate(s.w / 2, s.h / 2);
+      ctx.scale(s.scale, s.scale);
+      ctx.translate(s.camX * 0.35, s.camY * 0.35);
+      for (var di = 0; di < s.dust.length; di++) {
+        var mote = s.dust[di];
+        var da = mote.a * (0.7 + 0.3 * Math.sin(now * 0.0004 + mote.phase));
+        ctx.beginPath();
+        ctx.fillStyle = 'rgba(200,210,230,' + da + ')';
+        ctx.arc(mote.x, mote.y, mote.r / s.scale, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
     ctx.save();
     ctx.translate(s.w / 2, s.h / 2);
     ctx.scale(s.scale, s.scale);
@@ -861,12 +924,15 @@ var starmapEngine = (function() {
       var inView = node.x + r >= viewL && node.x - r <= viewR && node.y + r >= viewT && node.y - r <= viewB;
       if (!inView) continue;
 
+      // twinkle: each star breathes on its own rhythm
+      var tw = 0.82 + 0.18 * Math.sin(now * 0.001 * node.twSpeed + node.twPhase);
+
       // glow only when on-screen and reasonably large on screen
       var screenR = r * s.scale;
       if (screenR >= 2.5 && alphaN > 0.2) {
         var glow = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, r * 3.2);
-        glow.addColorStop(0, rgba(col, 0.55 * alphaN));
-        glow.addColorStop(0.45, rgba(col, 0.18 * alphaN));
+        glow.addColorStop(0, rgba(col, 0.55 * alphaN * tw));
+        glow.addColorStop(0.45, rgba(col, 0.18 * alphaN * tw));
         glow.addColorStop(1, rgba(col, 0));
         ctx.beginPath();
         ctx.fillStyle = glow;
@@ -875,7 +941,7 @@ var starmapEngine = (function() {
       }
 
       ctx.beginPath();
-      ctx.fillStyle = rgba(col, (light ? 0.92 : 0.95) * alphaN);
+      ctx.fillStyle = rgba(col, (light ? 0.92 : 0.95) * alphaN * (0.9 + 0.1 * tw));
       ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
       ctx.fill();
       if (light) {
@@ -901,17 +967,30 @@ var starmapEngine = (function() {
   }
   function frame() {
     s.raf = 0;
+    if (!s.canvas || !s.canvas.isConnected) return;
+    // section hidden (page switched away): stop burning frames; go('starmap') re-wakes us
+    if (s.canvas.offsetParent === null) return;
     if (s.running) {
       stepPhysics();
-      if (s.energy < ENERGY_STOP && !s.dragNode) s.running = false;
+      if (s.energy < ENERGY_STOP && !s.dragNode) {
+        s.running = false;
+        // first settle: frame the whole sky once
+        if (!s.fitDone) { s.fitDone = true; fitView(); }
+      }
     }
     if (s.pulseId) {
       s.pulseT += 1;
       if (s.pulseT > 90) { s.pulseId = null; s.pulseT = 0; }
       else s.running = true;
     }
-    draw();
-    if (s.running || s.pulseId || s.dragNode || s.pan) {
+    var active = s.running || s.pulseId || s.dragNode || s.pan;
+    var now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    // idle: keep twinkling at ~8fps instead of freezing the sky
+    if (active || now - s.lastDraw >= 120) {
+      draw();
+      s.lastDraw = now;
+    }
+    if (active || s.nodes.length) {
       s.raf = requestAnimationFrame(frame);
     }
   }

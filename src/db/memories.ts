@@ -221,7 +221,9 @@ export async function searchMemoriesByText(
 ): Promise<Array<MemoryRecord & { score: number }>> {
   const query = input.query.trim().replace(/\s+/g, " ").slice(0, 500);
   const like = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
-  let sql = "SELECT * FROM memories WHERE namespace = ? AND status = 'active'";
+  // LMC-5: exclude version_status=superseded (status may still be active during dual-write windows)
+  let sql =
+    "SELECT * FROM memories WHERE namespace = ? AND status = 'active' AND (version_status IS NULL OR version_status != 'superseded')";
   const binds: unknown[] = [input.namespace];
 
   if (query) {

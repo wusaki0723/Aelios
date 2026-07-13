@@ -176,6 +176,16 @@ export function formatBootStable(boot: BootPackage): string {
     const entries = boot.glossary.map((g) => `${g.term}: ${g.definition}`);
     parts.push("<glossary>", ...entries, "</glossary>");
   }
+  // LMC-5 spontaneous: 自发浮现，不是检索结果。最多 2 条；没有则整节省略。
+  const spontaneous = boot.spontaneous ?? [];
+  if (spontaneous.length > 0) {
+    parts.push(
+      "<spontaneous>",
+      "以下是你上线前自发想起的事（不是检索结果）：",
+      ...spontaneous.slice(0, 2).map((item) => `- ${item.content}`),
+      "</spontaneous>"
+    );
+  }
   return parts.join("\n");
 }
 

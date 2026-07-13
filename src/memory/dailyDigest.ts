@@ -21,6 +21,10 @@ import {
   fetchMemoryLifecycleRows
 } from "../db/v2";
 import { extractDreamMemoriesFromMessages } from "./dreamExtract";
+import { runRelationBuildPhase, runZAuditPhase } from "./relations";
+import type { RelationBuildStats, ZAuditStats } from "./relations";
+import { runPerceptionPickPhase } from "./perception";
+import type { PerceptionPickStats } from "./perception";
 import { newId } from "../utils/ids";
 import { nowIso } from "../utils/time";
 
@@ -69,6 +73,10 @@ interface DailyDigestStats {
   cursorAdvanced: boolean;
   hasMore: boolean;
   errors?: Array<{ target_id: string; reason: string }>;
+  // LMC-5 additive phases (only present when night pipeline ran them)
+  relation_build?: RelationBuildStats;
+  z_audit?: ZAuditStats;
+  perception?: PerceptionPickStats;
 }
 
 export interface DreamRoutingItem {
@@ -1465,14 +1473,105 @@ export async function runDailyMemoryDigest(
     extracted: extractedMemories
   });
 
+  // --- LMC-5 phases (after existing tidy; each isolated so failures don't scrap the night) ---
+  let relationBuild: RelationBuildStats | undefined;
+  try {
+    relationBuild = await runRelationBuildPhase(env, {
+      namespace,
+      startIso,
+      endIso
+    });
+  } catch (error) {
+    console.error("dream: relation-build phase failed", {
+      namespace,
+      date: dateLabel,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  let zAudit: ZAuditStats | undefined;
+  try {
+    zAudit = await runZAuditPhase(env, {
+      namespace,
+      startIso,
+      endIso
+    });
+    if (zAudit.pairs.length > 0) {
+      // 夜批报告：under_review 对写入 memory_events，供人工确认后 supersede
+      await env.DB
+        .prepare(
+          `INSERT INTO memory_events (id, namespace, event_type, memory_id, payload_json, created_at)
+           VALUES (?, ?, ?, NULL, ?, ?)`
+        )
+        .bind(
+          newId("evt"),
+          namespace,
+          "dream_z_audit",
+          JSON.stringify({
+            date: dateLabel,
+            pairs: zAudit.pairs,
+            marked_under_review: zAudit.marked_under_review,
+            edges_inserted: zAudit.edges_inserted,
+            note: "Never auto-supersede; human confirm via memory_supersede"
+          }),
+          nowIso()
+        )
+        .run();
+      console.log("dream z_audit report", {
+        namespace,
+        date: dateLabel,
+        pairs: zAudit.pairs.length,
+        marked: zAudit.marked_under_review,
+        edges: zAudit.edges_inserted
+      });
+    }
+  } catch (error) {
+    console.error("dream: z_audit phase failed", {
+      namespace,
+      date: dateLabel,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  let perception: PerceptionPickStats | undefined;
+  try {
+    // End-phase: pick 1–2 high-importance, not-recalled-in-7d, redacted items.
+    // When multi-batch dream (hasMore), still refresh cache so SessionStart sees latest pick.
+    perception = await runPerceptionPickPhase(env, { namespace, dateLabel });
+  } catch (error) {
+    console.error("dream: perception pick phase failed", {
+      namespace,
+      date: dateLabel,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
   await writeCursor(env.DB, cursorName, hasMore ? lastMessage.created_at : `done:${lastMessage.created_at}`);
+
+  const reportErrors = [
+    ...v2Result.errors,
+    ...(zAudit && zAudit.pairs.length > 0
+      ? zAudit.pairs.map((p) => ({
+          target_id: `${p.left_id}|${p.right_id}`,
+          reason: `z_audit:${p.reason}`
+        }))
+      : [])
+  ];
 
   await safeFinishDreamRun(env.DB, {
     id: dreamRunId,
     status: "ok",
     model: modelResult.model,
     processedMessages: messages.length,
-    error: v2Result.errors.length > 0 ? JSON.stringify(v2Result.errors) : null
+    error:
+      reportErrors.length > 0 || relationBuild?.truncated
+        ? JSON.stringify({
+            apply_errors: v2Result.errors,
+            z_audit_pairs: zAudit?.pairs ?? [],
+            relation_build: relationBuild ?? null,
+            perception: perception ?? null
+          })
+        : null
   });
 
   return {
@@ -1489,7 +1588,10 @@ export async function runDailyMemoryDigest(
       cleanedEmptyMemories,
       cursorAdvanced: true,
       hasMore,
-      errors: v2Result.errors
+      errors: v2Result.errors,
+      relation_build: relationBuild,
+      z_audit: zAudit,
+      perception
     }
   };
 }

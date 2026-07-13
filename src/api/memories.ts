@@ -251,8 +251,17 @@ async function handleRecallMemories(request: Request, env: Env, profile: KeyProf
     : undefined;
   const types = readStringArray(body.types);
   const includePrompt = readBoolean(body.include_prompt);
+  // LMC-5 additive: explicit history opt-in (superseded rows). Default false.
+  const includeHistory = readBoolean(body.include_history, false);
 
-  const result = await runRecall(env, { namespace, query, k, min_score: minScore, types });
+  const result = await runRecall(env, {
+    namespace,
+    query,
+    k,
+    min_score: minScore,
+    types,
+    include_history: includeHistory
+  });
   const data = result.hits.map((h) => ({
     id: h.id,
     content: h.content,

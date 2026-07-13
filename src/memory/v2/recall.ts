@@ -23,7 +23,10 @@ import { searchMemoriesWithProvenance } from "../search";
 import type { MemoryApiRecordWithProvenance } from "../search";
 import { filterAndCompressMemories } from "../filter";
 import { createEmbedding } from "../embedding";
-import type { Env } from "../../types";
+import { expandRecallByRelations, isRelationExpansionEnabled } from "../relations";
+import type { RelationExpansionMeta } from "../relations";
+import { loadSpontaneousForBoot } from "../perception";
+import type { Env, PerceptionCacheItem } from "../../types";
 
 // --- 开关 ---
 
@@ -129,11 +132,13 @@ export interface BootPackage {
   yesterday_log: { date: string; title: string; summary: string } | null;
   precious: Array<{ id: string; content: string; created_at: string }>;
   glossary: Array<{ term: string; definition: string; aliases: string[] }>;
+  // LMC-5: spontaneous perception (SessionStart). Absent/empty = do not inject section.
+  spontaneous?: PerceptionCacheItem[];
   schema_version: string;
   cache_prefix_end: true;
 }
 
-const BOOT_SCHEMA_VERSION = "v3-0";
+const BOOT_SCHEMA_VERSION = "v3-1";
 
 export async function buildBootPackage(
   env: Env,
@@ -164,16 +169,29 @@ export async function buildBootPackage(
 
   // 昨天的日志 (dream 产出)
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const bootTimeZone = env.DREAM_TIME_ZONE || "Asia/Shanghai";
   const yesterdayLabel = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Singapore",
+    timeZone: bootTimeZone,
     year: "numeric", month: "2-digit", day: "2-digit"
   }).format(yesterday);
   const dailyLog = await getDailyLog(env.DB, { namespace: input.namespace, date: yesterdayLabel });
+
+  // LMC-5 spontaneous: 最多 2 条，当天/昨夜 perception_cache；没有就不注入。
+  let spontaneous: PerceptionCacheItem[] = [];
+  try {
+    spontaneous = await loadSpontaneousForBoot(env, {
+      namespace: input.namespace,
+      timeZone: bootTimeZone
+    });
+  } catch (error) {
+    console.warn("boot: load spontaneous failed", error);
+  }
 
   return {
     yesterday_log: dailyLog ? { date: dailyLog.date, title: dailyLog.title, summary: dailyLog.summary } : null,
     precious,
     glossary: allGlossary,
+    ...(spontaneous.length > 0 ? { spontaneous } : {}),
     schema_version: BOOT_SCHEMA_VERSION,
     cache_prefix_end: true
   };
@@ -221,6 +239,8 @@ export interface RecallInput {
   // 闸二: 调用方传 boot 包的核心层指纹, recall 命中与之去重。
   // 不传则跳过闸二 (向后兼容第 2 步行为)。
   core_fingerprint?: CoreFingerprint;
+  // LMC-5 additive: when true, allow version_status=superseded hits (history). Default false.
+  include_history?: boolean;
 }
 
 export interface RecallHit {
@@ -238,6 +258,9 @@ export interface RecallHit {
   backed: boolean;
   // 与 source_layer 中 memory/longtail 对应，供面板按类型统计 (不含 glossary，glossary 命中走单独的 glossary_hits)。
   kind: "memory" | "longtail";
+  // LMC-5 Y 轴 (additive, only when RELATION_EXPANSION on and hit came via edge)
+  relation?: RelationExpansionMeta;
+  contradicted_by?: string[];
 }
 
 export interface RecallResult {
@@ -287,7 +310,8 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
     namespace: input.namespace,
     query,
     types: input.types,
-    topK: k
+    topK: k,
+    includeHistory: input.include_history === true
   });
   const rawMemories: MemoryApiRecordWithProvenance[] = searchResult.records;
   // 严格模式下 (RECALL_REQUIRE_D1_BACKING=true) 已经在 search 层丢弃的孤儿向量命中数。
@@ -334,15 +358,32 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
       })
     : scored;
 
+  // 4.5 LMC-5 Y 轴: 2-hop relation expansion (default off = seed set unchanged).
+  // Runs after gate-2 dedup so expanded neighbors are also core-deduped next? We expand
+  // from afterDedup seeds, then re-cap at k. Contradicts do not boost rank.
+  let afterRelation: RecallHit[] = afterDedup;
+  if (isRelationExpansionEnabled(env) && afterDedup.length > 0) {
+    try {
+      afterRelation = (await expandRecallByRelations(env, {
+        namespace: input.namespace,
+        seedHits: afterDedup,
+        topK: k
+      })) as RecallHit[];
+    } catch (error) {
+      console.error("v2 relation expansion failed; using seed hits", error);
+      afterRelation = afterDedup;
+    }
+  }
+
   // 5. 长尾兜底 (L6): 只有 glossary + memories 闸二后全空才落 longtail。
   //    母帖逻辑优先级"全空才落长尾"——glossary 命中也算"前面非空"，
   //    有确定词面答案时不再追兜底，避免把 longtail 混进已有黑话答案的请求。
   let longtailHits: RecallHit[] = [];
-  if (afterDedup.length === 0 && glossaryHits.length === 0) {
+  if (afterRelation.length === 0 && glossaryHits.length === 0) {
     longtailHits = await recallLongtailFallback(env, input);
   }
 
-  const beforeFloor = [...afterDedup, ...longtailHits]
+  const beforeFloor = [...afterRelation, ...longtailHits]
     .sort((a, b) => b.score - a.score);
   const flooredIds: string[] = [];
   const allHits = beforeFloor

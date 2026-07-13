@@ -4,6 +4,7 @@ import { handleCache } from "./api/cache";
 import { handleCacheHealth, handleVectorDoctor, handleVectorHealth, handleVectorReindex } from "./api/debug";
 import { handleDreamRun, handleDreamStatus } from "./api/dream";
 import { handleChatCompletions } from "./api/chatCompletions";
+import { handleFeishuInbox, handleFeishuSend, handleFeishuWebhook, retryUnrelayedFeishuInbox } from "./api/feishu";
 import { handleGuideDogChatCompletions } from "./api/guideDog";
 import {
   handleGlossaryApi,
@@ -97,6 +98,18 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/api/relations/graph") {
       return handleRelationsGraph(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/feishu/webhook") {
+      return handleFeishuWebhook(request, env, ctx);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/feishu/send") {
+      return handleFeishuSend(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/feishu/inbox") {
+      return handleFeishuInbox(request, env);
     }
 
     if (url.pathname === "/v1/memory" || url.pathname.startsWith("/v1/memory/")) {
@@ -207,6 +220,19 @@ export default {
           },
           (e) => {
             console.error("github daily pull failed", String(e));
+            return { ok: false };
+          }
+        )
+      );
+      // 飞书 inbox 补投：relayed=0 且 24h 内，最多 10 条（SPEC-FEISHU）
+      tasks.push(
+        retryUnrelayedFeishuInbox(env).then(
+          (r) => {
+            console.log("feishu inbox retry", r);
+            return r;
+          },
+          (e) => {
+            console.error("feishu inbox retry failed", String(e));
             return { ok: false };
           }
         )

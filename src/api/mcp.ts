@@ -219,7 +219,12 @@ function getTools(): Array<Record<string, unknown>> {
           k: { type: "number", minimum: 1, maximum: 100 },
           min_score: { type: "number", minimum: 0, maximum: 1 },
           types: { type: "array", items: { type: "string" } },
-          namespace: { type: "string" }
+          namespace: { type: "string" },
+          include_history: {
+            type: "boolean",
+            description:
+              "When true, include superseded memory versions (status/version_status=superseded). Default false."
+          }
         },
         required: ["query"]
       }
@@ -542,7 +547,8 @@ async function callTool(
       query,
       k: readNumber(args.k, 20),
       min_score: typeof args.min_score === "number" ? readNumber(args.min_score, 0.15) : undefined,
-      types: readStringArray(args.types)
+      types: readStringArray(args.types),
+      include_history: readBoolean(args.include_history, false)
     });
     return textToolResult({ data: result });
   }

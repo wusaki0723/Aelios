@@ -32,13 +32,21 @@ function parseJsonArray(value: string | null): string[] {
 
 // LMC-5: 默认可注入的记忆 = status active 且 version_status 非 superseded。
 // under_review 仍可召回；superseded 版本只在显式 includeHistory 时返回。
+// supersede 写路径会把旧条 status 与 version_status 都标为 'superseded'，所以
+// includeHistory 必须在 status 守卫之前放行这两种形态，否则历史永远不可达。
 export function isRecallableMemory(
   record: Pick<MemoryRecord, "status" | "version_status">,
   options?: { includeHistory?: boolean }
 ): boolean {
-  if (record.status !== "active") return false;
-  if (options?.includeHistory) return true;
   const vs = record.version_status ?? "current";
+  if (options?.includeHistory) {
+    // History path: active (incl. under_review / dual-write version_status=superseded)
+    // and rows with status='superseded'. Still exclude deleted/archived/etc.
+    if (record.status === "active") return true;
+    if (record.status === "superseded") return true;
+    return false;
+  }
+  if (record.status !== "active") return false;
   return vs !== "superseded";
 }
 
@@ -165,11 +173,13 @@ function readMetadataStringArray(metadata: MetadataMap, field: string): string[]
 
 function toLegacyMemoryRecord(
   match: VectorizeMatch,
-  input: { namespace: string }
+  input: { namespace: string; includeHistory?: boolean }
 ): (MemoryRecord & { score: number }) | null {
   const metadata = (match.metadata || {}) as MetadataMap;
   const status = readMetadataString(metadata, "status");
-  if (status && status !== "active") return null;
+  if (status && status !== "active") {
+    if (!(input.includeHistory && status === "superseded")) return null;
+  }
 
   const content = readMetadataText(metadata);
   if (!content) return null;
@@ -193,7 +203,7 @@ function toLegacyMemoryRecord(
     summary: readMetadataString(metadata, "summary"),
     importance: readMetadataNumber(metadata, "importance", 0.5),
     confidence: readMetadataNumber(metadata, "confidence", 0.8),
-    status: "active",
+    status: status === "superseded" ? "superseded" : "active",
     pinned: readMetadataBoolean(metadata, "pinned") ? 1 : 0,
     tags,
     source: readMetadataString(metadata, "source_id") || readMetadataString(metadata, "source") || "vectorize",
@@ -211,7 +221,7 @@ function toLegacyMemoryRecord(
 async function queryVectorize(
   env: Env,
   vector: number[],
-  input: { namespace: string; types?: string[]; topK: number },
+  input: { namespace: string; types?: string[]; topK: number; includeHistory?: boolean },
   useFilter: boolean
 ): Promise<VectorizeMatches> {
   if (!useFilter) {
@@ -221,9 +231,12 @@ async function queryVectorize(
     });
   }
 
+  // Default: active only. includeHistory: drop status filter so any residual
+  // superseded vectors (if present) can be fetched; D1 isRecallableMemory still gates.
+  // Note: supersede deletes old vectors, so history primarily lands via D1 text fallback.
   const filter: VectorizeVectorMetadataFilter = {
     namespace: input.namespace,
-    status: "active"
+    ...(input.includeHistory ? {} : { status: "active" })
   };
 
   if (input.types && input.types.length > 0) {
@@ -281,7 +294,9 @@ async function searchWithVectorize(
       const md = (match.metadata || {}) as Record<string, unknown>;
       if (typeof md.namespace !== "string" || md.namespace !== input.namespace) continue;
       const status = md.status;
-      if (status !== undefined && status !== "active") continue;
+      if (status !== undefined && status !== "active") {
+        if (!(input.includeHistory && status === "superseded")) continue;
+      }
     }
 
     const id = getRefId(match);
@@ -366,9 +381,12 @@ export async function searchMemoriesWithProvenance(
       namespace: input.namespace,
       query: input.query,
       types: input.types,
-      limit: Math.max(topK, 50)
+      limit: Math.max(topK, 50),
+      includeHistory: input.includeHistory
     });
-    records = textRecords.map((record) => ({ ...record, backed: true }));
+    records = textRecords
+      .filter((record) => isRecallableMemory(record, { includeHistory: input.includeHistory }))
+      .map((record) => ({ ...record, backed: true }));
   }
 
   await markMemoriesRecalled(env.DB, {
@@ -392,7 +410,7 @@ export async function searchMemoriesWithProvenance(
 
 export async function searchMemories(
   env: Env,
-  input: { namespace: string; query: string; types?: string[]; topK?: number }
+  input: { namespace: string; query: string; types?: string[]; topK?: number; includeHistory?: boolean }
 ): Promise<MemoryApiRecordWithProvenance[]> {
   const result = await searchMemoriesWithProvenance(env, input);
   return result.records;

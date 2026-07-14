@@ -105,6 +105,8 @@ function buildJudgePrompt(candidate: MemoryCandidateRow, messages: MessageRecord
     "- grounded (是否有据)：候选内容必须能在下面的原始对话片段里找到依据，不能是编造或过度引申；找不到依据必须 grounded=false。",
     "- durable (是否长期稳定)：这条记忆一个月后是否还成立；临时计划、一次性情绪、当次任务不算稳定事实。",
     "- non-trivial (是否值得占用长期记忆位)：不是可重新推导的寒暄，不是后端实现细节，不是纯调试噪音。",
+    "- 工程实现流水（文件路径、命令、debug 过程、部署配置、后端实现细节）即使 grounded 也压低分——这类内容有代码仓库和 git 史，不该占长期记忆位。",
+    "- 情感/关系类候选不因为内容长而扣分；带「」原话、写了 3-5 句的关系记忆是合格形态，不是啰嗦。",
     "证据越扎实、越稳定、越非平凡，score 越高；grounded / durable 必须是布尔值；reason 是一句话说明理由。",
     "",
     "输出格式：",

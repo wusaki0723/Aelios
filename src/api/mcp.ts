@@ -8,6 +8,7 @@ import {
   deleteMemoryV2,
   fetchMemoryLifecycleRows,
   getDailyLog,
+  getWeeklyLog,
   getPreciousById,
   supersedeMemory,
   upsertGlossary,
@@ -17,6 +18,7 @@ import { filterAndCompressMemories } from "../memory/filter";
 import { exportMemories } from "../memory/export";
 import { buildBootPackage, isV2Enabled, runRecall } from "../memory/v2/recall";
 import { readDreamTimeZoneFromEnv } from "../memory/dailyDigest";
+import { getIsoWeekLabelForDateLabel } from "../memory/weeklyRollup";
 import { toMemoryApiRecord } from "../memory/search";
 import {
   createVectorMemory,
@@ -310,11 +312,13 @@ function getTools(): Array<Record<string, unknown>> {
       name: "diary_get",
       description:
         "Read daily_log diary entries. Omit date for today+yesterday (recent). " +
+        "Use week (e.g. 2026-W29) for weekly_log. Rolled-up daily dates fall back to weekly_log. " +
         "Diary is never auto-injected; fetch explicitly when needed.",
       inputSchema: {
         type: "object",
         properties: {
           date: { type: "string", description: "YYYY-MM-DD; omit for recent (today+yesterday)" },
+          week: { type: "string", description: "ISO week label, e.g. 2026-W29" },
           namespace: { type: "string" }
         }
       }
@@ -649,16 +653,28 @@ async function callTool(
   if (params.name === "diary_get") {
     if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
     const namespace = resolveNamespace(profile, args.namespace);
+    const timeZone = readDreamTimeZoneFromEnv(env);
+    const week = readString(args.week);
+    if (week && !/^\d{4}-W\d{2}$/.test(week)) {
+      return toolError("week must be YYYY-Www (ISO week label)");
+    }
+    if (week) {
+      const row = await getWeeklyLog(env.DB, { namespace, week });
+      if (!row) return textToolResult({ data: null });
+      return textToolResult({ data: row });
+    }
     const date = readString(args.date);
     if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return toolError("date must be YYYY-MM-DD");
     }
     if (date) {
       const row = await getDailyLog(env.DB, { namespace, date });
-      if (!row) return textToolResult({ data: null });
-      return textToolResult({ data: row });
+      if (row) return textToolResult({ data: row });
+      const weekLabel = getIsoWeekLabelForDateLabel(date, timeZone);
+      const weekly = await getWeeklyLog(env.DB, { namespace, week: weekLabel });
+      if (!weekly) return textToolResult({ data: null });
+      return textToolResult({ data: { ...weekly, note: "daily rolled into weekly" } });
     }
-    const timeZone = readDreamTimeZoneFromEnv(env);
     const today = new Intl.DateTimeFormat("en-CA", {
       timeZone,
       year: "numeric",

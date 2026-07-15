@@ -1,4 +1,6 @@
 import { authenticate } from "../auth/apiKey";
+import { listRecentDailyLogs, listRecentWeeklyLogs } from "../db/v2";
+import { runDiaryWriter } from "../memory/diaryWriter";
 import { runWeeklyRollup } from "../memory/weeklyRollup";
 import type { Env } from "../types";
 import { json, openAiError } from "../utils/json";
@@ -444,6 +446,61 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
         </div>
       </section>
 
+      <section x-show="page === 'diary'" class="space-y-4">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <h1 class="text-2xl font-semibold">日记</h1>
+            <p class="mt-1 text-sm text-zinc-400">每日叙事日记与已卷起的周记。</p>
+          </div>
+          <button type="button" @click="loadDiary()" class="tap inline-flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-sm transition duration-150 ease-in-out hover:border-coral">
+            <i data-lucide="refresh-cw" class="h-4 w-4"></i><span>刷新</span>
+          </button>
+        </div>
+
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <h2 class="text-base font-semibold">周记</h2>
+            <span class="text-xs text-zinc-400" x-text="diaryWeeklies.length + ' 条'"></span>
+          </div>
+          <template x-if="diaryWeeklies.length === 0">
+            <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 text-sm text-zinc-400">还没有周记。</div>
+          </template>
+          <template x-for="entry in diaryWeeklies" :key="entry.week">
+            <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+              <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+                <span class="rounded-full border border-zinc-800 px-2 py-0.5 font-medium text-zinc-200" x-text="entry.week"></span>
+                <span x-text="entry.start_date + ' ~ ' + entry.end_date"></span>
+                <span x-text="entry.source_days + ' 天汇入'"></span>
+              </div>
+              <h3 class="text-base font-semibold text-zinc-100" x-text="entry.title"></h3>
+              <p class="mt-2 whitespace-pre-wrap text-sm leading-7 text-zinc-300" :class="isDiaryExpanded('weekly:' + entry.week) ? '' : 'line-clamp-4'" x-text="entry.summary"></p>
+              <button type="button" @click="toggleDiaryExpand('weekly:' + entry.week)" class="tap mt-2 text-xs text-coral transition duration-150 ease-in-out hover:underline" x-text="isDiaryExpanded('weekly:' + entry.week) ? '收起' : '展开全文'"></button>
+            </article>
+          </template>
+        </div>
+
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <h2 class="text-base font-semibold">日记</h2>
+            <span class="text-xs text-zinc-400" x-text="diaryDailies.length + ' 条'"></span>
+          </div>
+          <template x-if="diaryDailies.length === 0">
+            <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 text-sm text-zinc-400">还没有日记。</div>
+          </template>
+          <template x-for="entry in diaryDailies" :key="entry.date">
+            <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+              <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+                <span class="rounded-full border border-zinc-800 px-2 py-0.5 font-medium text-zinc-200" x-text="entry.date"></span>
+                <span x-text="fmt(entry.updated_at)"></span>
+              </div>
+              <h3 class="text-base font-semibold text-zinc-100" x-text="entry.title"></h3>
+              <p class="mt-2 whitespace-pre-wrap text-sm leading-7 text-zinc-300" :class="isDiaryExpanded('daily:' + entry.date) ? '' : 'line-clamp-4'" x-text="entry.summary"></p>
+              <button type="button" @click="toggleDiaryExpand('daily:' + entry.date)" class="tap mt-2 text-xs text-coral transition duration-150 ease-in-out hover:underline" x-text="isDiaryExpanded('daily:' + entry.date) ? '收起' : '展开全文'"></button>
+            </article>
+          </template>
+        </div>
+      </section>
+
       <section x-show="page === 'settings'" class="space-y-4 md:hidden">
         <h1 class="text-2xl font-semibold">设置</h1>
         <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
@@ -471,13 +528,14 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
     </main>
   </div>
 
-  <nav class="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-800 bg-[#0a0a0b]/95 px-3 pb-[max(10px,env(safe-area-inset-bottom))] pt-2 backdrop-blur md:hidden">
-    <div class="grid grid-cols-5 gap-1">
-      <button type="button" @click="go('today')" class="tap grid place-items-center rounded-2xl text-xs transition duration-150 ease-in-out" :class="page === 'today' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="sun" class="h-5 w-5"></i><span>今日</span></button>
-      <button type="button" @click="go('review')" class="tap relative grid place-items-center rounded-2xl text-xs transition duration-150 ease-in-out" :class="page === 'review' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="inbox" class="h-5 w-5"></i><span>审核</span><span x-show="pendingCount" class="absolute right-3 top-1 rounded-full bg-coral px-1.5 text-[10px] font-semibold text-zinc-950" x-text="pendingCount"></span></button>
-      <button type="button" @click="go('memory')" class="tap grid place-items-center rounded-2xl text-xs transition duration-150 ease-in-out" :class="page === 'memory' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="database" class="h-5 w-5"></i><span>记忆</span></button>
-      <button type="button" @click="go('more')" class="tap grid place-items-center rounded-2xl text-xs transition duration-150 ease-in-out" :class="page === 'more' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="more-horizontal" class="h-5 w-5"></i><span>更多</span></button>
-      <button type="button" @click="go('settings')" class="tap grid place-items-center rounded-2xl text-xs transition duration-150 ease-in-out" :class="page === 'settings' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="settings" class="h-5 w-5"></i><span>设置</span></button>
+  <nav class="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-800 bg-[#0a0a0b]/95 px-2 pb-[max(10px,env(safe-area-inset-bottom))] pt-2 backdrop-blur md:hidden">
+    <div class="grid grid-cols-6 gap-0.5">
+      <button type="button" @click="go('today')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'today' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="sun" class="h-5 w-5"></i><span>今日</span></button>
+      <button type="button" @click="go('diary')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'diary' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="book-open" class="h-5 w-5"></i><span>日记</span></button>
+      <button type="button" @click="go('review')" class="tap relative grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'review' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="inbox" class="h-5 w-5"></i><span>审核</span><span x-show="pendingCount" class="absolute right-1 top-1 rounded-full bg-coral px-1.5 text-[10px] font-semibold text-zinc-950" x-text="pendingCount"></span></button>
+      <button type="button" @click="go('memory')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'memory' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="database" class="h-5 w-5"></i><span>记忆</span></button>
+      <button type="button" @click="go('more')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'more' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="more-horizontal" class="h-5 w-5"></i><span>更多</span></button>
+      <button type="button" @click="go('settings')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'settings' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="settings" class="h-5 w-5"></i><span>设置</span></button>
     </div>
   </nav>
 </div>
@@ -487,6 +545,7 @@ function memoryAdmin() {
   return {
     nav: [
       { id: 'today', label: '今日', icon: 'sun' },
+      { id: 'diary', label: '日记', icon: 'book-open' },
       { id: 'review', label: '审核队列', icon: 'inbox' },
       { id: 'memory', label: '重要记忆', icon: 'database' },
       { id: 'more', label: '更多', icon: 'layers' }
@@ -514,6 +573,10 @@ function memoryAdmin() {
     memories: [],
     precious: [],
     glossary: [],
+
+    diaryDailies: [],
+    diaryWeeklies: [],
+    diaryExpanded: {},
 
     worldItems: [],
     worldSelection: {},
@@ -1018,8 +1081,29 @@ function memoryAdmin() {
       this.page = id;
       if (id === 'review') this.loadCandidates();
       if (id === 'memory') this.loadMemories();
+      if (id === 'diary') this.loadDiary();
       if (id === 'more') this.loadMoreView();
       this.icons();
+    },
+    async loadDiary() {
+      try {
+        const data = await this.request(this.withNamespace('/admin/diary?limit=30'));
+        const payload = data.data || {};
+        this.diaryDailies = payload.dailies || [];
+        this.diaryWeeklies = payload.weeklies || [];
+      } catch (error) {
+        this.notify(error.message);
+      }
+      this.icons();
+    },
+    isDiaryExpanded(key) {
+      return Boolean(this.diaryExpanded[key]);
+    },
+    toggleDiaryExpand(key) {
+      const next = Object.assign({}, this.diaryExpanded);
+      if (next[key]) delete next[key];
+      else next[key] = true;
+      this.diaryExpanded = next;
     },
     pct(value) {
       return Math.round(Number(value || 0) * 100) + '%';
@@ -1084,6 +1168,69 @@ export function handleAdmin(): Response {
       "cache-control": "no-store"
     }
   });
+}
+
+const DATE_LABEL_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export async function handleDiaryAdmin(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+  if (!auth.profile.scopes.includes("memory:read")) {
+    return openAiError("Missing required scope: memory:read", 403);
+  }
+
+  const url = new URL(request.url);
+  const namespace = readString(url.searchParams.get("namespace")) || auth.profile.namespace;
+  const parsedLimit = Number(url.searchParams.get("limit") || 30);
+  const limit = Number.isFinite(parsedLimit) ? parsedLimit : 30;
+
+  const [dailies, weeklies] = await Promise.all([
+    listRecentDailyLogs(env.DB, { namespace, limit }),
+    listRecentWeeklyLogs(env.DB, { namespace, limit })
+  ]);
+
+  return json({
+    data: {
+      namespace,
+      limit,
+      dailies,
+      weeklies
+    }
+  });
+}
+
+export async function handleDiaryRewriteAdmin(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+  if (!auth.profile.scopes.includes("memory:write")) {
+    return openAiError("Missing required scope: memory:write", 403);
+  }
+
+  const url = new URL(request.url);
+  const body = await readJsonObject(request);
+  const namespace =
+    readString(url.searchParams.get("namespace")) ||
+    (body ? readString(body.namespace) : null) ||
+    auth.profile.namespace;
+  const date =
+    readString(url.searchParams.get("date")) || (body ? readString(body.date) : null);
+
+  if (!date || !DATE_LABEL_RE.test(date)) {
+    return openAiError("date must be YYYY-MM-DD", 400);
+  }
+
+  try {
+    const stats = await runDiaryWriter(env, namespace, date);
+    return json({
+      data: {
+        namespace,
+        date,
+        stats
+      }
+    });
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  }
 }
 
 export async function handleWeeklyRollupAdmin(request: Request, env: Env): Promise<Response> {

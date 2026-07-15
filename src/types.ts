@@ -47,7 +47,6 @@ export interface Env {
   DREAM_MAX_TOKENS?: string;
   DREAM_MODEL?: string;
   DREAM_MEMORY_CONTEXT_LIMIT?: string;
-  DREAM_EXCERPT_LIMIT?: string;
   DREAM_TIME_ZONE?: string;
   // weekly_log rollup after dream; default on unless "false"
   ENABLE_WEEKLY_ROLLUP?: string;
@@ -70,7 +69,6 @@ export interface Env {
   DAILY_DIGEST_MODEL?: string;
   SUMMARY_MODEL?: string;
   DAILY_DIGEST_MEMORY_CONTEXT_LIMIT?: string;
-  DAILY_DIGEST_EXCERPT_LIMIT?: string;
   DAILY_DIGEST_TIME_ZONE?: string;
   // GitHub daily archive pull (cmh-lite client → private repo → nightly cron ingest)
   GITHUB_DAILY_REPO?: string;

@@ -38,19 +38,11 @@ interface DigestMemoryDelete {
   reason?: string;
 }
 
-interface ImportantExcerpt {
-  quote: string;
-  reason?: string;
-  tags?: string[];
-  source_message_ids?: string[];
-}
-
 interface DailyDigestResult {
   date?: string;
   title?: string;
   summary?: string;
   sections?: Array<{ heading?: string; content?: string }>;
-  important_excerpts?: ImportantExcerpt[];
   memories_to_add?: ExtractedMemory[];
   memories_to_update?: DigestMemoryUpdate[];
   memories_to_delete?: DigestMemoryDelete[];
@@ -64,7 +56,6 @@ interface DailyDigestStats {
   updatedMemories: number;
   deletedMemories: number;
   queuedCandidates: number;
-  savedExcerpts: number;
   cleanedEmptyMemories: number;
   cursorAdvanced: boolean;
   hasMore: boolean;
@@ -73,7 +64,7 @@ interface DailyDigestStats {
 
 export interface DreamRoutingItem {
   destination: "candidate" | "world_fact_direct";
-  kind: "extract" | "add" | "update" | "delete" | "excerpt";
+  kind: "extract" | "add" | "update" | "delete";
   content?: string;
   type?: string;
   fact_key?: string | null;
@@ -140,7 +131,6 @@ interface DigestModelCallResult {
 
 const DEFAULT_MAX_MESSAGES = 40;
 const DEFAULT_MEMORY_CONTEXT_LIMIT = 40;
-const DEFAULT_EXCERPT_LIMIT = 8;
 const DEFAULT_EMPTY_MEMORY_MIN_CHARS = 4;
 const DEFAULT_TIME_ZONE = "Asia/Singapore";
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -198,10 +188,6 @@ function readDreamMemoryContextLimit(env: Env): number {
   );
 }
 
-function readDreamExcerptLimit(env: Env): number {
-  return readPositiveInt(readFirstEnvValue(env.DREAM_EXCERPT_LIMIT, env.DAILY_DIGEST_EXCERPT_LIMIT), DEFAULT_EXCERPT_LIMIT, 20);
-}
-
 function readPositiveInt(value: unknown, fallback: number, max: number): number {
   const parsed = typeof value === "string" ? Number(value) : typeof value === "number" ? value : fallback;
   const numeric = Number.isFinite(parsed) ? parsed : fallback;
@@ -219,10 +205,6 @@ function readString(value: unknown): string | null {
 function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function truncate(text: string, maxChars: number): string {
@@ -388,23 +370,6 @@ function normalizeDigestResult(value: unknown): DailyDigestResult {
       })
     : undefined;
 
-  const important_excerpts = Array.isArray(raw.important_excerpts)
-    ? raw.important_excerpts.flatMap((item): ImportantExcerpt[] => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-        const record = item as Record<string, unknown>;
-        const quote = readString(record.quote);
-        if (!quote) return [];
-        return [
-          {
-            quote,
-            reason: readString(record.reason) ?? undefined,
-            tags: readStringArray(record.tags),
-            source_message_ids: readStringArray(record.source_message_ids)
-          }
-        ];
-      })
-    : undefined;
-
   const memories_to_update = Array.isArray(raw.memories_to_update)
     ? raw.memories_to_update.flatMap((item): DigestMemoryUpdate[] => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
@@ -438,7 +403,6 @@ function normalizeDigestResult(value: unknown): DailyDigestResult {
     title: readString(raw.title) ?? undefined,
     summary: readString(raw.summary) ?? undefined,
     sections,
-    important_excerpts,
     memories_to_add: Array.isArray(raw.memories_to_add)
       ? raw.memories_to_add.flatMap((item): ExtractedMemory[] => {
           const memory = normalizeExtractedMemory(item);
@@ -482,7 +446,6 @@ function buildDigestPrompt(input: {
   endIso: string;
   messages: MessageRecord[];
   existingMemories: MemoryApiRecord[];
-  excerptLimit: number;
   hasMore: boolean;
 }): string {
   return [
@@ -494,7 +457,6 @@ function buildDigestPrompt(input: {
     "- 合并重复记忆，避免同一事实以多个版本长期存在。",
     "- 发现过时、被新信息否定、互相矛盾的旧记忆，并提出更新或删除建议（全部进入审核队列）。",
     "- 检查当天夜间抽取候选和旧记忆之间是否重复、过时或冲突。",
-    "- 只在极少数必要场景提出关键原文摘录。",
     "- 形成简洁的昨日日志，而不是保存流水账。",
     "",
     "窗口：",
@@ -517,13 +479,6 @@ function buildDigestPrompt(input: {
     "- title 是 12 字以内标题。",
     "- summary 写成一段简短自然中文，描述这次 dream 整理出了什么。",
     "- sections 最多 3 段，每段有 heading 和 content；没有必要可以给空数组。",
-    `- important_excerpts 最多 ${input.excerptLimit} 条。标准是有重量才保留，不是亲密/情绪就保留。`,
-    "- 该保留：第一次说出某种话（第一次的称呼/承认/边界）、明确的承诺或转折瞬间、独特的内心表白、有完整起承转合的对话片段、命名瞬间和私人梗的诞生。",
-    "- 跳过：寒暄式打闹、重复出现的日常亲昵、单句撒娇、没有信息密度的可爱片段。",
-    "- 摘录的最小单位是一段完整的对话交锋（至少 2-3 轮往返），不是孤立一句。如果一句话前后没有足够上下文构成完整片段，说明它不够重要，跳过。",
-    "- 工程为主体的对话不出 excerpts（重大关系节点除外）。",
-    "- 摘录保留原文的语气/标点/称呼/动作括号，不改写不总结；引号统一用「」。",
-    "- v2 下 important_excerpts 只会进入人工审核候选，不会自动写入长期记忆。",
     "- memories_to_add 保留兼容字段，v2 下默认输出空数组。",
     "- memories_to_update 只针对给出的旧记忆 id。",
     "- memories_to_update 里的 type 只能从这 8 个里选：fact、event、preference、relationship、boundary、habit、decision、note；项目进展归 fact，承诺/决定归 decision。绝不输出 project、world_fact 等其他值。",
@@ -534,16 +489,8 @@ function buildDigestPrompt(input: {
     JSON.stringify({
       date: input.dateLabel,
       title: "夜间整理",
-      summary: "这次 dream 合并了重复记忆，更新了项目状态，并保留了关键原文。",
+      summary: "这次 dream 合并了重复记忆，更新了项目状态。",
       sections: [{ heading: "整理结果", content: "……" }],
-      important_excerpts: [
-        {
-          quote: "用户或助手说过的关键原文",
-          reason: "为什么值得保留",
-          tags: ["project"],
-          source_message_ids: ["msg_x"]
-        }
-      ],
       memories_to_add: [],
       memories_to_update: [
         {
@@ -722,33 +669,6 @@ async function cleanEmptyMemories(
   return records.length;
 }
 
-async function queueImportantExcerptsForReview(
-  env: Env,
-  input: { namespace: string; dateLabel: string; excerpts: ImportantExcerpt[]; fallbackMessageIds: string[] }
-): Promise<number> {
-  let queued = 0;
-  const limit = readDreamExcerptLimit(env);
-
-  for (const excerpt of input.excerpts.slice(0, limit)) {
-    const quote = readString(excerpt.quote);
-    if (!quote) continue;
-    await createMemoryCandidate(env.DB, {
-      namespace: input.namespace,
-      type: "excerpt",
-      content: quote,
-      factKey: null,
-      importance: 0.72,
-      confidence: 0.72,
-      tags: uniqueStrings(["important-excerpt", input.dateLabel, ...(excerpt.tags ?? [])]),
-      sourceMessageIds: excerpt.source_message_ids?.length ? excerpt.source_message_ids : input.fallbackMessageIds,
-      source: "dream_excerpt"
-    });
-    queued += 1;
-  }
-
-  return queued;
-}
-
 async function recordDreamReviewProposal(
   env: Env,
   input: { namespace: string; dateLabel: string; digest: DailyDigestResult; messageIds: string[] }
@@ -769,8 +689,7 @@ async function recordDreamReviewProposal(
         summary: input.digest.summary ?? null,
         memories_to_add: input.digest.memories_to_add ?? [],
         memories_to_update: input.digest.memories_to_update ?? [],
-        memories_to_delete: input.digest.memories_to_delete ?? [],
-        important_excerpts: input.digest.important_excerpts ?? []
+        memories_to_delete: input.digest.memories_to_delete ?? []
       }),
       nowIso()
     )
@@ -891,16 +810,6 @@ export function buildDreamRoutingPlan(input: {
     });
   }
 
-  for (const excerpt of input.digest.important_excerpts ?? []) {
-    if (!readString(excerpt.quote)) continue;
-    items.push({
-      destination: "candidate",
-      kind: "excerpt",
-      content: excerpt.quote,
-      reason: excerpt.reason
-    });
-  }
-
   const toCandidates = items.filter((item) => item.destination === "candidate").length;
   return {
     items,
@@ -927,7 +836,6 @@ async function applyDreamV2(
   updated: number;
   deleted: number;
   queuedCandidates: number;
-  excerpts: number;
   longtail: number;
   errors: Array<{ target_id: string; reason: string }>;
 }> {
@@ -945,7 +853,7 @@ async function applyDreamV2(
       messageIds
     });
     await recordDreamReviewProposal(env, { namespace, dateLabel, digest, messageIds });
-    return { added: 0, updated: 0, deleted: 0, queuedCandidates, excerpts: 0, longtail: 0, errors: [] };
+    return { added: 0, updated: 0, deleted: 0, queuedCandidates, longtail: 0, errors: [] };
   }
 
   queuedCandidates += await queueDreamExtractedMemories(env, {
@@ -1050,14 +958,6 @@ async function applyDreamV2(
     }
   }
 
-  const excerpts = await queueImportantExcerptsForReview(env, {
-    namespace,
-    dateLabel,
-    excerpts: digest.important_excerpts ?? [],
-    fallbackMessageIds: messageIds
-  });
-  queuedCandidates += excerpts;
-
   await upsertDailyLog(env.DB, {
     namespace,
     date: dateLabel,
@@ -1065,7 +965,7 @@ async function applyDreamV2(
     summary: digest.summary ?? ""
   });
 
-  return { added: 0, updated, deleted, queuedCandidates, excerpts, longtail: 0, errors };
+  return { added: 0, updated, deleted, queuedCandidates, longtail: 0, errors };
 }
 
 const DREAM_CONTEXT_QUERY_MAX_MESSAGES = 20;
@@ -1287,7 +1187,6 @@ export async function runDailyMemoryDigest(
   }
   const cleanedEmptyMemories =
     dryRun || (v2Enabled && strategy === "review") ? 0 : await cleanEmptyMemories(env, namespace);
-  const excerptLimit = readDreamExcerptLimit(env);
   const fetchedHasMore = fetchedMessages.length >= maxMessages;
 
   let messages = fetchedMessages;
@@ -1300,7 +1199,6 @@ export async function runDailyMemoryDigest(
       endIso,
       messages,
       existingMemories,
-      excerptLimit,
       hasMore
     });
     modelResult = await callDigestModel(env, prompt, {
@@ -1424,7 +1322,6 @@ export async function runDailyMemoryDigest(
         updatedMemories: 0,
         deletedMemories: 0,
         queuedCandidates: routingPlan.summary.to_candidates,
-        savedExcerpts: 0,
         cleanedEmptyMemories,
         cursorAdvanced: false,
         hasMore
@@ -1490,7 +1387,6 @@ export async function runDailyMemoryDigest(
       updatedMemories: v2Result.updated,
       deletedMemories: v2Result.deleted,
       queuedCandidates: v2Result.queuedCandidates,
-      savedExcerpts: v2Result.excerpts,
       cleanedEmptyMemories,
       cursorAdvanced: true,
       hasMore,

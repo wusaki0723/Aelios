@@ -1240,10 +1240,14 @@ export async function handleWeeklyRollupAdmin(request: Request, env: Env): Promi
     return openAiError("Missing required scope: memory:write", 403);
   }
 
+  const url = new URL(request.url);
   const body = await readJsonObject(request);
   if (!body) return openAiError("Request body must be a JSON object", 400);
 
-  const namespace = readString(body.namespace) || auth.profile.namespace;
+  const namespace =
+    readString(url.searchParams.get("namespace")) ||
+    readString(body.namespace) ||
+    auth.profile.namespace;
   const dryRun = readBoolean(body.dry_run, false);
 
   try {

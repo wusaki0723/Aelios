@@ -1,9 +1,10 @@
 import {
+  bindDeleteDailyLogsInRangeStatement,
+  bindUpsertWeeklyLogStatement,
   deleteDailyLogsInRange,
   getWeeklyLog,
   listDailyLogDatesBefore,
-  listDailyLogsInRange,
-  upsertWeeklyLog
+  listDailyLogsInRange
 } from "../db/v2";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, OpenAIChatRequest, OpenAIChatResponse } from "../types";
@@ -52,7 +53,7 @@ type WeeklyRollupModelResult = {
 
 interface WeeklyRollupModelCallResult {
   result: WeeklyRollupModelResult;
-  reason?: "missing_model" | "model_error" | "model_invalid_json";
+  reason?: "model_error" | "model_invalid_json";
   model?: string;
   status?: number;
   finishReason?: string | null;
@@ -74,7 +75,7 @@ function isWeeklyRollupEnabled(env: Env): boolean {
   return true;
 }
 
-function readRollupModel(env: Env): string | null {
+function readRollupModel(env: Env): string {
   const raw = readString(env.DREAM_MODEL) || readString(env.DAILY_DIGEST_MODEL) || readString(env.SUMMARY_MODEL);
   return raw || DEFAULT_DREAM_MODEL;
 }
@@ -212,10 +213,6 @@ async function callWeeklyRollupModel(
   meta: { week: string; dayCount: number }
 ): Promise<WeeklyRollupModelCallResult> {
   const model = readRollupModel(env);
-  if (!model) {
-    console.error("weekly_rollup: missing model");
-    return { result: null, reason: "missing_model" };
-  }
 
   const request: OpenAIChatRequest = {
     model,
@@ -353,7 +350,26 @@ async function processWeek(
 
   const existingWeekly = await getWeeklyLog(env.DB, { namespace, week: weekRange.week });
   if (existingWeekly) {
-    return { ...baseDetail, status: "skipped", reason: "already_rolled_up" };
+    const leftoverDailyLogs = await listDailyLogsInRange(env.DB, {
+      namespace,
+      startDate: weekRange.monday,
+      endDate: weekRange.sunday
+    });
+    let deletedDays = 0;
+    if (!dryRun) {
+      deletedDays = await deleteDailyLogsInRange(env.DB, {
+        namespace,
+        startDate: weekRange.monday,
+        endDate: weekRange.sunday
+      });
+    }
+    return {
+      ...baseDetail,
+      status: "skipped",
+      reason: "already_rolled_up",
+      source_days: leftoverDailyLogs.length,
+      deleted_days: deletedDays
+    };
   }
 
   const dailyLogs = await listDailyLogsInRange(env.DB, {
@@ -396,7 +412,7 @@ async function processWeek(
   }
 
   try {
-    await upsertWeeklyLog(env.DB, {
+    const upsertStmt = bindUpsertWeeklyLogStatement(env.DB, {
       namespace,
       week: weekRange.week,
       startDate: weekRange.monday,
@@ -405,6 +421,12 @@ async function processWeek(
       summary: modelResult.result.summary,
       sourceDays: dailyLogs.length
     });
+    const deleteStmt = bindDeleteDailyLogsInRangeStatement(env.DB, {
+      namespace,
+      startDate: weekRange.monday,
+      endDate: weekRange.sunday
+    });
+    const [, deleteResult] = await env.DB.batch([upsertStmt, deleteStmt]);
 
     const saved = await getWeeklyLog(env.DB, { namespace, week: weekRange.week });
     if (!saved) {
@@ -416,11 +438,7 @@ async function processWeek(
       };
     }
 
-    const deletedDays = await deleteDailyLogsInRange(env.DB, {
-      namespace,
-      startDate: weekRange.monday,
-      endDate: weekRange.sunday
-    });
+    const deletedDays = deleteResult.meta?.changes ?? 0;
 
     return {
       ...baseDetail,

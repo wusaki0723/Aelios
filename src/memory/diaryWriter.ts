@@ -1,5 +1,5 @@
 import { listMessagesByNamespaceInRange } from "../db/messages";
-import { getDailyLog, upsertDailyLog } from "../db/v2";
+import { getDailyLog, getWeeklyLog, upsertDailyLog } from "../db/v2";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 import {
@@ -9,6 +9,7 @@ import {
   readDreamCursorValue,
   readDreamTimeZoneFromEnv
 } from "./dailyDigest";
+import { getIsoWeekLabelForDateLabel } from "./weeklyRollup";
 
 const DEFAULT_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";
 const MAX_MESSAGES = 200;
@@ -33,7 +34,7 @@ type DiaryWriterModelResult = {
 
 interface DiaryWriterModelCallResult {
   result: DiaryWriterModelResult;
-  reason?: "missing_model" | "model_error" | "model_invalid_json";
+  reason?: "model_error" | "model_invalid_json";
   model?: string;
   status?: number;
   finishReason?: string | null;
@@ -49,7 +50,7 @@ function isDiaryWriterEnabled(env: Env): boolean {
   return true;
 }
 
-function readDiaryModel(env: Env): string | null {
+function readDiaryModel(env: Env): string {
   const raw = readString(env.DIARY_MODEL) || readString(env.DREAM_MODEL) || readString(env.DAILY_DIGEST_MODEL);
   return raw || DEFAULT_DREAM_MODEL;
 }
@@ -218,10 +219,6 @@ async function callDiaryWriterModel(
   meta: { dateLabel: string; messageCount: number }
 ): Promise<DiaryWriterModelCallResult> {
   const model = readDiaryModel(env);
-  if (!model) {
-    console.error("diary_writer: missing model");
-    return { result: null, reason: "missing_model" };
-  }
 
   const request: OpenAIChatRequest = {
     model,
@@ -333,6 +330,12 @@ export async function runDiaryWriter(
   }
 
   const timeZone = readDreamTimeZoneFromEnv(env);
+  const week = getIsoWeekLabelForDateLabel(dateLabel, timeZone);
+  const existingWeekly = await getWeeklyLog(env.DB, { namespace, week });
+  if (existingWeekly) {
+    return { enabled: true, date: dateLabel, ran: false, reason: "week_already_rolled_up" };
+  }
+
   const { startIso, endIso } = getDateRangeForLabel(dateLabel, timeZone);
   const messages = await fetchDiaryMessages(env.DB, {
     namespace,

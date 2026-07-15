@@ -7,7 +7,7 @@
 - 我是人类，想部署使用 → 看 [人类版](#人类版)
 - 我是 AI 助手，想维护调试 → 看 [AI 版](#ai版维护交接)
 
-分支指路：`main` 是 v1 稳定版（部署完不用管）；`memory-v2` 是作者线上跑的 v2 记忆系统；本分支 `tg-bot` 在 v2 上叠了 Telegram bot 层。
+分支指路：`main` 与 memory-v2 内容同步，旧 v1 稳定版封存在 tag `v1-final`；`memory-v2` 是 v2 记忆系统开发分支；本分支 `tg-bot` 在 v2 上叠了 Telegram bot 层。
 
 ---
 
@@ -423,7 +423,9 @@ npm run vectorize:clean:llm
 
 ## License
 
-MIT
+AGPL-3.0
+
+可自由使用、修改本软件；但若你将修改后的版本对外提供网络服务，须以相同许可开源修改后的源码。
 
 ## 交流与反馈
 

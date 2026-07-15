@@ -1,4 +1,4 @@
-import { handleAdmin, handleWeeklyRollupAdmin } from "./api/admin";
+import { handleAdmin, handleDiaryAdmin, handleDiaryRewriteAdmin, handleWeeklyRollupAdmin } from "./api/admin";
 import { handleHealth } from "./api/health";
 import { handleCache } from "./api/cache";
 import { handleCacheHealth, handleVectorDoctor, handleVectorHealth, handleVectorReindex } from "./api/debug";
@@ -19,6 +19,7 @@ import {
 import { handleMcp } from "./api/mcp";
 import { handleModels } from "./api/models";
 import { runDailyMemoryDigest, runDreamBackfill } from "./memory/dailyDigest";
+import { runDiaryWriterNightly } from "./memory/diaryWriter";
 import { runWeeklyRollup } from "./memory/weeklyRollup";
 import { runGithubDailyPull } from "./memory/githubDaily";
 import { runMemoryRetention } from "./memory/retention";
@@ -67,6 +68,14 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/admin/weekly-rollup") {
       return handleWeeklyRollupAdmin(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/diary") {
+      return handleDiaryAdmin(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/diary-rewrite") {
+      return handleDiaryRewriteAdmin(request, env);
     }
 
     if (request.method === "GET" && url.pathname === "/health") {
@@ -202,6 +211,17 @@ export default {
 
         const dreamResults = await runDailyMemoryDigestBatches(env, namespace);
         results.push({ type: "dream_batches", results: dreamResults });
+
+        let diaryWriter: Awaited<ReturnType<typeof runDiaryWriterNightly>> | undefined;
+        try {
+          diaryWriter = await runDiaryWriterNightly(env, namespace);
+        } catch (error) {
+          console.error("scheduled diary writer failed", {
+            namespace,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+        results.push({ type: "diary_writer", result: diaryWriter ?? { ok: false } });
 
         const [retentionResult, githubResult] = await Promise.all([
           runMemoryRetention(env, namespace).then(

@@ -7,7 +7,7 @@
 - 我是人类，想部署使用 → 看 [人类版](#人类版)
 - 我是 AI 助手，想维护调试 → 看 [AI 版](#ai版维护交接)
 
-分支指路：`main` 与 memory-v2 内容同步，旧 v1 稳定版封存在 tag `v1-final`；`memory-v2` 是 v2 记忆系统开发分支；本分支 `tg-bot` 在 v2 上叠了 Telegram bot 层。
+分支指路：`main` 是唯一主线（原 memory-v2 已并入并退役）；旧 v1 稳定版封存在 tag `v1-final`；本分支 `tg-bot` 叠在 main 上，部署方式见本分支文档。
 
 ---
 

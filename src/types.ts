@@ -51,6 +51,9 @@ export interface Env {
   DREAM_TIME_ZONE?: string;
   // weekly_log rollup after dream; default on unless "false"
   ENABLE_WEEKLY_ROLLUP?: string;
+  // dedicated diary writer after dream; default on unless "false"
+  ENABLE_DIARY_WRITER?: string;
+  DIARY_MODEL?: string;
   DEDUP_COSINE?: string;
   // L4 每区（type）active 条数硬上限，0 或不设 = 关闭（母帖第一节，对抗膨胀的闸）
   MEMORY_ZONE_CAP?: string;

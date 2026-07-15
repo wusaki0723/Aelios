@@ -1165,6 +1165,24 @@ export async function listDailyLogsInRange(
   return result.results ?? [];
 }
 
+export async function listRecentDailyLogs(
+  db: D1Database,
+  input: { namespace: string; limit: number }
+): Promise<DailyLogRow[]> {
+  const limit = Math.min(Math.max(Math.floor(input.limit), 1), 100);
+  const result = await db
+    .prepare(
+      `SELECT namespace, date, title, summary, updated_at
+       FROM daily_log
+       WHERE namespace = ?
+       ORDER BY date DESC
+       LIMIT ?`
+    )
+    .bind(input.namespace, limit)
+    .all<DailyLogRow>();
+  return result.results ?? [];
+}
+
 export async function listDailyLogDatesBefore(
   db: D1Database,
   input: { namespace: string; beforeDate: string }
@@ -1191,6 +1209,24 @@ export interface WeeklyLogRow {
   summary: string;
   source_days: number;
   updated_at: string;
+}
+
+export async function listRecentWeeklyLogs(
+  db: D1Database,
+  input: { namespace: string; limit: number }
+): Promise<WeeklyLogRow[]> {
+  const limit = Math.min(Math.max(Math.floor(input.limit), 1), 100);
+  const result = await db
+    .prepare(
+      `SELECT namespace, week, start_date, end_date, title, summary, source_days, updated_at
+       FROM weekly_log
+       WHERE namespace = ?
+       ORDER BY week DESC
+       LIMIT ?`
+    )
+    .bind(input.namespace, limit)
+    .all<WeeklyLogRow>();
+  return result.results ?? [];
 }
 
 export async function getWeeklyLog(

@@ -308,7 +308,7 @@ function zonedWallTimeToUtc(input: {
   return new Date(utc);
 }
 
-function addDaysToDateLabel(dateLabel: string, days: number, timeZone: string): string {
+export function addDaysToDateLabel(dateLabel: string, days: number, timeZone: string): string {
   const { year, month, day } = parseDateLabel(dateLabel);
   const localNoonUtc = zonedWallTimeToUtc({
     year,

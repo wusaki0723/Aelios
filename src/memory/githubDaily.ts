@@ -1,7 +1,7 @@
 import { getOrCreateConversation } from "../db/conversations";
 import { saveIngestMessages } from "../db/messages";
 import { readCursor, writeCursor } from "../db/retention";
-import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
+
 import type { Env, OpenAIChatMessage } from "../types";
 
 // Client pushes daily archives in UTC+8 (Singapore/China). Hardcoded offset
@@ -180,16 +180,6 @@ async function ingestParsedEntries(
     source: INGEST_SOURCE,
     messages
   });
-
-  if (ids.length > 0) {
-    await enqueueMemoryMaintenanceIfNeeded(env, {
-      namespace: input.namespace,
-      conversationId: conversation.id,
-      fromMessageId: ids[0],
-      toMessageId: ids[ids.length - 1],
-      source: INGEST_SOURCE
-    });
-  }
 
   return ids.length;
 }

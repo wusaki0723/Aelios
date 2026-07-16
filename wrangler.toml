@@ -55,6 +55,8 @@ MEMORY_RERANKER_MODEL = "workers-ai/@cf/baai/bge-reranker-base"
 VECTORIZE_INDEX_NAME = "memo-kb"
 EMBEDDING_MODEL = "workers-ai/@cf/baai/bge-m3"
 EMBEDDING_DIMENSIONS = "1024"
+# messages 表保留天数；后台 retention 按 namespace 24h 节流清理。
+MESSAGES_RETENTION_DAYS = "7"
 DREAM_TIME_ZONE = "Asia/Singapore"
 DREAM_MAX_MESSAGES = "40"
 DREAM_MEMORY_CONTEXT_LIMIT = "40"

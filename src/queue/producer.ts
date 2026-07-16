@@ -1,7 +1,5 @@
 import type { Env, QueueMessage } from "../types";
-import { newId } from "../utils/ids";
 import { handleQueueMessage } from "./consumer";
-import { isV2Enabled } from "../memory/v2/recall";
 
 /**
  * Send a queue message. Uses real Cloudflare Queue when MEMORY_QUEUE binding
@@ -13,34 +11,6 @@ async function sendQueueMessage(env: Env, message: QueueMessage): Promise<void> 
   } else {
     await handleQueueMessage(message, env);
   }
-}
-
-export async function enqueueMemoryMaintenanceIfNeeded(
-  env: Env,
-  input: {
-    namespace: string;
-    conversationId: string;
-    fromMessageId?: string;
-    toMessageId: string;
-    source: string;
-  }
-): Promise<void> {
-  if (env.ENABLE_AUTO_MEMORY === "false") return;
-  if (isV2Enabled(env)) return;
-  if ((env.MEMORY_MODE || "external") === "none") return;
-  if (!input.fromMessageId) return;
-
-  const message: QueueMessage = {
-    type: "memory_maintenance",
-    namespace: input.namespace,
-    conversationId: input.conversationId,
-    fromMessageId: input.fromMessageId,
-    toMessageId: input.toMessageId,
-    source: input.source,
-    idempotencyKey: newId("idem")
-  };
-
-  await sendQueueMessage(env, message);
 }
 
 export async function enqueueRetentionIfNeeded(

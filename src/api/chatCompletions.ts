@@ -10,8 +10,9 @@ import {
 } from "../memory/inject";
 import { searchMemories } from "../memory/search";
 import { assemble } from "../assembler/assemble";
-import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../queue/producer";
-import { buildBootPackage, isV2Enabled, runRecall } from "../memory/v2/recall";
+import { enqueueRetentionIfNeeded } from "../queue/producer";
+import { listPrecious } from "../db/v2";
+import { buildBootPackage, buildCoreFingerprint, isV2Enabled, runRecall } from "../memory/v2/recall";
 import {
   buildAnthropicNativeRequest,
   buildAnthropicRequestFromAssembled,
@@ -113,14 +114,14 @@ export async function handleChatCompletions(
   const namespace = auth.profile.namespace;
   const lastUserText = extractLastUserText(body.messages);
 
-  // 故意不传 core_fingerprint：recall 会走 buildCoreFingerprintFromDb 兜底（与 boot 同源 precious 表），
-  // 多一次小查询换 boot 延迟被 recall 遮住，净赚。
   let boot: Awaited<ReturnType<typeof buildBootPackage>> | null = null;
   let recallResult: Awaited<ReturnType<typeof runRecall>> | null = null;
   if (isV2Enabled(env)) {
+    const preciousRows = await listPrecious(env.DB, { namespace, limit: 50 });
+    const coreFingerprint = buildCoreFingerprint(preciousRows.map((r) => r.content));
     [boot, recallResult] = await Promise.all([
-      buildBootPackage(env, { namespace }),
-      runRecall(env, { namespace, query: lastUserText })
+      buildBootPackage(env, { namespace, preciousRows }),
+      runRecall(env, { namespace, query: lastUserText, core_fingerprint: coreFingerprint })
     ]);
   }
   const recallHitsAsMemories = recallResult
@@ -303,13 +304,6 @@ export async function handleChatCompletions(
           clientSystemHash,
           cacheAnchorBlock
         }),
-        enqueueMemoryMaintenanceIfNeeded(env, {
-          namespace: auth.profile.namespace,
-          conversationId: conversation.id,
-          fromMessageId: latestUserMessageId,
-          toMessageId: assistantMessageId,
-          source: auth.profile.source
-        }),
         enqueueRetentionIfNeeded(env, auth.profile.namespace)
       ])
     );
@@ -358,13 +352,6 @@ export async function handleChatCompletions(
         usage: parsed.usage,
         clientSystemHash,
         cacheAnchorBlock
-      }),
-      enqueueMemoryMaintenanceIfNeeded(env, {
-        namespace: auth.profile.namespace,
-        conversationId: conversation.id,
-        fromMessageId: latestUserMessageId,
-        toMessageId: assistantMessageId,
-        source: auth.profile.source
       }),
       enqueueRetentionIfNeeded(env, auth.profile.namespace)
     ])

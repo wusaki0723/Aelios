@@ -116,7 +116,7 @@ assert.match(indexSource, /handleDiaryApi\(request, env\)/);
 assert.doesNotMatch(indexSource, /runMemoryExtractionBatches/);
 assert.match(indexSource, /url\.pathname\.startsWith\("\/v1\/longtail\/"\)/);
 assert.match(indexSource, /handleLongtailApi\(request, env\)/);
-assert.match(queueProducerSource, /if \(isV2Enabled\(env\)\) return;/);
+assert.doesNotMatch(queueProducerSource, /enqueueMemoryMaintenanceIfNeeded/);
 assert.match(dreamExtractSource, /const DEFAULT_WORKERS_AI_DREAM_MODEL = "workers-ai\/@cf\/openai\/gpt-oss-120b"/);
 assert.match(dreamExtractSource, /export function buildDreamExtractPrompt/);
 assert.match(dreamExtractSource, /export async function extractDreamMemoriesFromMessages/);

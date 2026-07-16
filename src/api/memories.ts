@@ -34,7 +34,7 @@ import {
   upsertMemoryByFactKey
 } from "../db/v2";
 import { isV2Enabled, runRecall } from "../memory/v2/recall";
-import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
+
 import type { Env, KeyProfile, MemoryApiRecord } from "../types";
 import { json, openAiError } from "../utils/json";
 import {
@@ -348,18 +348,6 @@ async function handleIngestMemories(
     source,
     messages
   });
-
-  if (body.auto_extract !== false && ids.length > 0) {
-    ctx.waitUntil(
-      enqueueMemoryMaintenanceIfNeeded(env, {
-        namespace,
-        conversationId: conversation.id,
-        fromMessageId: ids[0],
-        toMessageId: ids[ids.length - 1],
-        source
-      })
-    );
-  }
 
   return json({
     data: {

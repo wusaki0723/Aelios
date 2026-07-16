@@ -11,12 +11,15 @@ import {
   RETENTION_BATCH_SIZE,
 } from "../db/retention";
 import type { Env } from "../types";
+import { readPositiveInt } from "../utils/request";
 
 // ---------------------------------------------------------------------------
-// Default retention windows (hardcoded, not user-configurable)
+// Retention windows — messages via MESSAGES_RETENTION_DAYS; rest hardcoded
 // ---------------------------------------------------------------------------
 
-const MESSAGES_RETENTION_DAYS = 3;
+function messagesRetentionDays(env: Env): number {
+  return readPositiveInt(env.MESSAGES_RETENTION_DAYS, 7, 365);
+}
 const USAGE_LOGS_RETENTION_DAYS = 30;
 const MEMORY_EVENTS_RETENTION_DAYS = 30;
 const IDEMPOTENCY_KEYS_RETENTION_DAYS = 7;
@@ -77,7 +80,7 @@ export async function runMemoryRetention(
   const stats: Record<string, number> = {};
 
   // 1. Delete old messages
-  stats.messages = await deleteOldMessages(env.DB, namespace, daysAgo(MESSAGES_RETENTION_DAYS));
+  stats.messages = await deleteOldMessages(env.DB, namespace, daysAgo(messagesRetentionDays(env)));
 
   // 2. Delete old usage_logs
   stats.usageLogs = await deleteOldUsageLogs(env.DB, namespace, daysAgo(USAGE_LOGS_RETENTION_DAYS));

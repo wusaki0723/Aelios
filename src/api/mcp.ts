@@ -27,7 +27,7 @@ import {
   listVectorMemories,
   searchVectorMemories
 } from "../memory/vectorStore";
-import { enqueueMemoryMaintenanceIfNeeded } from "../queue/producer";
+
 import type { Env, KeyProfile, Scope } from "../types";
 import { json } from "../utils/json";
 import {
@@ -505,18 +505,6 @@ async function callTool(
       source,
       messages
     });
-
-    if (args.auto_extract !== false && ids.length > 0) {
-      ctx.waitUntil(
-        enqueueMemoryMaintenanceIfNeeded(env, {
-          namespace,
-          conversationId: conversation.id,
-          fromMessageId: ids[0],
-          toMessageId: ids[ids.length - 1],
-          source
-        })
-      );
-    }
 
     return textToolResult({
       data: {

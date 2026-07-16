@@ -2839,7 +2839,7 @@ check("history rules only include strip_thinking", () => {
 // src/memory/retention.ts logic exactly.
 // ---------------------------------------------------------------------------
 
-const MESSAGES_RETENTION_DAYS = 3;
+const MESSAGES_RETENTION_DAYS = 7;
 const USAGE_LOGS_RETENTION_DAYS = 30;
 const MEMORY_EVENTS_RETENTION_DAYS = 30;
 const IDEMPOTENCY_KEYS_RETENTION_DAYS = 7;
@@ -2891,13 +2891,13 @@ function simulateThrottle(lastRun, now) {
 
 console.log("\n--- Test 15: D1 Lifecycle Retention ---");
 
-check("messages older than 3 days are deleted", () => {
+check("messages older than 7 days are deleted", () => {
   const cutoff = daysAgo(MESSAGES_RETENTION_DAYS);
-  const old = new Date(Date.now() - 4 * 86_400_000).toISOString();
-  const recent = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  const old = new Date(Date.now() - 8 * 86_400_000).toISOString();
+  const recent = new Date(Date.now() - 5 * 86_400_000).toISOString();
   // In the real DB: DELETE FROM messages WHERE namespace = ? AND created_at < cutoff
-  assert.ok(old < cutoff, "4-day-old message should be before cutoff");
-  assert.ok(recent > cutoff, "2-day-old message should be after cutoff");
+  assert.ok(old < cutoff, "8-day-old message should be before cutoff");
+  assert.ok(recent > cutoff, "5-day-old message should be after cutoff");
 });
 
 check("usage_logs older than 30 days are deleted", () => {
@@ -3078,7 +3078,7 @@ check("retention throttle: exactly 24h boundary should proceed", () => {
 });
 
 check("retention constants are correct", () => {
-  assert.strictEqual(MESSAGES_RETENTION_DAYS, 3);
+  assert.strictEqual(MESSAGES_RETENTION_DAYS, 7);
   assert.strictEqual(USAGE_LOGS_RETENTION_DAYS, 30);
   assert.strictEqual(MEMORY_EVENTS_RETENTION_DAYS, 30);
   assert.strictEqual(IDEMPOTENCY_KEYS_RETENTION_DAYS, 7);
@@ -3519,25 +3519,6 @@ check("queue: MEMORY_QUEUE absent → fallback to handleQueueMessage", () => {
   assert.strictEqual(hasQueue, false);
 });
 
-check("queue: memory_maintenance message shape is unchanged", () => {
-  const message = {
-    type: "memory_maintenance",
-    namespace: "default",
-    conversationId: "conv_1",
-    fromMessageId: "msg_1",
-    toMessageId: "msg_2",
-    source: "chatbox",
-    idempotencyKey: "idem_abc",
-  };
-  assert.strictEqual(message.type, "memory_maintenance");
-  assert.ok(typeof message.namespace === "string");
-  assert.ok(typeof message.conversationId === "string");
-  assert.ok(typeof message.fromMessageId === "string");
-  assert.ok(typeof message.toMessageId === "string");
-  assert.ok(typeof message.source === "string");
-  assert.ok(typeof message.idempotencyKey === "string");
-});
-
 check("queue: retention message shape is unchanged", () => {
   const message = {
     type: "retention",
@@ -3545,15 +3526,6 @@ check("queue: retention message shape is unchanged", () => {
   };
   assert.strictEqual(message.type, "retention");
   assert.ok(typeof message.namespace === "string");
-});
-
-check("queue: consumer handles memory_maintenance via runMemoryMaintenance only", () => {
-  // Contract: handleQueueMessage for memory_maintenance calls runMemoryMaintenance
-  // and nothing else (the long-term summary step has been removed).
-  // This is verified by reading the source; here we document the contract.
-  const executionOrder = ["runMemoryMaintenance"];
-  assert.strictEqual(executionOrder.length, 1);
-  assert.strictEqual(executionOrder[0], "runMemoryMaintenance");
 });
 
 check("queue: consumer handles retention without summary", () => {

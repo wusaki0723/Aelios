@@ -422,42 +422,6 @@ export async function deleteVectorMemory(env: Env, id: string): Promise<boolean>
     await markMemoryRecordDeleted(env, { namespace: existing.namespace, id: existing.id, updatedAt: nowIso() });
   }
 
-  if (existing?.vector_id) {
-    const vector = await createEmbedding(env, existing.content);
-    if (vector) {
-      const updatedAt = nowIso();
-      try {
-        await requireVectorize(env).upsert([
-          {
-            id: existing.vector_id,
-            namespace: existing.namespace,
-            values: vector,
-            metadata: toMetadata({
-              namespace: existing.namespace,
-              type: existing.type,
-              content: existing.content,
-              summary: existing.summary ?? null,
-              importance: existing.importance,
-              confidence: existing.confidence,
-              pinned: existing.pinned,
-              tags: existing.tags,
-              source: existing.source ?? null,
-              sourceMessageIds: existing.source_message_ids,
-              expiresAt: existing.expires_at ?? null,
-              id: existing.id,
-              vectorId: existing.vector_id,
-              createdAt: existing.created_at,
-              updatedAt,
-              status: "deleted"
-            })
-          }
-        ]);
-      } catch (error) {
-        console.error("memory vector tombstone upsert failed after D1 delete", { id: existing.id, error });
-      }
-    }
-  }
-
   if (vectorIds.length > 0) {
     try {
       await requireVectorize(env).deleteByIds(vectorIds);

@@ -13,6 +13,7 @@
 import {
   getDailyLog,
   listPrecious,
+  type PreciousRow,
   listGlossary,
   listRecentMonthlyLogs,
   listRecentWeeklyLogs,
@@ -155,7 +156,7 @@ const BOOT_SCHEMA_VERSION = "v3-1";
 
 export async function buildBootPackage(
   env: Env,
-  input: { namespace: string }
+  input: { namespace: string; preciousRows?: PreciousRow[] }
 ): Promise<BootPackage> {
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const bootTimeZone = env.DREAM_TIME_ZONE || "Asia/Shanghai";
@@ -165,7 +166,9 @@ export async function buildBootPackage(
   }).format(yesterday);
 
   const [preciousRows, allGlossary, dailyLog, weeklyRows, monthlyRows, spontaneous] = await Promise.all([
-    listPrecious(env.DB, { namespace: input.namespace, limit: 20 }),
+    input.preciousRows
+      ? Promise.resolve(input.preciousRows)
+      : listPrecious(env.DB, { namespace: input.namespace, limit: 20 }),
     listAllGlossary(env, input.namespace),
     getDailyLog(env.DB, { namespace: input.namespace, date: yesterdayLabel }),
     listRecentWeeklyLogs(env.DB, { namespace: input.namespace, limit: 1 }),
@@ -176,8 +179,9 @@ export async function buildBootPackage(
     })
   ]);
 
-  // 确定性排序: precious 按 created_at 升序 (老的在前，稳定的在前)。
+  // 确定性排序: 先取最新 20 条 (listPrecious DESC)，再按 created_at 升序展示 (老的在前，稳定的在前)。
   const precious = preciousRows
+    .slice(0, 20)
     .map((r) => ({ id: r.id, content: r.content, created_at: r.created_at }))
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
 

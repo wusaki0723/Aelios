@@ -1,6 +1,6 @@
 import { saveAssistantMessage } from "../db/messages";
 import { saveUsageLog } from "../db/usageLogs";
-import { enqueueMemoryMaintenanceIfNeeded, enqueueRetentionIfNeeded } from "../queue/producer";
+import { enqueueRetentionIfNeeded } from "../queue/producer";
 import {
   createThinkingFilterState,
   flushStreamFilter,
@@ -136,14 +136,6 @@ async function persistStreamResult(options: StreamOpenAIOptions, state: StreamSt
     usage: state.usage,
     clientSystemHash: options.clientSystemHash ?? null,
     cacheAnchorBlock: options.cacheAnchorBlock ?? null
-  });
-
-  await enqueueMemoryMaintenanceIfNeeded(options.env, {
-    namespace: options.profile.namespace,
-    conversationId: options.conversationId,
-    fromMessageId: options.fromMessageId,
-    toMessageId: messageId,
-    source: options.profile.source
   });
 
   await enqueueRetentionIfNeeded(options.env, options.profile.namespace);

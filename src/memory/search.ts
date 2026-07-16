@@ -1,5 +1,8 @@
-import { fetchMemoriesByIds, markMemoriesRecalled, searchMemoriesByText } from "../db/memories";
-import { fetchMemoryLifecycleRows } from "../db/v2";
+import {
+  fetchMemoriesWithLifecycleByIds,
+  markMemoriesRecalled,
+  searchMemoriesByText
+} from "../db/memories";
 import type { Env, MemoryApiRecord, MemoryLifecycleRow, MemoryRecord } from "../types";
 import { createEmbedding } from "./embedding";
 
@@ -253,6 +256,7 @@ async function queryVectorize(
 
 interface VectorizeSearchOutcome {
   records: Array<MemoryRecord & { score: number; backed: boolean }>;
+  lifecycleByMemoryId: Map<string, MemoryLifecycleRow | null>;
   // 严格模式下因没有 D1 背书被整批丢弃的孤儿向量命中数 (未开严格模式恒为 0)
   unbackedDropped: number;
 }
@@ -305,10 +309,14 @@ async function searchWithVectorize(
     if (legacy) legacyRecords.push(legacy);
   }
 
-  const allRecords = await fetchMemoriesByIds(env.DB, {
+  const memoryRows = await fetchMemoriesWithLifecycleByIds(env.DB, {
     namespace: input.namespace,
     ids: [...scoredIds.keys()]
   });
+  const lifecycleByMemoryId = new Map(
+    memoryRows.map(({ record, lifecycle }) => [record.id, lifecycle])
+  );
+  const allRecords = memoryRows.map(({ record }) => record);
 
   // Only return recallable memories — expired/deleted/superseded (status or version_status) must not be injected
   // includeHistory: allow version_status=superseded rows when caller opts in (LMC-5 additive).
@@ -348,7 +356,7 @@ async function searchWithVectorize(
     (a, b) => b.score + b.importance * 0.05 - (a.score + a.importance * 0.05)
   ).slice(0, input.topK);
 
-  return { records, unbackedDropped };
+  return { records, lifecycleByMemoryId, unbackedDropped };
 }
 
 // searchMemories 的完整版本: 额外带 provenance 计数 (unbacked_count / unbacked_dropped)，
@@ -367,6 +375,7 @@ export async function searchMemoriesWithProvenance(
   });
 
   let records: Array<MemoryRecord & { score: number; backed: boolean }>;
+  let lifecycleByMemoryId = new Map<string, MemoryLifecycleRow | null>();
   let unbackedDropped = 0;
 
   if (vectorOutcome) {
@@ -375,6 +384,7 @@ export async function searchMemoriesWithProvenance(
 
   if (vectorOutcome && vectorOutcome.records.length > 0) {
     records = vectorOutcome.records;
+    lifecycleByMemoryId = vectorOutcome.lifecycleByMemoryId;
   } else {
     // D1 全文兜底: 结果本来就来自 memories 表, 天然全部有 D1 背书。
     const textRecords = await searchMemoriesByText(env.DB, {
@@ -387,16 +397,17 @@ export async function searchMemoriesWithProvenance(
     records = textRecords
       .filter((record) => isRecallableMemory(record, { includeHistory: input.includeHistory }))
       .map((record) => ({ ...record, backed: true }));
+    const joined = await fetchMemoriesWithLifecycleByIds(env.DB, {
+      namespace: input.namespace,
+      ids: records.map((record) => record.id)
+    });
+    lifecycleByMemoryId = new Map(joined.map(({ record, lifecycle }) => [record.id, lifecycle]));
   }
 
   await markMemoriesRecalled(env.DB, {
     namespace: input.namespace,
     ids: records.map((record) => record.id)
   });
-
-  // v2: 批量查侧车行，合并 last_injected_at (闸三降权) 等 v2 字段。
-  const lifecycleRows = await fetchMemoryLifecycleRows(env.DB, records.map((r) => r.id));
-  const lifecycleByMemoryId = new Map(lifecycleRows.map((lc) => [lc.memory_id, lc]));
 
   const apiRecords: MemoryApiRecordWithProvenance[] = records.map((record) => ({
     ...toMemoryApiRecord(record, record.score, lifecycleByMemoryId.get(record.id) ?? null),

@@ -349,30 +349,23 @@ export async function matchGlossary(
   const query = input.query.trim();
   if (!query) return [];
 
-  const all = await listGlossary(db, { namespace: input.namespace });
-  const lowered = query.toLowerCase();
-  const hits: GlossaryRow[] = [];
-
-  for (const row of all) {
-    const termLower = row.term.toLowerCase();
-    if (termLower.length >= 2 && lowered.includes(termLower)) {
-      hits.push(row);
-      continue;
-    }
-
-    let aliases: string[] = [];
-    try {
-      const parsed = JSON.parse(row.aliases ?? "[]") as unknown;
-      if (Array.isArray(parsed)) aliases = parsed.filter((x): x is string => typeof x === "string");
-    } catch {
-      aliases = [];
-    }
-    if (aliases.some((a) => a.length >= 2 && lowered.includes(a.toLowerCase()))) {
-      hits.push(row);
-    }
-  }
-
-  return hits;
+  const result = await db
+    .prepare(
+      `SELECT * FROM glossary
+       WHERE namespace = ?1 AND status = 'active'
+         AND (
+           (length(term) >= 2 AND instr(lower(?2), lower(term)) > 0)
+           OR EXISTS (
+             SELECT 1 FROM json_each(COALESCE(aliases, '[]'))
+             WHERE length(json_each.value) >= 2
+               AND instr(lower(?2), lower(json_each.value)) > 0
+           )
+         )
+       ORDER BY term`
+    )
+    .bind(input.namespace, query)
+    .all<GlossaryRow>();
+  return result.results ?? [];
 }
 
 // =====================================================================

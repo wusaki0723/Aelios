@@ -19,8 +19,7 @@ import {
   listRecentWeeklyLogs,
   fetchLongtailByIds,
   matchGlossary,
-  markMemoriesInjected,
-  markPreciousInjected
+  markMemoriesInjected
 } from "../../db/v2";
 import { searchMemoriesWithProvenance } from "../search";
 import type { MemoryApiRecordWithProvenance } from "../search";
@@ -154,10 +153,19 @@ export interface BootPackage {
 
 const BOOT_SCHEMA_VERSION = "v3-1";
 
+// Worker isolates make this best-effort: each isolate has its own map, no cross-isolate sharing.
+const BOOT_CACHE_TTL_MS = 60_000;
+const bootPackageCache = new Map<string, { expiresAt: number; value: BootPackage }>();
+
 export async function buildBootPackage(
   env: Env,
   input: { namespace: string; preciousRows?: PreciousRow[] }
 ): Promise<BootPackage> {
+  const cached = bootPackageCache.get(input.namespace);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const bootTimeZone = env.DREAM_TIME_ZONE || "Asia/Shanghai";
   const yesterdayLabel = new Intl.DateTimeFormat("en-CA", {
@@ -185,15 +193,8 @@ export async function buildBootPackage(
     .map((r) => ({ id: r.id, content: r.content, created_at: r.created_at }))
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
 
-  // 闸三对 precious 也记账: boot 被调 = precious 被注入, 记 last_injected_at。
-  // 防的是某条 precious 因太相关而被 recall 侧逻辑反复塞 (虽然闸一已把 precious 移出
-  // recall 池, 但 boot 每次冷启动都调, 记账让 precious 的注入节奏也可观测、可衰减)。
-  if (precious.length > 0) {
-    await markPreciousInjected(env.DB, {
-      namespace: input.namespace,
-      ids: precious.map((p) => p.id)
-    });
-  }
+  // Injection accounting (markPreciousInjected) is the caller's responsibility so it
+  // stays off the response path via waitUntil / fire-and-forget and is not cached.
 
   const impressionMaxChars = (() => {
     const raw = env.IMPRESSION_LADDER_MAX_CHARS;
@@ -205,7 +206,7 @@ export async function buildBootPackage(
   const weekly = weeklyRows[0] ?? null;
   const monthly = monthlyRows[0] ?? null;
 
-  return {
+  const pkg: BootPackage = {
     impressions: {
       daily: dailyLog
         ? { label: dailyLog.date, title: dailyLog.title, summary: dailyLog.summary }
@@ -224,6 +225,12 @@ export async function buildBootPackage(
     schema_version: BOOT_SCHEMA_VERSION,
     cache_prefix_end: true
   };
+
+  bootPackageCache.set(input.namespace, {
+    expiresAt: Date.now() + BOOT_CACHE_TTL_MS,
+    value: pkg
+  });
+  return pkg;
 }
 
 // 服务端自建核心层指纹: 读 precious, 供闸二在调用方没传指纹时用。
@@ -270,6 +277,8 @@ export interface RecallInput {
   core_fingerprint?: CoreFingerprint;
   // LMC-5 additive: when true, allow version_status=superseded hits (history). Default false.
   include_history?: boolean;
+  // When set (chat hot path), injection accounting is scheduled off the response path.
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 export interface RecallHit {
@@ -340,7 +349,8 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
     query,
     types: input.types,
     topK: k,
-    includeHistory: input.include_history === true
+    includeHistory: input.include_history === true,
+    waitUntil: input.waitUntil
   });
   const rawMemories: MemoryApiRecordWithProvenance[] = searchResult.records;
   // 严格模式下 (RECALL_REQUIRE_D1_BACKING=true) 已经在 search 层丢弃的孤儿向量命中数。
@@ -375,17 +385,21 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
   //    调用方传 core_fingerprint (boot 包的 precious 文本指纹)；
   //    不传则服务端自己建 (读 precious), 保证闸二默认生效。
   //    recall 命中与之高度重叠的降到 0 分剔除, 不重复喂。
+  //    buildCoreFingerprint always returns an object — always filter when we have hits.
+  //    Skip the DB fingerprint fallback when scored is empty (nothing to dedupe).
   const dedupedIds: string[] = [];
-  const core = input.core_fingerprint ?? (await buildCoreFingerprintFromDb(env, input.namespace));
-  const afterDedup = core
-    ? scored.filter((h) => {
-        if (isDuplicateWithCore(h.content, core)) {
-          dedupedIds.push(h.id);
-          return false;
-        }
-        return true;
-      })
-    : scored;
+  let afterDedup = scored;
+  if (scored.length > 0) {
+    const core =
+      input.core_fingerprint ?? (await buildCoreFingerprintFromDb(env, input.namespace));
+    afterDedup = scored.filter((h) => {
+      if (isDuplicateWithCore(h.content, core)) {
+        dedupedIds.push(h.id);
+        return false;
+      }
+      return true;
+    });
+  }
 
   // 4.5 LMC-5 Y 轴: 2-hop relation expansion (default off = seed set unchanged).
   // Runs after gate-2 dedup so expanded neighbors are also core-deduped next? We expand
@@ -429,10 +443,15 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
     .filter((h) => h.source_layer === "memory")
     .map((h) => h.id);
   if (memoryIdsToMark.length > 0) {
-    await markMemoriesInjected(env.DB, {
+    const markPromise = markMemoriesInjected(env.DB, {
       namespace: input.namespace,
       ids: memoryIdsToMark
     });
+    if (input.waitUntil) {
+      input.waitUntil(markPromise);
+    } else {
+      await markPromise;
+    }
   }
 
   return {

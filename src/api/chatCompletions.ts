@@ -11,7 +11,7 @@ import {
 import { searchMemories } from "../memory/search";
 import { assemble } from "../assembler/assemble";
 import { enqueueRetentionIfNeeded } from "../queue/producer";
-import { listPrecious } from "../db/v2";
+import { listPrecious, markPreciousInjected } from "../db/v2";
 import { buildBootPackage, buildCoreFingerprint, isV2Enabled, runRecall } from "../memory/v2/recall";
 import {
   buildAnthropicNativeRequest,
@@ -58,6 +58,47 @@ export function hasToolRound(body: OpenAIChatRequest): boolean {
   return hasTools(body) || hasToolContent(body);
 }
 
+function recallHitToMemoryRecord(
+  h: {
+    id: string;
+    type: string;
+    content: string;
+    score: number;
+    source_layer: string;
+  },
+  namespace: string
+) {
+  return {
+    id: h.id,
+    namespace,
+    type: h.type,
+    content: h.content,
+    summary: null,
+    importance: h.score,
+    confidence: 1,
+    status: "active",
+    pinned: false,
+    tags: [] as string[],
+    source: h.source_layer,
+    source_message_ids: [] as string[],
+    vector_id: null,
+    last_recalled_at: null,
+    recall_count: 0,
+    created_at: "",
+    updated_at: "",
+    expires_at: null,
+    fact_key: null,
+    supersedes_id: null,
+    superseded_by_id: null,
+    review_reason: null,
+    valid_as_of: null,
+    last_seen_at: null,
+    seen_count: 0,
+    last_injected_at: null,
+    score: h.score,
+  };
+}
+
 export async function handleChatCompletions(
   request: Request,
   env: Env,
@@ -95,65 +136,66 @@ export async function handleChatCompletions(
 
   const provider = classifyProvider(targetModel);
 
-  const conversation = await getOrCreateConversation(env.DB, {
-    namespace: auth.profile.namespace
-  });
-
-  const savedUserMessageIds = await saveUserMessages(env.DB, {
-    conversationId: conversation.id,
-    namespace: auth.profile.namespace,
-    source: auth.profile.source,
-    messages: body.messages,
-    requestModel: body.model,
-    upstreamModel: targetModel,
-    upstreamProvider: provider,
-    stream: Boolean(body.stream)
-  });
-  const latestUserMessageId = savedUserMessageIds[savedUserMessageIds.length - 1];
-
   const namespace = auth.profile.namespace;
   const lastUserText = extractLastUserText(body.messages);
 
-  let boot: Awaited<ReturnType<typeof buildBootPackage>> | null = null;
-  let recallResult: Awaited<ReturnType<typeof runRecall>> | null = null;
-  if (isV2Enabled(env)) {
-    const preciousRows = await listPrecious(env.DB, { namespace, limit: 50 });
-    const coreFingerprint = buildCoreFingerprint(preciousRows.map((r) => r.content));
-    [boot, recallResult] = await Promise.all([
-      buildBootPackage(env, { namespace, preciousRows }),
-      runRecall(env, { namespace, query: lastUserText, core_fingerprint: coreFingerprint })
-    ]);
-  }
-  const recallHitsAsMemories = recallResult
-    ? recallResult.hits.map((h) => ({
-        id: h.id,
+  // Two independent pre-upstream chains under one Promise.all:
+  // A: conversation + save user messages (serial inside chain — save needs conversation.id)
+  // B: precious → fingerprint → Promise.all(boot, recall) when v2 is enabled
+  const [chainA, chainB] = await Promise.all([
+    (async () => {
+      const conversation = await getOrCreateConversation(env.DB, { namespace });
+      const savedUserMessageIds = await saveUserMessages(env.DB, {
+        conversationId: conversation.id,
         namespace,
-        type: h.type,
-        content: h.content,
-        summary: null,
-        importance: h.score,
-        confidence: 1,
-        status: "active",
-        pinned: false,
-        tags: [],
-        source: h.source_layer,
-        source_message_ids: [],
-        vector_id: null,
-        last_recalled_at: null,
-        recall_count: 0,
-        created_at: "",
-        updated_at: "",
-        expires_at: null,
-        fact_key: null,
-        supersedes_id: null,
-        superseded_by_id: null,
-        review_reason: null,
-        valid_as_of: null,
-        last_seen_at: null,
-        seen_count: 0,
-        last_injected_at: null,
-        score: h.score,
-      }))
+        source: auth.profile.source,
+        messages: body.messages,
+        requestModel: body.model,
+        upstreamModel: targetModel,
+        upstreamProvider: provider,
+        stream: Boolean(body.stream)
+      });
+      return { conversation, savedUserMessageIds };
+    })(),
+    (async () => {
+      if (!isV2Enabled(env)) {
+        return {
+          boot: null as Awaited<ReturnType<typeof buildBootPackage>> | null,
+          recallResult: null as Awaited<ReturnType<typeof runRecall>> | null
+        };
+      }
+      const preciousRows = await listPrecious(env.DB, { namespace, limit: 50 });
+      const coreFingerprint = buildCoreFingerprint(preciousRows.map((r) => r.content));
+      const [boot, recallResult] = await Promise.all([
+        buildBootPackage(env, { namespace, preciousRows }),
+        runRecall(env, {
+          namespace,
+          query: lastUserText,
+          core_fingerprint: coreFingerprint,
+          waitUntil: ctx.waitUntil.bind(ctx)
+        })
+      ]);
+      return { boot, recallResult };
+    })()
+  ]);
+
+  const { conversation, savedUserMessageIds } = chainA;
+  const latestUserMessageId = savedUserMessageIds[savedUserMessageIds.length - 1];
+  const boot = chainB.boot;
+  const recallResult = chainB.recallResult;
+
+  // Precious injection accounting: off response path (was inside buildBootPackage).
+  if (boot && boot.precious.length > 0) {
+    ctx.waitUntil(
+      markPreciousInjected(env.DB, {
+        namespace,
+        ids: boot.precious.map((p) => p.id)
+      })
+    );
+  }
+
+  const recallHitsAsMemories = recallResult
+    ? recallResult.hits.map((h) => recallHitToMemoryRecord(h, namespace))
     : [];
 
   let upstream: Response;
@@ -162,7 +204,11 @@ export async function handleChatCompletions(
   try {
     if (!isV2Enabled(env)) {
       const ragMemories = lastUserText
-        ? await searchMemories(env, { namespace, query: lastUserText })
+        ? await searchMemories(env, {
+            namespace,
+            query: lastUserText,
+            waitUntil: ctx.waitUntil.bind(ctx)
+          })
         : [];
       const memoryPatch = formatMemoryPatch(ragMemories);
       const patchedBody: OpenAIChatRequest = {

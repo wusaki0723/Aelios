@@ -615,25 +615,30 @@ export async function markMemoriesInjected(
 
   // 没有侧车行的 memory_id 用 INSERT OR IGNORE 自动建一行 (只有 last_injected_at)。
   // 这样老 v1 记忆第一次被注入也能记账。
-  for (const id of ids) {
-    await db
+  // INSERT-before-UPDATE order preserved; statements batched for D1 latency.
+  const statements: D1PreparedStatement[] = ids.map((id) =>
+    db
       .prepare(
         `INSERT OR IGNORE INTO memory_lifecycle (memory_id, namespace, seen_count, last_injected_at)
          VALUES (?, ?, 0, ?)`
       )
       .bind(id, input.namespace, injectedAt)
-      .run();
-  }
+  );
 
   for (let index = 0; index < ids.length; index += SQLITE_BIND_BATCH_SIZE) {
     const batch = ids.slice(index, index + SQLITE_BIND_BATCH_SIZE);
     const placeholders = batch.map(() => "?").join(", ");
-    await db
-      .prepare(
-        `UPDATE memory_lifecycle SET last_injected_at = ? WHERE memory_id IN (${placeholders})`
-      )
-      .bind(injectedAt, ...batch)
-      .run();
+    statements.push(
+      db
+        .prepare(
+          `UPDATE memory_lifecycle SET last_injected_at = ? WHERE memory_id IN (${placeholders})`
+        )
+        .bind(injectedAt, ...batch)
+    );
+  }
+
+  for (let index = 0; index < statements.length; index += SQLITE_BIND_BATCH_SIZE) {
+    await db.batch(statements.slice(index, index + SQLITE_BIND_BATCH_SIZE));
   }
 }
 

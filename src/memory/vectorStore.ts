@@ -267,13 +267,13 @@ async function getVectorsByIdsBatched(
   vectorize: Vectorize | VectorizeIndex,
   ids: string[]
 ): Promise<VectorizeVector[]> {
-  const vectors: VectorizeVector[] = [];
-
+  const batchPromises: Promise<VectorizeVector[]>[] = [];
   for (let index = 0; index < ids.length; index += 20) {
-    vectors.push(...(await vectorize.getByIds(ids.slice(index, index + 20))));
+    batchPromises.push(vectorize.getByIds(ids.slice(index, index + 20)));
   }
-
-  return vectors;
+  const batches = await Promise.all(batchPromises);
+  // Flatten preserving batch order (Promise.all keeps input order).
+  return batches.flat();
 }
 
 function candidateVectorIds(id: string): string[] {
@@ -443,11 +443,30 @@ export async function updateVectorMemory(
   const content = (patch.content ?? existing.content).trim();
   if (!content) return null;
 
-  const vector = await createEmbedding(env, content);
-  if (!vector) throw new Error("Failed to create embedding");
-
   const updatedAt = nowIso();
   const vectorId = existing.vector_id || (id.startsWith("mem_") ? id : `mem_${id}`);
+
+  // Metadata-only patches: skip re-embedding; reuse existing Vectorize values.
+  // Vectorize upsert requires values, so fetch via getByIds; fall back to re-embed if missing.
+  const contentUnchanged =
+    patch.content === undefined || patch.content.trim() === existing.content;
+  let vector: number[] | null = null;
+  if (contentUnchanged) {
+    try {
+      const existingVectors = await requireVectorize(env).getByIds([vectorId]);
+      const values = existingVectors[0]?.values;
+      if (values && values.length > 0) {
+        vector = Array.from(values);
+      }
+    } catch (error) {
+      console.error("memory vector getByIds failed; will re-embed", { id, error });
+    }
+  }
+  if (!vector) {
+    vector = await createEmbedding(env, content);
+    if (!vector) throw new Error("Failed to create embedding");
+  }
+
   const next = {
     namespace: existing.namespace,
     type: patch.type ?? existing.type,
@@ -527,17 +546,20 @@ export async function searchVectorMemories(
 
   const topK = Math.min(Math.max(Math.floor(input.topK), 1), 50);
   const vectorize = requireVectorize(env);
-  const namespacedResult = await vectorize.query(vector, {
-    topK,
-    namespace: input.namespace,
-    returnMetadata: "all",
-    filter
-  });
-
-  const legacyResult = await vectorize.query(vector, {
-    topK,
-    returnMetadata: "all"
-  });
+  // Always run both queries: merge semantics take max score across result sets.
+  // Do not gate legacy on empty namespaced results.
+  const [namespacedResult, legacyResult] = await Promise.all([
+    vectorize.query(vector, {
+      topK,
+      namespace: input.namespace,
+      returnMetadata: "all",
+      filter
+    }),
+    vectorize.query(vector, {
+      topK,
+      returnMetadata: "all"
+    })
+  ]);
 
   const matchesByVectorId = new Map<string, VectorizeMatch>();
   for (const match of [...namespacedResult.matches, ...legacyResult.matches]) {

@@ -10,6 +10,7 @@ import {
   getDailyLog,
   getWeeklyLog,
   getPreciousById,
+  markPreciousInjected,
   supersedeMemory,
   upsertGlossary,
   upsertMemoryByFactKey
@@ -523,9 +524,19 @@ async function callTool(
   if (params.name === "memory_boot") {
     if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
     if (!isV2Enabled(env)) return toolError("memory_boot requires MEMORY_LIFECYCLE_ENABLED=true");
+    const bootNamespace = resolveNamespace(profile, args.namespace);
     const pkg = await buildBootPackage(env, {
-      namespace: resolveNamespace(profile, args.namespace)
+      namespace: bootNamespace
     });
+    // Injection accounting moved out of buildBootPackage; schedule off response path.
+    if (pkg.precious.length > 0) {
+      ctx.waitUntil(
+        markPreciousInjected(env.DB, {
+          namespace: bootNamespace,
+          ids: pkg.precious.map((p) => p.id)
+        })
+      );
+    }
     return textToolResult({ data: pkg });
   }
 

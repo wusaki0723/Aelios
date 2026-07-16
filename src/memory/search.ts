@@ -363,7 +363,15 @@ async function searchWithVectorize(
 // 供 v2 recall 管线在 meta 里透出，观察 legacy 孤儿向量的占比。
 export async function searchMemoriesWithProvenance(
   env: Env,
-  input: { namespace: string; query: string; types?: string[]; topK?: number; includeHistory?: boolean }
+  input: {
+    namespace: string;
+    query: string;
+    types?: string[];
+    topK?: number;
+    includeHistory?: boolean;
+    // When set (chat hot path), recall-count accounting is scheduled off the response path.
+    waitUntil?: (promise: Promise<unknown>) => void;
+  }
 ): Promise<SearchMemoriesResult> {
   const topK = getTopK(env, input.topK);
   const vectorOutcome = await searchWithVectorize(env, {
@@ -404,10 +412,15 @@ export async function searchMemoriesWithProvenance(
     lifecycleByMemoryId = new Map(joined.map(({ record, lifecycle }) => [record.id, lifecycle]));
   }
 
-  await markMemoriesRecalled(env.DB, {
+  const markPromise = markMemoriesRecalled(env.DB, {
     namespace: input.namespace,
     ids: records.map((record) => record.id)
   });
+  if (input.waitUntil) {
+    input.waitUntil(markPromise);
+  } else {
+    await markPromise;
+  }
 
   const apiRecords: MemoryApiRecordWithProvenance[] = records.map((record) => ({
     ...toMemoryApiRecord(record, record.score, lifecycleByMemoryId.get(record.id) ?? null),
@@ -421,7 +434,14 @@ export async function searchMemoriesWithProvenance(
 
 export async function searchMemories(
   env: Env,
-  input: { namespace: string; query: string; types?: string[]; topK?: number; includeHistory?: boolean }
+  input: {
+    namespace: string;
+    query: string;
+    types?: string[];
+    topK?: number;
+    includeHistory?: boolean;
+    waitUntil?: (promise: Promise<unknown>) => void;
+  }
 ): Promise<MemoryApiRecordWithProvenance[]> {
   const result = await searchMemoriesWithProvenance(env, input);
   return result.records;

@@ -109,7 +109,13 @@ assert.match(recallSource, /if \(hit\.score >= minScore\) return true;\s+floored
 assert.match(recallSource, /floored_ids: flooredIds,\s+floored_count: flooredIds\.length,\s+min_score: minScore,/s);
 assert.match(mcpSource, /min_score: \{ type: "number", minimum: 0, maximum: 1 \}/);
 assert.match(mcpSource, /min_score: typeof args\.min_score === "number" \? readNumber\(args\.min_score, 0\.15\) : undefined/);
-assert.match(wranglerSource, /crons = \["10 20 \* \* \*"\]/);
+// tg-bot twin worker omits [triggers] so shared D1 maintenance runs only in main.
+if (/name = "aelios-tgbot"/.test(wranglerSource)) {
+  assert.doesNotMatch(wranglerSource, /crons = \["10 20 \* \* \*"\]/);
+  assert.match(wranglerSource, /no \[triggers\] here on purpose/i);
+} else {
+  assert.match(wranglerSource, /crons = \["10 20 \* \* \*"\]/);
+}
 assert.match(wranglerSource, /DREAM_MODEL = "workers-ai\/@cf\/openai\/gpt-oss-120b"/);
 assert.match(wranglerSource, /DEDUP_COSINE = "0\.9"/);
 assert.match(indexSource, /handleDiaryApi\(request, env\)/);

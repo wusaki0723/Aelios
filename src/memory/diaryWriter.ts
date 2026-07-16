@@ -10,6 +10,7 @@ import {
 import { readDreamTimeZoneFromEnv } from "./dreamEnv";
 import { readDreamCursorValue } from "./dailyDigest";
 import { getIsoWeekLabelForDateLabel } from "./weeklyRollup";
+import { extractJsonObject, readString } from "../utils/parse";
 
 const DEFAULT_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";
 const MAX_MESSAGES = 200;
@@ -40,10 +41,6 @@ interface DiaryWriterModelCallResult {
   finishReason?: string | null;
 }
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function isDiaryWriterEnabled(env: Env): boolean {
   const flag = readString(env.ENABLE_DIARY_WRITER);
   if (flag) return flag !== "false";
@@ -64,24 +61,6 @@ function readDiaryMaxTokens(env: Env): number {
 function truncate(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}…`;
-}
-
-function extractJsonObject(text: string): unknown | null {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    // Some providers wrap JSON in prose; pull out the outermost object.
-  }
-
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function normalizeDiaryWriterResult(value: unknown): DiaryWriterModelResult {

@@ -1,4 +1,5 @@
 import type { KeyProfile, OpenAIChatMessage } from "../types";
+import { readStringArray as parseReadStringArray, readStringOrUndefined } from "./parse";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -13,8 +14,9 @@ export async function readJsonObject(request: Request): Promise<Record<string, u
   }
 }
 
+/** Kept as `undefined` return for backwards compatibility with existing callers. */
 export function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return readStringOrUndefined(value);
 }
 
 export function readOptionalString(value: unknown): string | null | undefined {
@@ -31,11 +33,7 @@ export function readBoolean(value: unknown, fallback = false): boolean {
 }
 
 export function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return parseReadStringArray(value);
 }
 
 export function readPositiveInt(value: unknown, fallback: number, max: number): number {

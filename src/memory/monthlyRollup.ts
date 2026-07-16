@@ -13,6 +13,7 @@ import {
 } from "./dreamDates";
 import { readDreamTimeZoneFromEnv } from "./dreamEnv";
 import { getMondayOfIsoWeek } from "./weeklyRollup";
+import { extractJsonObject, readString } from "../utils/parse";
 
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 const DEFAULT_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";
@@ -57,10 +58,6 @@ interface MonthlyRollupModelCallResult {
   finishReason?: string | null;
 }
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function isMonthlyRollupEnabled(env: Env): boolean {
   const flag = readString(env.ENABLE_MONTHLY_ROLLUP);
   if (flag) return flag !== "false";
@@ -95,24 +92,6 @@ export function getMonthLabelForWeekStart(startDate: string, timeZone: string): 
   const monday = getMondayOfIsoWeek(startDate, timeZone);
   const thursday = addDaysToDateLabel(monday, 3, timeZone);
   return thursday.slice(0, 7);
-}
-
-function extractJsonObject(text: string): unknown | null {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    // Some providers wrap JSON in prose; pull out the outermost object.
-  }
-
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function normalizeMonthlyRollupResult(value: unknown): MonthlyRollupModelResult {

@@ -16,6 +16,7 @@ import {
 } from "../db/v2";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
+import { extractJsonObject } from "../utils/parse";
 import { createVectorMemory } from "./vectorStore";
 
 // listMemoryCandidates 本身按 confidence ASC 排序，正好是"先看最没把握的"，直接复用，
@@ -66,23 +67,6 @@ function parseJsonArray(raw: string | null): string[] {
     // malformed JSON in an old row: 当空数组处理，不阻断评审
   }
   return [];
-}
-
-// 和 dreamExtract.ts 的 extractJsonObject 同样的容错解析：模型偶尔会在 JSON 外面裹一层文字。
-function extractJsonObject(text: string): unknown | null {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    // fallthrough to brace-scan
-  }
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function formatTranscript(messages: MessageRecord[]): string {

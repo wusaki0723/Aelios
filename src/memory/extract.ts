@@ -1,5 +1,6 @@
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
+import { extractJsonObject, readStringArray } from "../utils/parse";
 import { sanitizeMemoryContent } from "../utils/sanitize";
 
 export interface ExtractedMemory {
@@ -21,34 +22,11 @@ function normalizeNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
 }
 
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-}
-
 function normalizeMemoryContent(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const text = sanitizeMemoryContent(value);
   if (!text || text.length > 1000) return null;
   return text;
-}
-
-function extractJsonObject(text: string): unknown | null {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    // Some providers wrap JSON in prose; pull out the outermost object.
-  }
-
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function parseExtraction(text: string): MemoryExtractionResult {
@@ -97,8 +75,8 @@ function parseExtraction(text: string): MemoryExtractionResult {
           content,
           importance: normalizeNumber(record.importance, 0.5),
           confidence: normalizeNumber(record.confidence, 0.8),
-          tags: normalizeStringArray(record.tags),
-          source_message_ids: normalizeStringArray(record.source_message_ids),
+          tags: readStringArray(record.tags),
+          source_message_ids: readStringArray(record.source_message_ids),
           fact_key: typeof record.fact_key === "string" && record.fact_key.trim() ? record.fact_key.trim() : undefined
         }
       ];

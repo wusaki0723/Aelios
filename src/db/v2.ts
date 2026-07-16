@@ -886,6 +886,33 @@ export interface ActiveFactKeyMemory {
   fact_key: string | null;
 }
 
+export async function resolveMemoryFactKey(
+  env: Env,
+  id: string,
+  namespace?: string
+): Promise<string | null> {
+  const row = await env.DB
+    .prepare(
+      `SELECT m.fact_key, m.namespace, m.status, m.version_status FROM memories m WHERE m.id = ?`
+    )
+    .bind(id)
+    .first<{
+      fact_key: string | null;
+      namespace: string;
+      status: string;
+      version_status: string | null;
+    }>();
+  if (!row) return null;
+  if (namespace && row.namespace !== namespace) return null;
+  if (row.status !== "active" || row.version_status === "superseded") return null;
+  if (row.fact_key) return row.fact_key;
+  const lifecycle = await env.DB
+    .prepare(`SELECT fact_key FROM memory_lifecycle WHERE memory_id = ?`)
+    .bind(id)
+    .first<{ fact_key: string | null }>();
+  return lifecycle?.fact_key ?? null;
+}
+
 export async function getActiveMemoryByFactKey(
   db: D1Database,
   input: { namespace: string; factKey: string }
@@ -1094,10 +1121,14 @@ export async function supersedeMemory(
   // 3. 同步向量：新条目 upsert，旧条目下架
   await syncMemoryVector(env, { namespace: input.namespace, id: nextId });
   if (old.vector_id) {
-    try {
-      await env.VECTORIZE?.deleteByIds([old.vector_id]);
-    } catch (error) {
-      console.error("v2 vector delete (supersede old) failed", { id: old.id, error });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await env.VECTORIZE?.deleteByIds([old.vector_id]);
+        break;
+      } catch (error) {
+        if (attempt === 0) continue;
+        console.error("v2 vector delete (supersede old) failed", { id: old.id, error });
+      }
     }
   }
 
@@ -1491,6 +1522,117 @@ export async function deleteDailyLogsInRange(
 ): Promise<number> {
   const result = await bindDeleteDailyLogsInRangeStatement(db, input).run();
   return result.meta.changes ?? 0;
+}
+
+export interface MonthlyLogRow {
+  namespace: string;
+  month: string;
+  title: string;
+  summary: string;
+  source_week_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listRecentMonthlyLogs(
+  db: D1Database,
+  input: { namespace: string; limit: number }
+): Promise<MonthlyLogRow[]> {
+  const limit = Math.min(Math.max(Math.floor(input.limit), 1), 100);
+  const result = await db
+    .prepare(
+      `SELECT namespace, month, title, summary, source_week_count, created_at, updated_at
+       FROM monthly_log
+       WHERE namespace = ?
+       ORDER BY month DESC
+       LIMIT ?`
+    )
+    .bind(input.namespace, limit)
+    .all<MonthlyLogRow>();
+  return result.results ?? [];
+}
+
+export async function getMonthlyLog(
+  db: D1Database,
+  input: { namespace: string; month: string }
+): Promise<MonthlyLogRow | null> {
+  const row = await db
+    .prepare(
+      `SELECT namespace, month, title, summary, source_week_count, created_at, updated_at
+       FROM monthly_log
+       WHERE namespace = ? AND month = ?`
+    )
+    .bind(input.namespace, input.month)
+    .first<MonthlyLogRow>();
+  return row ?? null;
+}
+
+export async function listWeeklyLogsBeforeStartDate(
+  db: D1Database,
+  input: { namespace: string; beforeStartDate: string }
+): Promise<WeeklyLogRow[]> {
+  const result = await db
+    .prepare(
+      `SELECT namespace, week, start_date, end_date, title, summary, source_days, updated_at
+       FROM weekly_log
+       WHERE namespace = ?
+         AND start_date < ?
+       ORDER BY start_date ASC`
+    )
+    .bind(input.namespace, input.beforeStartDate)
+    .all<WeeklyLogRow>();
+  return result.results ?? [];
+}
+
+export function bindUpsertMonthlyLogStatement(
+  db: D1Database,
+  input: {
+    namespace: string;
+    month: string;
+    title: string;
+    summary: string;
+    sourceWeekCount: number;
+    createdAt?: string;
+  }
+): D1PreparedStatement {
+  const now = nowIso();
+  const createdAt = input.createdAt ?? now;
+  return db
+    .prepare(
+      `INSERT INTO monthly_log (namespace, month, title, summary, source_week_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(namespace, month) DO UPDATE SET
+         title = excluded.title,
+         summary = excluded.summary,
+         source_week_count = excluded.source_week_count,
+         updated_at = excluded.updated_at`
+    )
+    .bind(
+      input.namespace,
+      input.month,
+      input.title,
+      input.summary,
+      input.sourceWeekCount,
+      createdAt,
+      now
+    );
+}
+
+export function bindDeleteWeeklyLogsByWeeksStatement(
+  db: D1Database,
+  input: { namespace: string; weeks: string[] }
+): D1PreparedStatement[] {
+  if (input.weeks.length === 0) return [];
+  const placeholders = input.weeks.map(() => "?").join(", ");
+  return [
+    db
+      .prepare(
+        `DELETE FROM weekly_log
+         WHERE namespace = ?
+           AND week IN (${placeholders})`
+      )
+      .bind(input.namespace, ...input.weeks)
+  ];
 }
 
 // =====================================================================

@@ -14,6 +14,8 @@ import {
   getDailyLog,
   listPrecious,
   listGlossary,
+  listRecentMonthlyLogs,
+  listRecentWeeklyLogs,
   fetchLongtailByIds,
   matchGlossary,
   markMemoriesInjected,
@@ -128,8 +130,19 @@ function isDuplicateWithCore(content: string, core: CoreFingerprint): boolean {
 // SessionStart 调一次。客户端可塞进缓存前缀吃命中 (母帖第二节)。
 // =====================================================================
 
+export interface BootImpressionEntry {
+  label: string;
+  title: string;
+  summary: string;
+}
+
 export interface BootPackage {
-  yesterday_log: { date: string; title: string; summary: string } | null;
+  impressions: {
+    daily: BootImpressionEntry | null;
+    weekly: BootImpressionEntry | null;
+    monthly: BootImpressionEntry | null;
+    max_chars: number;
+  };
   precious: Array<{ id: string; content: string; created_at: string }>;
   glossary: Array<{ term: string; definition: string; aliases: string[] }>;
   // LMC-5: spontaneous perception (SessionStart). Absent/empty = do not inject section.
@@ -175,6 +188,14 @@ export async function buildBootPackage(
     year: "numeric", month: "2-digit", day: "2-digit"
   }).format(yesterday);
   const dailyLog = await getDailyLog(env.DB, { namespace: input.namespace, date: yesterdayLabel });
+  const weeklyRows = await listRecentWeeklyLogs(env.DB, { namespace: input.namespace, limit: 1 });
+  const monthlyRows = await listRecentMonthlyLogs(env.DB, { namespace: input.namespace, limit: 1 });
+  const impressionMaxChars = (() => {
+    const raw = env.IMPRESSION_LADDER_MAX_CHARS;
+    if (!raw) return 1000;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1000;
+  })();
 
   // LMC-5 spontaneous: 最多 2 条，当天/昨夜 perception_cache；没有就不注入。
   let spontaneous: PerceptionCacheItem[] = [];
@@ -187,8 +208,22 @@ export async function buildBootPackage(
     console.warn("boot: load spontaneous failed", error);
   }
 
+  const weekly = weeklyRows[0] ?? null;
+  const monthly = monthlyRows[0] ?? null;
+
   return {
-    yesterday_log: dailyLog ? { date: dailyLog.date, title: dailyLog.title, summary: dailyLog.summary } : null,
+    impressions: {
+      daily: dailyLog
+        ? { label: dailyLog.date, title: dailyLog.title, summary: dailyLog.summary }
+        : null,
+      weekly: weekly
+        ? { label: weekly.week, title: weekly.title, summary: weekly.summary }
+        : null,
+      monthly: monthly
+        ? { label: monthly.month, title: monthly.title, summary: monthly.summary }
+        : null,
+      max_chars: impressionMaxChars
+    },
     precious,
     glossary: allGlossary,
     ...(spontaneous.length > 0 ? { spontaneous } : {}),

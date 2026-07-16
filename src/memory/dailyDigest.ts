@@ -17,9 +17,11 @@ import {
   supersedeMemory,
   archiveMemory,
   createMemoryCandidate,
+  resolveMemoryFactKey,
   upsertDailyLog,
   fetchMemoryLifecycleRows
 } from "../db/v2";
+import { findSimilarActiveMemory } from "./dedupGate";
 import { extractDreamMemoriesFromMessages } from "./dreamExtract";
 import { runRelationBuildPhase, runZAuditPhase } from "./relations";
 import type { RelationBuildStats, ZAuditStats } from "./relations";
@@ -749,6 +751,16 @@ async function queueDreamExtractedMemories(
   let queued = 0;
   for (const memory of input.memories) {
     try {
+      let targetMemoryId: string | null = null;
+      let decisionNote: string | null = null;
+      const hit = await findSimilarActiveMemory(env, {
+        namespace: input.namespace,
+        content: memory.content
+      });
+      if (hit) {
+        targetMemoryId = hit.memory.id;
+        decisionNote = `dedup_gate: similar to ${hit.memory.id} (score=${hit.score.toFixed(2)})`;
+      }
       await createMemoryCandidate(env.DB, {
         namespace: input.namespace,
         type: memory.type,
@@ -758,7 +770,9 @@ async function queueDreamExtractedMemories(
         importance: memory.importance,
         tags: memory.tags,
         sourceMessageIds: memory.source_message_ids.length ? memory.source_message_ids : input.messageIds,
-        source: "dream_extract"
+        source: "dream_extract",
+        targetMemoryId,
+        decisionNote
       });
       queued += 1;
     } catch (error) {
@@ -920,11 +934,12 @@ async function applyDreamV2(
       }
 
       if (!item.content) continue;
+      const inheritedFactKey = await resolveMemoryFactKey(env, item.target_id, namespace);
       await createMemoryCandidate(env.DB, {
         namespace,
         type: item.type ?? "note",
         content: item.content,
-        factKey: null,
+        factKey: inheritedFactKey,
         confidence: item.confidence ?? 0.72,
         importance: item.importance ?? 0.72,
         tags: item.tags,

@@ -40,7 +40,7 @@ export interface AssemblerContext {
    */
   pinnedPersonaMemories: MemoryApiRecord[] | null;
 
-  /** v2 boot package (yesterday_log + precious + glossary). null = v1 path. */
+  /** v2 boot package (impressions ladder + precious + glossary). null = v1 path. */
   boot: BootPackage | null;
 
   /** RAG hits for the current round (v1) or recall hits (v2). */
@@ -142,7 +142,7 @@ export const BLOCK_ORDER: readonly string[] = [
  * → slow-changing memory) so OpenAI/DeepSeek implicit prefix cache survives
  * persona/memory edits without invalidating the stable head.
  *
- * boot_stable (glossary, yesterday_log) is AFTER the anchor.
+ * boot_stable (impressions ladder, glossary) is AFTER the anchor.
  * It changes daily but does NOT invalidate the cached system prefix.
  * client_volatile_context (time), dynamic_memory_patch (RAG), vision_context
  * are turn_context blocks — injected into the message stream before current_user,
@@ -163,14 +163,40 @@ export const TURN_CONTEXT_BLOCK_IDS: readonly string[] = [
 
 export const PERSONA_MEMORY_TYPES: readonly string[] = ["identity", "persona"] as const;
 
+function formatImpressionLine(entry: { label: string; title: string; summary: string }): string {
+  return `【${entry.label}·${entry.title}】${entry.summary}`;
+}
+
+function buildImpressionsLadder(boot: BootPackage): string[] {
+  const ladder = boot.impressions;
+  if (!ladder) return [];
+
+  const lines: string[] = [];
+  if (ladder.daily) lines.push(formatImpressionLine(ladder.daily));
+  if (ladder.weekly) lines.push(formatImpressionLine(ladder.weekly));
+  if (ladder.monthly) lines.push(formatImpressionLine(ladder.monthly));
+  if (lines.length === 0) return [];
+
+  const maxChars = ladder.max_chars > 0 ? ladder.max_chars : 1000;
+  const selected = [...lines];
+  while (selected.length > 1) {
+    if (selected.join("\n").length <= maxChars) return selected;
+    selected.pop();
+  }
+  const dailyLine = selected[0];
+  if (!dailyLine) return [];
+  if (dailyLine.length <= maxChars) return selected;
+  if (!ladder.daily) return selected;
+  const prefix = `【${ladder.daily.label}·${ladder.daily.title}】`;
+  const summaryBudget = Math.max(0, maxChars - prefix.length);
+  return [`${prefix}${ladder.daily.summary.slice(0, summaryBudget)}`];
+}
+
 export function formatBootStable(boot: BootPackage): string {
   const parts: string[] = [];
-  if (boot.yesterday_log) {
-    parts.push(
-      "<yesterday_log>",
-      `【${boot.yesterday_log.title}】${boot.yesterday_log.summary}`,
-      "</yesterday_log>"
-    );
+  const impressions = buildImpressionsLadder(boot);
+  if (impressions.length > 0) {
+    parts.push("<impressions>", ...impressions, "</impressions>");
   }
   if (boot.glossary.length > 0) {
     const entries = boot.glossary.map((g) => `${g.term}: ${g.definition}`);

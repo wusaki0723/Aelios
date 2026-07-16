@@ -1,4 +1,10 @@
-import { handleAdmin, handleDiaryAdmin, handleDiaryRewriteAdmin, handleWeeklyRollupAdmin } from "./api/admin";
+import {
+  handleAdmin,
+  handleDiaryAdmin,
+  handleDiaryRewriteAdmin,
+  handleMonthlyRollupAdmin,
+  handleWeeklyRollupAdmin
+} from "./api/admin";
 import { handleHealth } from "./api/health";
 import { handleCache } from "./api/cache";
 import { handleCacheHealth, handleVectorDoctor, handleVectorHealth, handleVectorReindex } from "./api/debug";
@@ -21,6 +27,7 @@ import { handleModels } from "./api/models";
 import { handleRelationsGraph } from "./api/relations";
 import { runDailyMemoryDigest, runDreamBackfill } from "./memory/dailyDigest";
 import { runDiaryWriterNightly } from "./memory/diaryWriter";
+import { runMonthlyRollup } from "./memory/monthlyRollup";
 import { runWeeklyRollup } from "./memory/weeklyRollup";
 import { runGithubDailyPull } from "./memory/githubDaily";
 import { runMemoryRetention } from "./memory/retention";
@@ -68,6 +75,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/admin/weekly-rollup") {
       return handleWeeklyRollupAdmin(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/monthly-rollup") {
+      return handleMonthlyRollupAdmin(request, env);
     }
 
     if (request.method === "GET" && url.pathname === "/admin/diary") {
@@ -256,6 +267,17 @@ export default {
           });
         }
         results.push({ type: "weekly_rollup", result: weeklyRollup ?? { ok: false } });
+
+        let monthlyRollup: Awaited<ReturnType<typeof runMonthlyRollup>> | undefined;
+        try {
+          monthlyRollup = await runMonthlyRollup(env, namespace);
+        } catch (error) {
+          console.error("scheduled monthly rollup failed", {
+            namespace,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+        results.push({ type: "monthly_rollup", result: monthlyRollup ?? { ok: false } });
 
         console.log("scheduled memory maintenance", { namespace, cron, results });
       })()

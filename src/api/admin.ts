@@ -1,6 +1,7 @@
 import { authenticate } from "../auth/apiKey";
 import { listRecentDailyLogs, listRecentWeeklyLogs } from "../db/v2";
 import { runDiaryWriter } from "../memory/diaryWriter";
+import { runMonthlyRollup } from "../memory/monthlyRollup";
 import { runWeeklyRollup } from "../memory/weeklyRollup";
 import type { Env } from "../types";
 import { json, openAiError } from "../utils/json";
@@ -2155,6 +2156,37 @@ export async function handleWeeklyRollupAdmin(request: Request, env: Env): Promi
 
   try {
     const stats = await runWeeklyRollup(env, namespace, { dryRun });
+    return json({
+      data: {
+        namespace,
+        dry_run: dryRun,
+        stats
+      }
+    });
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  }
+}
+
+export async function handleMonthlyRollupAdmin(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+  if (!auth.profile.scopes.includes("memory:write")) {
+    return openAiError("Missing required scope: memory:write", 403);
+  }
+
+  const url = new URL(request.url);
+  const body = await readJsonObject(request);
+  if (!body) return openAiError("Request body must be a JSON object", 400);
+
+  const namespace =
+    readString(url.searchParams.get("namespace")) ||
+    readString(body.namespace) ||
+    auth.profile.namespace;
+  const dryRun = readBoolean(body.dry_run, false);
+
+  try {
+    const stats = await runMonthlyRollup(env, namespace, { dryRun });
     return json({
       data: {
         namespace,

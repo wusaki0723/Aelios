@@ -14,7 +14,7 @@ import type { Env } from "../types";
 import { readPositiveInt } from "../utils/request";
 
 // ---------------------------------------------------------------------------
-// Default retention windows (hardcoded, not user-configurable)
+// Retention windows — messages via MESSAGES_RETENTION_DAYS; rest hardcoded
 // ---------------------------------------------------------------------------
 
 function messagesRetentionDays(env: Env): number {

@@ -3519,25 +3519,6 @@ check("queue: MEMORY_QUEUE absent → fallback to handleQueueMessage", () => {
   assert.strictEqual(hasQueue, false);
 });
 
-check("queue: memory_maintenance message shape is unchanged", () => {
-  const message = {
-    type: "memory_maintenance",
-    namespace: "default",
-    conversationId: "conv_1",
-    fromMessageId: "msg_1",
-    toMessageId: "msg_2",
-    source: "chatbox",
-    idempotencyKey: "idem_abc",
-  };
-  assert.strictEqual(message.type, "memory_maintenance");
-  assert.ok(typeof message.namespace === "string");
-  assert.ok(typeof message.conversationId === "string");
-  assert.ok(typeof message.fromMessageId === "string");
-  assert.ok(typeof message.toMessageId === "string");
-  assert.ok(typeof message.source === "string");
-  assert.ok(typeof message.idempotencyKey === "string");
-});
-
 check("queue: retention message shape is unchanged", () => {
   const message = {
     type: "retention",
@@ -3545,15 +3526,6 @@ check("queue: retention message shape is unchanged", () => {
   };
   assert.strictEqual(message.type, "retention");
   assert.ok(typeof message.namespace === "string");
-});
-
-check("queue: consumer handles memory_maintenance via runMemoryMaintenance only", () => {
-  // Contract: handleQueueMessage for memory_maintenance calls runMemoryMaintenance
-  // and nothing else (the long-term summary step has been removed).
-  // This is verified by reading the source; here we document the contract.
-  const executionOrder = ["runMemoryMaintenance"];
-  assert.strictEqual(executionOrder.length, 1);
-  assert.strictEqual(executionOrder[0], "runMemoryMaintenance");
 });
 
 check("queue: consumer handles retention without summary", () => {

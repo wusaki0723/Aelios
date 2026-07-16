@@ -53,6 +53,10 @@ export interface Env {
   DREAM_TIME_ZONE?: string;
   // weekly_log rollup after dream; default on unless "false"
   ENABLE_WEEKLY_ROLLUP?: string;
+  // monthly_log rollup after weekly; default on unless "false"
+  ENABLE_MONTHLY_ROLLUP?: string;
+  // boot [Impressions] ladder char budget; default 1000
+  IMPRESSION_LADDER_MAX_CHARS?: string;
   // dedicated diary writer after dream; default on unless "false"
   ENABLE_DIARY_WRITER?: string;
   DIARY_MODEL?: string;

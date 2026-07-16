@@ -163,14 +163,34 @@ export const TURN_CONTEXT_BLOCK_IDS: readonly string[] = [
 
 export const PERSONA_MEMORY_TYPES: readonly string[] = ["identity", "persona"] as const;
 
+function formatImpressionLine(entry: { label: string; title: string; summary: string }): string {
+  return `【${entry.label}·${entry.title}】${entry.summary}`;
+}
+
+function buildImpressionsLadder(boot: BootPackage): string[] {
+  const ladder = boot.impressions;
+  if (!ladder) return [];
+
+  const lines: string[] = [];
+  if (ladder.daily) lines.push(formatImpressionLine(ladder.daily));
+  if (ladder.weekly) lines.push(formatImpressionLine(ladder.weekly));
+  if (ladder.monthly) lines.push(formatImpressionLine(ladder.monthly));
+  if (lines.length === 0) return [];
+
+  const maxChars = ladder.max_chars > 0 ? ladder.max_chars : 1000;
+  const selected = [...lines];
+  while (selected.length > 0) {
+    if (selected.join("\n").length <= maxChars) return selected;
+    selected.pop();
+  }
+  return [];
+}
+
 export function formatBootStable(boot: BootPackage): string {
   const parts: string[] = [];
-  if (boot.yesterday_log) {
-    parts.push(
-      "<yesterday_log>",
-      `【${boot.yesterday_log.title}】${boot.yesterday_log.summary}`,
-      "</yesterday_log>"
-    );
+  const impressions = buildImpressionsLadder(boot);
+  if (impressions.length > 0) {
+    parts.push("<impressions>", ...impressions, "</impressions>");
   }
   if (boot.glossary.length > 0) {
     const entries = boot.glossary.map((g) => `${g.term}: ${g.definition}`);

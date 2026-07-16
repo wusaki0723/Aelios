@@ -7,7 +7,21 @@
 - 我是人类，想部署使用 → 看 [人类版](#人类版)
 - 我是 AI 助手，想维护调试 → 看 [AI 版](#ai版维护交接)
 
-分支指路：`main` 是唯一主线（原 memory-v2 已并入并退役）；旧 v1 稳定版封存在 tag `v1-final`；本分支 `tg-bot` 叠在 main 上，部署方式见本分支文档。
+## 分支指路
+
+- **main**：唯一主线，作者线上跑的就是这套（v2 记忆系统：六层分层、三档写入、v4 assembler 缓存、boot 包 + 召回三闸）。AGPL-3.0。
+- **memory-v2 分支已退役**：内容已全部并入 main，不再更新，历史留档。老用户如果 Cloudflare 构建还指着 memory-v2，把 Production branch 切回 main 即可，数据不用迁。
+- **tg-bot**：Telegram bot 集成分支（TWIN-WORKER：部署独立 worker `aelios-tgbot`，共享同一 D1/Vectorize），叠在 main 上；部署方式见本分支文档。
+
+## 想用 v1 最终版？
+
+```bash
+git clone https://github.com/wusaki0723/Aelios
+cd Aelios
+git checkout v1-final
+```
+
+v1-final 是 v1 稳定版的最终封存点，之后不再维护；注意 v1-final 里的许可证仍是 MIT（换证不溯及已发布的版本），想要轻量老版的用户可以继续按 MIT 使用，文档以该 tag 内的 README 为准。
 
 ---
 
@@ -141,7 +155,7 @@ Workers AI 免费额度主要花在每日一次的 dream（默认 `llama-3.3-70b
 
 - 部署命令必须是 `npm run deploy:cloudflare`，别的会覆盖变量、不建库。
 - 重新部署变量不会丢（命令带 `--keep-vars`）。
-- Vectorize 索引 `memo-kb`（768 维 cosine）别手动删。
+- Vectorize 索引 `memo-kb`（1024 维 cosine）别手动删。
 - 看图会切到 `VISION_MODEL`，留意它的价格。
 
 到这儿就够了，剩下的交给 AI。
@@ -162,10 +176,10 @@ Cloudflare Workers 上的 OpenAI-compatible Memory Proxy。帮用户部署时：
 |---|---|
 | Worker | `companion-memory-proxy` |
 | D1 | `companion_memory_proxy` |
-| Vectorize | `memo-kb`（768 维 cosine） |
+| Vectorize | `memo-kb`（1024 维 cosine） |
 | Queue | `companion-memory` |
-| Embedding | `workers-ai/@cf/google/embeddinggemma-300m` |
-| Dimensions | 768（覆盖 `EMBEDDING_MODEL` 时输出维度需匹配） |
+| Embedding | `workers-ai/@cf/baai/bge-m3` |
+| Dimensions | 1024（覆盖 `EMBEDDING_MODEL` 时输出维度需匹配） |
 
 记忆库默认走 **v2**（`MEMORY_LIFECYCLE_ENABLED` 隐式开启）：D1 是本体，Vectorize 是镜像。兼容/回退开关默认隐藏。
 
@@ -338,8 +352,8 @@ hard delete: deleted/superseded/expired 超 30 天 → 先删 Vectorize 再删 D
 | `CHAT_MODEL` | `deepseek/deepseek-v4-pro` | 主聊天 |
 | `DREAM_MODEL` | `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 夜间 dream（抽取+整理） |
 | `VISION_MODEL` | `google-ai-studio/gemini-3-flash-preview` | 看图 |
-| `EMBEDDING_MODEL` | `workers-ai/@cf/google/embeddinggemma-300m` | 嵌入 |
-| `EMBEDDING_DIMENSIONS` | `768` | 非 Workers AI embedding 目标维度 |
+| `EMBEDDING_MODEL` | `workers-ai/@cf/baai/bge-m3` | 嵌入 |
+| `EMBEDDING_DIMENSIONS` | `1024` | 非 Workers AI embedding 目标维度 |
 | `MEMORY_RERANKER_MODEL` | `workers-ai/@cf/baai/bge-reranker-base` | reranker |
 | `ENABLE_MEMORY_RERANKER` | `true` | `false` 跳过 |
 
@@ -420,6 +434,10 @@ CF_AIG_TOKEN="<AI Gateway Token>" \
 CLEANUP_MODEL="deepseek/deepseek-v4-flash" \
 npm run vectorize:clean:llm
 ```
+
+## 致谢
+
+- 关系图 + 2-hop 联想召回、`fact_key` 事实版本化、perception 自发浮现这三个设计，参考自 [LMC-5（Living Memory Coordinate-5）](https://github.com/wuxuyun0606-collab/lmc-5) 的 Y/Z 轴与 spontaneous recall 模型。LMC-5 是 PostgreSQL/pgvector 参考实现，Aelios 按 CF Worker + D1 + Vectorize 的形状重写了这三样，只抄了模型没抄代码——但思路是人家的，谢谢。
 
 ## License
 

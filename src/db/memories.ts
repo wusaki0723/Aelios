@@ -150,19 +150,30 @@ export async function getMemoryById(
   return record ?? null;
 }
 
+// D1 hard limit is 100 bound params. namespace takes 1 slot; keep id batches at 90
+// so total binds (1 + N) stay under the limit with headroom.
+const FETCH_BY_IDS_BATCH_SIZE = 90;
+
 export async function fetchMemoriesByIds(
   db: D1Database,
   input: { namespace: string; ids: string[] }
 ): Promise<MemoryRecord[]> {
   if (input.ids.length === 0) return [];
 
-  const placeholders = input.ids.map(() => "?").join(", ");
-  const result = await db
-    .prepare(`SELECT * FROM memories WHERE namespace = ? AND id IN (${placeholders})`)
-    .bind(input.namespace, ...input.ids)
-    .all<MemoryRecord>();
+  const uniqueIds = [...new Set(input.ids.filter((id) => id.trim()))];
+  if (uniqueIds.length === 0) return [];
 
-  return result.results ?? [];
+  const rows: MemoryRecord[] = [];
+  for (let index = 0; index < uniqueIds.length; index += FETCH_BY_IDS_BATCH_SIZE) {
+    const batch = uniqueIds.slice(index, index + FETCH_BY_IDS_BATCH_SIZE);
+    const placeholders = batch.map(() => "?").join(", ");
+    const result = await db
+      .prepare(`SELECT * FROM memories WHERE namespace = ? AND id IN (${placeholders})`)
+      .bind(input.namespace, ...batch)
+      .all<MemoryRecord>();
+    rows.push(...(result.results ?? []));
+  }
+  return rows;
 }
 
 export async function updateMemory(
@@ -217,11 +228,20 @@ export async function softDeleteMemory(
 
 export async function searchMemoriesByText(
   db: D1Database,
-  input: { namespace: string; query: string; types?: string[]; limit: number }
+  input: { namespace: string; query: string; types?: string[]; limit: number; includeHistory?: boolean }
 ): Promise<Array<MemoryRecord & { score: number }>> {
   const query = input.query.trim().replace(/\s+/g, " ").slice(0, 500);
   const like = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
-  let sql = "SELECT * FROM memories WHERE namespace = ? AND status = 'active'";
+  // LMC-5: default excludes superseded. includeHistory allows status/version_status=superseded
+  // (vectors for superseded rows are deleted on supersede, so text path is the history fallback).
+  let sql: string;
+  if (input.includeHistory) {
+    sql =
+      "SELECT * FROM memories WHERE namespace = ? AND (status = 'active' OR status = 'superseded')";
+  } else {
+    sql =
+      "SELECT * FROM memories WHERE namespace = ? AND status = 'active' AND (version_status IS NULL OR version_status != 'superseded')";
+  }
   const binds: unknown[] = [input.namespace];
 
   if (query) {

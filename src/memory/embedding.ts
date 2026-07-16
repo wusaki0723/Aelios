@@ -78,6 +78,8 @@ export async function createEmbedding(env: Env, text: string): Promise<number[] 
   return readEmbedding(await response.json());
 }
 
+// 隔离不变量：daily_log / weekly_log / monthly_log 永不 embed、永不进检索通道。
+// 只有 memories 本体经 upsertMemoryEmbedding 写入 Vectorize。
 export async function upsertMemoryEmbedding(env: Env, memory: MemoryRecord): Promise<boolean> {
   if (!env.VECTORIZE || memory.status !== "active") return false;
 

@@ -40,6 +40,9 @@ export interface Env {
   RECALL_MIN_SCORE?: string;
   // true = 丢弃没有有效 D1 记录背书的 Vectorize 命中 (清理 legacy 孤儿向量)，默认 false 保持现状。
   RECALL_REQUIRE_D1_BACKING?: string;
+  // LMC-5 Y 轴: 2-hop relation expansion. Default off (undefined/"off"/"false") = recall identical to pre-LMC5.
+  // Set "on" or "true" to enable hop1/hop2 expansion after vector seed hits.
+  RELATION_EXPANSION?: string;
   ENABLE_DAILY_MEMORY_DIGEST?: string;
   DREAM_NAMESPACE?: string;
   DREAM_MAX_MESSAGES?: string;
@@ -50,6 +53,10 @@ export interface Env {
   DREAM_TIME_ZONE?: string;
   // weekly_log rollup after dream; default on unless "false"
   ENABLE_WEEKLY_ROLLUP?: string;
+  // monthly_log rollup after weekly; default on unless "false"
+  ENABLE_MONTHLY_ROLLUP?: string;
+  // boot [Impressions] ladder char budget; default 1000
+  IMPRESSION_LADDER_MAX_CHARS?: string;
   // dedicated diary writer after dream; default on unless "false"
   ENABLE_DIARY_WRITER?: string;
   DIARY_MODEL?: string;
@@ -246,6 +253,8 @@ export interface MessageRecord {
   created_at: string;
 }
 
+export type MemoryVersionStatus = "current" | "superseded" | "under_review";
+
 export interface MemoryRecord {
   id: string;
   namespace: string;
@@ -265,6 +274,10 @@ export interface MemoryRecord {
   created_at: string;
   updated_at: string;
   expires_at: string | null;
+  // LMC-5 Z 轴: 本体列 (0007)。与 memory_lifecycle 侧车双写；读时本体优先。
+  fact_key?: string | null;
+  version_status?: MemoryVersionStatus | string | null;
+  superseded_by?: string | null;
 }
 
 // v2 字段侧车表 (母帖 #11 第 1 步，sidecar 版)。
@@ -312,4 +325,40 @@ export interface MemoryApiRecord {
   last_seen_at?: string | null;
   seen_count?: number;
   last_injected_at?: string | null;
+  // --- LMC-5 Z 轴 (memories 本体，可选 additive) ---
+  version_status?: MemoryVersionStatus | string | null;
+  superseded_by?: string | null;
 }
+
+// LMC-5 Y 轴: relation 边类型
+export type MemoryRelType =
+  | "supports"
+  | "contradicts"
+  | "cause_effect"
+  | "derived_from"
+  | "same_thread"
+  | "supersedes";
+
+export interface MemoryRelationRow {
+  id: number;
+  src_id: string;
+  dst_id: string;
+  rel_type: MemoryRelType | string;
+  weight: number;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface PerceptionCacheItem {
+  id: string;
+  content: string;
+  importance: number;
+}
+
+export interface PerceptionCacheRow {
+  namespace: string;
+  date: string;
+  items: string;
+  created_at: string;
+}
+

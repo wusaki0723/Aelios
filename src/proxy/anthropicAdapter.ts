@@ -551,7 +551,7 @@ export async function buildAnthropicNativeRequest(
 //
 // Candidate breakpoints (assembler may emit all of these):
 //   1. system (persona_pinned): most stable cache tier.
-//   2. system (boot_stable): daily glossary/yesterday_log tier.
+//   2. system (boot_stable): impressions ladder + glossary tier.
 //      Skipped when boot content is null → single system anchor.
 //   3. bridge (message): for long conversations (>16 message blocks),
 //      a mid-history anchor so the tail's 20-block lookback doesn't

@@ -8,6 +8,7 @@ import { deleteMemoryEmbedding, upsertMemoryEmbedding } from "../memory/embeddin
 import { exportMemories } from "../memory/export";
 import { filterAndCompressMemoriesWithMeta } from "../memory/filter";
 import { formatMemoryPatch } from "../memory/inject";
+import { findSimilarActiveMemory } from "../memory/dedupGate";
 import { searchMemories, toMemoryApiRecord } from "../memory/search";
 import { deleteVectorMemory } from "../memory/vectorStore";
 import { clampMemoryType } from "../memory/canonicalTypes";
@@ -251,8 +252,17 @@ async function handleRecallMemories(request: Request, env: Env, profile: KeyProf
     : undefined;
   const types = readStringArray(body.types);
   const includePrompt = readBoolean(body.include_prompt);
+  // LMC-5 additive: explicit history opt-in (superseded rows). Default false.
+  const includeHistory = readBoolean(body.include_history, false);
 
-  const result = await runRecall(env, { namespace, query, k, min_score: minScore, types });
+  const result = await runRecall(env, {
+    namespace,
+    query,
+    k,
+    min_score: minScore,
+    types,
+    include_history: includeHistory
+  });
   const data = result.hits.map((h) => ({
     id: h.id,
     content: h.content,
@@ -676,6 +686,12 @@ export async function handleLongtailApi(request: Request, env: Env): Promise<Res
   return json({ data: { id, deleted: true } });
 }
 
+export type ApprovedMemoryResult = {
+  id: string;
+  action: "upserted" | "superseded" | "created";
+  supersededId?: string;
+};
+
 async function createApprovedMemoryFromCandidate(
   env: Env,
   input: {
@@ -688,8 +704,9 @@ async function createApprovedMemoryFromCandidate(
     tags: string[];
     sourceMessageIds: string[];
     source: string;
+    excludeIds?: string[];
   }
-): Promise<string> {
+): Promise<ApprovedMemoryResult> {
   if (input.factKey) {
     const result = await upsertMemoryByFactKey(env, {
       namespace: input.namespace,
@@ -702,7 +719,29 @@ async function createApprovedMemoryFromCandidate(
       source: input.source,
       sourceMessageIds: input.sourceMessageIds
     });
-    return result.id;
+    return { id: result.id, action: "upserted" };
+  }
+
+  const hit = await findSimilarActiveMemory(env, {
+    namespace: input.namespace,
+    content: input.content,
+    excludeIds: input.excludeIds
+  });
+  if (hit) {
+    const result = await supersedeMemory(env, {
+      namespace: input.namespace,
+      oldId: hit.memory.id,
+      newContent: input.content,
+      newType: input.type,
+      newFactKey: null,
+      importance: input.importance,
+      confidence: input.confidence,
+      tags: input.tags,
+      source: input.source,
+      sourceMessageIds: input.sourceMessageIds,
+      reason: "dedup_gate_supersede"
+    });
+    return { id: result.newId, action: "superseded", supersededId: hit.memory.id };
   }
 
   const created = await createMemory(env.DB, {
@@ -716,7 +755,7 @@ async function createApprovedMemoryFromCandidate(
     sourceMessageIds: input.sourceMessageIds
   });
   await syncMemoryEmbeddingBestEffort(env, created);
-  return created.id;
+  return { id: created.id, action: "created" };
 }
 
 export async function handleMemoryCandidates(request: Request, env: Env): Promise<Response> {
@@ -776,7 +815,48 @@ export async function handleMemoryCandidates(request: Request, env: Env): Promis
       });
     }
 
-    const memoryId = await createApprovedMemoryFromCandidate(env, {
+    if (candidate.target_memory_id) {
+      const target = await getMemoryById(env.DB, { namespace, id: candidate.target_memory_id });
+      const targetActive =
+        target &&
+        target.status === "active" &&
+        target.version_status !== "superseded";
+      if (targetActive) {
+        const result = await supersedeMemory(env, {
+          namespace,
+          oldId: candidate.target_memory_id,
+          newContent: content,
+          newType: type,
+          newFactKey: factKey,
+          confidence,
+          importance,
+          tags,
+          source: "review",
+          sourceMessageIds,
+          reason: "approve_update"
+        });
+        const updated = await updateMemoryCandidateStatus(env.DB, {
+          namespace,
+          id,
+          status: "approved",
+          targetMemoryId: result.newId,
+          decisionNote: readString(body.decision_note) || "approve_update"
+        });
+        return json({
+          data: {
+            candidate: updated ? toCandidateApiRecord(updated) : null,
+            memory_id: result.newId,
+            action: "superseded",
+            superseded_id: candidate.target_memory_id
+          }
+        });
+      }
+    }
+
+    const fallbackNote = candidate.target_memory_id
+      ? `${readString(body.decision_note) || "approved"}; target_gone_fallback`
+      : readString(body.decision_note) || "approved";
+    const approval = await createApprovedMemoryFromCandidate(env, {
       namespace,
       type,
       content,
@@ -785,16 +865,24 @@ export async function handleMemoryCandidates(request: Request, env: Env): Promis
       importance,
       tags,
       sourceMessageIds,
-      source: "review"
+      source: "review",
+      excludeIds: candidate.target_memory_id ? [candidate.target_memory_id] : undefined
     });
     const updated = await updateMemoryCandidateStatus(env.DB, {
       namespace,
       id,
       status: "approved",
-      targetMemoryId: memoryId,
-      decisionNote: readString(body.decision_note) || "approved"
+      targetMemoryId: approval.id,
+      decisionNote: fallbackNote
     });
-    return json({ data: { candidate: updated ? toCandidateApiRecord(updated) : null, memory_id: memoryId } });
+    return json({
+      data: {
+        candidate: updated ? toCandidateApiRecord(updated) : null,
+        memory_id: approval.id,
+        action: approval.action,
+        ...(approval.supersededId ? { superseded_id: approval.supersededId } : {})
+      }
+    });
   }
 
   if (action === "discard") {

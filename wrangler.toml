@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2026-04-01"
 keep_vars = true
 
+# Workers Cache: only GET /health (max-age=30) and GET /v1/models (max-age=300) send Cache-Control.
+[cache]
+enabled = true
+
 [observability]
 enabled = true
 head_sampling_rate = 1

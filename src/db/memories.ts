@@ -1,4 +1,4 @@
-import type { MemoryRecord } from "../types";
+import type { MemoryLifecycleRow, MemoryRecord } from "../types";
 import { newId } from "../utils/ids";
 import { nowIso } from "../utils/time";
 
@@ -172,6 +172,95 @@ export async function fetchMemoriesByIds(
       .bind(input.namespace, ...batch)
       .all<MemoryRecord>();
     rows.push(...(result.results ?? []));
+  }
+  return rows;
+}
+
+export interface MemoryWithLifecycle {
+  record: MemoryRecord;
+  lifecycle: MemoryLifecycleRow | null;
+}
+
+type MemoryLifecycleJoinRow = MemoryRecord & {
+  lc_memory_id: string | null;
+  lc_namespace: string | null;
+  lc_fact_key: string | null;
+  lc_supersedes_id: string | null;
+  lc_superseded_by_id: string | null;
+  lc_review_reason: string | null;
+  lc_valid_as_of: string | null;
+  lc_last_seen_at: string | null;
+  lc_seen_count: number | null;
+  lc_last_injected_at: string | null;
+};
+
+function toMemoryWithLifecycle(row: MemoryLifecycleJoinRow): MemoryWithLifecycle {
+  const {
+    lc_memory_id,
+    lc_namespace,
+    lc_fact_key,
+    lc_supersedes_id,
+    lc_superseded_by_id,
+    lc_review_reason,
+    lc_valid_as_of,
+    lc_last_seen_at,
+    lc_seen_count,
+    lc_last_injected_at,
+    ...record
+  } = row;
+
+  const lifecycle =
+    lc_memory_id == null
+      ? null
+      : {
+          memory_id: lc_memory_id,
+          namespace: lc_namespace ?? record.namespace,
+          fact_key: lc_fact_key,
+          supersedes_id: lc_supersedes_id,
+          superseded_by_id: lc_superseded_by_id,
+          review_reason: lc_review_reason,
+          valid_as_of: lc_valid_as_of,
+          last_seen_at: lc_last_seen_at,
+          seen_count: lc_seen_count ?? 0,
+          last_injected_at: lc_last_injected_at
+        };
+
+  return { record: record as MemoryRecord, lifecycle };
+}
+
+export async function fetchMemoriesWithLifecycleByIds(
+  db: D1Database,
+  input: { namespace: string; ids: string[] }
+): Promise<MemoryWithLifecycle[]> {
+  if (input.ids.length === 0) return [];
+
+  const uniqueIds = [...new Set(input.ids.filter((id) => id.trim()))];
+  if (uniqueIds.length === 0) return [];
+
+  const rows: MemoryWithLifecycle[] = [];
+  for (let index = 0; index < uniqueIds.length; index += FETCH_BY_IDS_BATCH_SIZE) {
+    const batch = uniqueIds.slice(index, index + FETCH_BY_IDS_BATCH_SIZE);
+    const placeholders = batch.map(() => "?").join(", ");
+    const result = await db
+      .prepare(
+        `SELECT m.*,
+          lc.memory_id AS lc_memory_id,
+          lc.namespace AS lc_namespace,
+          lc.fact_key AS lc_fact_key,
+          lc.supersedes_id AS lc_supersedes_id,
+          lc.superseded_by_id AS lc_superseded_by_id,
+          lc.review_reason AS lc_review_reason,
+          lc.valid_as_of AS lc_valid_as_of,
+          lc.last_seen_at AS lc_last_seen_at,
+          lc.seen_count AS lc_seen_count,
+          lc.last_injected_at AS lc_last_injected_at
+         FROM memories m
+         LEFT JOIN memory_lifecycle lc ON lc.memory_id = m.id
+         WHERE m.namespace = ? AND m.id IN (${placeholders})`
+      )
+      .bind(input.namespace, ...batch)
+      .all<MemoryLifecycleJoinRow>();
+    rows.push(...(result.results ?? []).map(toMemoryWithLifecycle));
   }
   return rows;
 }

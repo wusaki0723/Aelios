@@ -1,16 +1,5 @@
 import type { MemoryApiRecord, OpenAIChatMessage } from "../types";
-
-function contentToText(content: OpenAIChatMessage["content"]): string {
-  if (typeof content === "string") return content;
-  if (content == null) return "";
-  return content
-    .flatMap((part) => {
-      if (!part || typeof part !== "object" || Array.isArray(part)) return [];
-      const value = part as { type?: unknown; text?: unknown };
-      return value.type === "text" && typeof value.text === "string" ? [value.text] : [];
-    })
-    .join("\n");
-}
+import { contentToText, sanitizeMemoryContent } from "../utils/sanitize";
 
 export function extractLastUserText(messages: OpenAIChatMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -19,20 +8,6 @@ export function extractLastUserText(messages: OpenAIChatMessage[]): string {
   }
 
   return "";
-}
-
-function sanitizeMemoryContent(text: string): string {
-  return text
-    .replace(/debug-test/gi, "")
-    .replace(/记忆系统/g, "")
-    .replace(/自动记忆测试口令/g, "口令")
-    .replace(/测试口令/g, "口令")
-    .replace(/标签为?[^，。；\s]+/g, "")
-    .replace(/标签[:：]?[^，。；\s]+/g, "")
-    .replace(/[，,；;：:]\s*([。.!！?？])/g, "$1")
-    .replace(/\s{2,}/g, " ")
-    .replace(/^[，,；;：:\s]+|[，,；;：:\s]+$/g, "")
-    .trim();
 }
 
 /**

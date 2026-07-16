@@ -113,8 +113,16 @@ export async function handleChatCompletions(
   const namespace = auth.profile.namespace;
   const lastUserText = extractLastUserText(body.messages);
 
-  const boot = isV2Enabled(env) ? await buildBootPackage(env, { namespace }) : null;
-  const recallResult = boot ? await runRecall(env, { namespace, query: lastUserText }) : null;
+  // 故意不传 core_fingerprint：recall 会走 buildCoreFingerprintFromDb 兜底（与 boot 同源 precious 表），
+  // 多一次小查询换 boot 延迟被 recall 遮住，净赚。
+  let boot: Awaited<ReturnType<typeof buildBootPackage>> | null = null;
+  let recallResult: Awaited<ReturnType<typeof runRecall>> | null = null;
+  if (isV2Enabled(env)) {
+    [boot, recallResult] = await Promise.all([
+      buildBootPackage(env, { namespace }),
+      runRecall(env, { namespace, query: lastUserText })
+    ]);
+  }
   const recallHitsAsMemories = recallResult
     ? recallResult.hits.map((h) => ({
         id: h.id,

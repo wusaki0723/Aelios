@@ -32,17 +32,20 @@ export function handleHealth(env: Env): Response {
     .map(([name]) => name);
   const ok = missing_text_vars.length === 0 && missing_bindings.length === 0;
 
-  return json({
-    ok,
-    status: ok ? (missing_optional_bindings.length === 0 ? "ok" : "degraded") : "missing_configuration",
-    service: "companion-memory-proxy",
-    missing_text_vars,
-    missing_bindings,
-    missing_optional_bindings,
-    bindings: {
-      d1: Boolean(env.DB),
-      vectorize: Boolean(env.VECTORIZE),
-      queue: Boolean(env.MEMORY_QUEUE)
-    }
-  });
+  return json(
+    {
+      ok,
+      status: ok ? (missing_optional_bindings.length === 0 ? "ok" : "degraded") : "missing_configuration",
+      service: "companion-memory-proxy",
+      missing_text_vars,
+      missing_bindings,
+      missing_optional_bindings,
+      bindings: {
+        d1: Boolean(env.DB),
+        vectorize: Boolean(env.VECTORIZE),
+        queue: Boolean(env.MEMORY_QUEUE)
+      }
+    },
+    { headers: { "Cache-Control": "public, max-age=30" } }
+  );
 }

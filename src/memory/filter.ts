@@ -1,4 +1,5 @@
 import type { Env, MemoryApiRecord } from "../types";
+import { sanitizeSummaryContent } from "../utils/sanitize";
 
 const DEFAULT_WORKERS_AI_RERANKER_MODEL = "workers-ai/@cf/baai/bge-reranker-base";
 
@@ -69,24 +70,6 @@ function truncateText(text: string, maxChars: number): string {
   return text.length > maxChars ? `${text.slice(0, maxChars).trim()}...` : text;
 }
 
-function sanitizeMemoryContent(text: string): string {
-  return text
-    .replace(/<time_reminder>[^|。\n]*/gi, "")
-    .replace(/对话摘要（\d+ 条消息）：?/g, "")
-    .replace(/用户话题[:：]/g, "")
-    .replace(/助手要点[:：]/g, "")
-    .replace(/debug-test/gi, "")
-    .replace(/记忆系统/g, "")
-    .replace(/自动记忆测试口令/g, "口令")
-    .replace(/测试口令/g, "口令")
-    .replace(/标签为?[^，。；\s]+/g, "")
-    .replace(/标签[:：]?[^，。；\s]+/g, "")
-    .replace(/[，,；;：:]\s*([。.!！?？])/g, "$1")
-    .replace(/\s{2,}/g, " ")
-    .replace(/^[，,；;：:\s]+|[，,；;：:\s]+$/g, "")
-    .trim();
-}
-
 function normalizeForDedupe(text: string): string {
   return text
     .toLowerCase()
@@ -109,7 +92,7 @@ function prepareCandidates(env: Env, memories: MemoryApiRecord[]): MemoryApiReco
   const minScore = getFilterMinScore(env);
   const sorted = memories
     .flatMap((memory): MemoryApiRecord[] => {
-      const content = sanitizeMemoryContent(memory.content);
+      const content = sanitizeSummaryContent(memory.content);
       if (!content) return [];
       if (!memory.pinned && typeof memory.score === "number" && memory.score < minScore) return [];
       return [{ ...memory, content }];

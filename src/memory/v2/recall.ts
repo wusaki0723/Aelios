@@ -157,13 +157,24 @@ export async function buildBootPackage(
   env: Env,
   input: { namespace: string }
 ): Promise<BootPackage> {
-  const preciousRows = await listPrecious(env.DB, {
-    namespace: input.namespace,
-    limit: 20
-  });
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const bootTimeZone = env.DREAM_TIME_ZONE || "Asia/Shanghai";
+  const yesterdayLabel = new Intl.DateTimeFormat("en-CA", {
+    timeZone: bootTimeZone,
+    year: "numeric", month: "2-digit", day: "2-digit"
+  }).format(yesterday);
 
-  // boot 要全量 glossary (冷启动把所有黑话定义塞进)，不是 query 命中。
-  const allGlossary = await listAllGlossary(env, input.namespace);
+  const [preciousRows, allGlossary, dailyLog, weeklyRows, monthlyRows, spontaneous] = await Promise.all([
+    listPrecious(env.DB, { namespace: input.namespace, limit: 20 }),
+    listAllGlossary(env, input.namespace),
+    getDailyLog(env.DB, { namespace: input.namespace, date: yesterdayLabel }),
+    listRecentWeeklyLogs(env.DB, { namespace: input.namespace, limit: 1 }),
+    listRecentMonthlyLogs(env.DB, { namespace: input.namespace, limit: 1 }),
+    loadSpontaneousForBoot(env, { namespace: input.namespace, timeZone: bootTimeZone }).catch((error) => {
+      console.warn("boot: load spontaneous failed", error);
+      return [] as PerceptionCacheItem[];
+    })
+  ]);
 
   // 确定性排序: precious 按 created_at 升序 (老的在前，稳定的在前)。
   const precious = preciousRows
@@ -180,33 +191,12 @@ export async function buildBootPackage(
     });
   }
 
-  // 昨天的日志 (dream 产出)
-  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const bootTimeZone = env.DREAM_TIME_ZONE || "Asia/Shanghai";
-  const yesterdayLabel = new Intl.DateTimeFormat("en-CA", {
-    timeZone: bootTimeZone,
-    year: "numeric", month: "2-digit", day: "2-digit"
-  }).format(yesterday);
-  const dailyLog = await getDailyLog(env.DB, { namespace: input.namespace, date: yesterdayLabel });
-  const weeklyRows = await listRecentWeeklyLogs(env.DB, { namespace: input.namespace, limit: 1 });
-  const monthlyRows = await listRecentMonthlyLogs(env.DB, { namespace: input.namespace, limit: 1 });
   const impressionMaxChars = (() => {
     const raw = env.IMPRESSION_LADDER_MAX_CHARS;
     if (!raw) return 1000;
     const parsed = Number(raw);
     return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1000;
   })();
-
-  // LMC-5 spontaneous: 最多 2 条，当天/昨夜 perception_cache；没有就不注入。
-  let spontaneous: PerceptionCacheItem[] = [];
-  try {
-    spontaneous = await loadSpontaneousForBoot(env, {
-      namespace: input.namespace,
-      timeZone: bootTimeZone
-    });
-  } catch (error) {
-    console.warn("boot: load spontaneous failed", error);
-  }
 
   const weekly = weeklyRows[0] ?? null;
   const monthly = monthlyRows[0] ?? null;

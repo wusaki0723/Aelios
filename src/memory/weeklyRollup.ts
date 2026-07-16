@@ -11,9 +11,9 @@ import type { Env, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 import {
   addDaysToDateLabel,
   getDateLabelsLookback,
-  getDateRangeForLabel,
-  readDreamTimeZoneFromEnv
-} from "./dailyDigest";
+  getDateRangeForLabel
+} from "./dreamDates";
+import { readDreamTimeZoneFromEnv } from "./dreamEnv";
 
 const DEFAULT_TIME_ZONE = "Asia/Singapore";
 const DEFAULT_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";

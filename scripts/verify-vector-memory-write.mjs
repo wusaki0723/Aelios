@@ -11,9 +11,9 @@
  */
 
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = readFileSync(resolve(root, "src/memory/vectorStore.ts"), "utf8");
@@ -25,9 +25,21 @@ const dreamExtractSource = readFileSync(resolve(root, "src/memory/dreamExtract.t
 const indexSource = readFileSync(resolve(root, "src/index.ts"), "utf8");
 const wranglerSource = readFileSync(resolve(root, "wrangler.toml"), "utf8");
 const queueProducerSource = readFileSync(resolve(root, "src/queue/producer.ts"), "utf8");
-const dbV2Source = readFileSync(resolve(root, "src/db/v2.ts"), "utf8");
+// db/v2.ts may be a barrel; prefer domain modules under db/v2/ when present.
+const dbV2Dir = resolve(root, "src/db/v2");
+const dbV2DomainFiles = existsSync(dbV2Dir)
+  ? readdirSync(dbV2Dir).filter((name) => name.endsWith(".ts")).sort()
+  : [];
+const dbV2Source =
+  dbV2DomainFiles.length > 0
+    ? dbV2DomainFiles.map((name) => readFileSync(join(dbV2Dir, name), "utf8")).join("\n")
+    : readFileSync(resolve(root, "src/db/v2.ts"), "utf8");
 const memoriesApiSource = readFileSync(resolve(root, "src/api/memories.ts"), "utf8");
-const adminSource = readFileSync(resolve(root, "src/api/admin.ts"), "utf8");
+// admin.ts may be a barrel; UI template contracts live in admin/ui.ts when split.
+const adminUiPath = resolve(root, "src/api/admin/ui.ts");
+const adminSource = existsSync(adminUiPath)
+  ? readFileSync(adminUiPath, "utf8")
+  : readFileSync(resolve(root, "src/api/admin.ts"), "utf8");
 const candidateJudgeSource = readFileSync(resolve(root, "src/memory/candidateJudge.ts"), "utf8");
 
 function indexOfOrThrow(haystack, needle) {
@@ -158,7 +170,7 @@ assert.match(adminSource, /await crypto\.subtle\.digest\('SHA-1', data\)/);
 assert.match(dreamExtractSource, /import \{ clampMemoryType \} from "\.\/canonicalTypes"/);
 assert.match(dreamExtractSource, /type: clampMemoryType\(readString\(raw\.type\)\)/);
 assert.match(dreamExtractSource, /type 只能从这 8 个里选/);
-assert.match(dbV2Source, /import \{ clampMemoryType \} from "\.\.\/memory\/canonicalTypes"/);
+assert.match(dbV2Source, /import \{ clampMemoryType \} from "(?:\.\.\/)+memory\/canonicalTypes"/);
 assert.match(dbV2Source, /clampMemoryType\(input\.type, "note"\)/);
 assert.match(dbV2Source, /clampMemoryType\(input\.type, "fact"\)/);
 assert.match(dbV2Source, /clampMemoryType\(input\.newType, "fact"\)/);

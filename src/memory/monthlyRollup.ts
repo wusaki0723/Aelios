@@ -9,9 +9,9 @@ import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 import {
   addDaysToDateLabel,
-  getDateLabelsLookback,
-  readDreamTimeZoneFromEnv
-} from "./dailyDigest";
+  getDateLabelsLookback
+} from "./dreamDates";
+import { readDreamTimeZoneFromEnv } from "./dreamEnv";
 import { getMondayOfIsoWeek } from "./weeklyRollup";
 
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";

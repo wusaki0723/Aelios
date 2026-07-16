@@ -10,9 +10,9 @@
  */
 
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { formatBootStable } from "../src/assembler/types.ts";
 import { createMemory, getMemoryById } from "../src/db/memories.ts";
@@ -32,6 +32,18 @@ function readSource(relPath) {
   return readFileSync(resolve(root, relPath), "utf8");
 }
 
+function readDbV2Source() {
+  // db/v2.ts may be a barrel; prefer domain modules under db/v2/ when present.
+  const dir = resolve(root, "src/db/v2");
+  if (existsSync(dir)) {
+    const files = readdirSync(dir).filter((name) => name.endsWith(".ts")).sort();
+    if (files.length > 0) {
+      return files.map((name) => readFileSync(join(dir, name), "utf8")).join("\n");
+    }
+  }
+  return readSource("src/db/v2.ts");
+}
+
 // ---------------------------------------------------------------------------
 // Static source contract checks
 // ---------------------------------------------------------------------------
@@ -39,7 +51,7 @@ function readSource(relPath) {
 const dedupGateSource = readSource("src/memory/dedupGate.ts");
 const memoriesSource = readSource("src/api/memories.ts");
 const digestSource = readSource("src/memory/dailyDigest.ts");
-const dbV2Source = readSource("src/db/v2.ts");
+const dbV2Source = readDbV2Source();
 const recallSource = readSource("src/memory/v2/recall.ts");
 const typesSource = readSource("src/assembler/types.ts");
 const embeddingSource = readSource("src/memory/embedding.ts");

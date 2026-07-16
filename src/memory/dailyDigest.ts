@@ -29,6 +29,40 @@ import { runPerceptionPickPhase } from "./perception";
 import type { PerceptionPickStats } from "./perception";
 import { newId } from "../utils/ids";
 import { nowIso } from "../utils/time";
+import {
+  getDateLabelsLookback,
+  getDateRangeForLabel,
+  getTargetDigestDateLabel,
+  readDailyCursor
+} from "./dreamDates";
+import {
+  DEFAULT_EMPTY_MEMORY_MIN_CHARS,
+  isDreamEnabled,
+  readDreamMaxMessages,
+  readDreamMaxTokens,
+  readDreamMemoryContextLimit,
+  readDreamModel,
+  readDreamStrategy,
+  readDreamTimeZone
+} from "./dreamEnv";
+import {
+  clampScore,
+  extractJsonObject,
+  readPositiveInt,
+  readString,
+  readStringArray,
+  truncate
+} from "./dreamUtils";
+
+// Re-export date/env surface so external importers of dailyDigest keep working.
+export {
+  addDaysToDateLabel,
+  getDateLabelsLookback,
+  getDateRangeForLabel,
+  getTargetDigestDateLabel,
+  readDailyCursor
+} from "./dreamDates";
+export { readDreamTimeZoneFromEnv } from "./dreamEnv";
 
 interface DigestMemoryUpdate {
   target_id: string;
@@ -139,215 +173,6 @@ interface DigestModelCallResult {
   finishReason?: string | null;
 }
 
-const DEFAULT_MAX_MESSAGES = 40;
-const DEFAULT_MEMORY_CONTEXT_LIMIT = 40;
-const DEFAULT_EMPTY_MEMORY_MIN_CHARS = 4;
-const DEFAULT_TIME_ZONE = "Asia/Singapore";
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
-function isDreamEnabled(env: Env): boolean {
-  const dreamFlag = readString(env.ENABLE_DREAM);
-  if (dreamFlag) return dreamFlag !== "false";
-  return env.ENABLE_DAILY_MEMORY_DIGEST !== "false";
-}
-
-function readDreamStrategy(env: Env): "upsert" | "review" {
-  const raw = env.DREAM_STRATEGY;
-  if (raw === "review") return "review";
-  return "upsert";
-}
-
-function readFirstEnvValue(...values: unknown[]): unknown {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value;
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
-}
-
-const DEFAULT_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";
-
-function readDreamModel(env: Env): string | null {
-  return (
-    readString(readFirstEnvValue(env.DREAM_MODEL, env.DAILY_DIGEST_MODEL, env.SUMMARY_MODEL)) ||
-    DEFAULT_DREAM_MODEL
-  );
-}
-
-function readDreamTimeZone(env: Env): string {
-  return readString(readFirstEnvValue(env.DREAM_TIME_ZONE, env.DAILY_DIGEST_TIME_ZONE)) || DEFAULT_TIME_ZONE;
-}
-
-function readDreamMaxMessages(env: Env): number {
-  return readPositiveInt(
-    readFirstEnvValue(env.DREAM_MAX_MESSAGES, env.DAILY_DIGEST_MAX_MESSAGES),
-    DEFAULT_MAX_MESSAGES,
-    1000
-  );
-}
-
-function readDreamMaxTokens(env: Env): number {
-  return readPositiveInt(readFirstEnvValue(env.DREAM_MAX_TOKENS, env.DAILY_DIGEST_MAX_TOKENS), 3000, 8000);
-}
-
-function readDreamMemoryContextLimit(env: Env): number {
-  return readPositiveInt(
-    readFirstEnvValue(env.DREAM_MEMORY_CONTEXT_LIMIT, env.DAILY_DIGEST_MEMORY_CONTEXT_LIMIT),
-    DEFAULT_MEMORY_CONTEXT_LIMIT,
-    1000
-  );
-}
-
-function readPositiveInt(value: unknown, fallback: number, max: number): number {
-  const parsed = typeof value === "string" ? Number(value) : typeof value === "number" ? value : fallback;
-  const numeric = Number.isFinite(parsed) ? parsed : fallback;
-  return Math.min(Math.max(Math.floor(numeric), 1), max);
-}
-
-function clampScore(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-}
-
-function truncate(text: string, maxChars: number): string {
-  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 3)}...`;
-}
-
-function formatDate(date: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(date);
-}
-
-export function getTargetDigestDateLabel(timeZone: string, now = new Date()): string {
-  return formatDate(new Date(now.getTime() - ONE_DAY_MS), timeZone);
-}
-
-export function readDreamTimeZoneFromEnv(env: Env): string {
-  return readDreamTimeZone(env);
-}
-
-export function getDateLabelsLookback(dateLabel: string, count: number, timeZone: string): string[] {
-  const labels: string[] = [];
-  for (let i = 0; i < count; i += 1) {
-    labels.push(addDaysToDateLabel(dateLabel, -i, timeZone));
-  }
-  return labels;
-}
-
-function parseDateLabel(dateLabel: string): { year: number; month: number; day: number } {
-  const [year, month, day] = dateLabel.split("-").map((value) => Number(value));
-  if (!year || !month || !day) {
-    throw new Error(`Invalid date label: ${dateLabel}`);
-  }
-  return { year, month, day };
-}
-
-function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  }).formatToParts(date);
-
-  const values = new Map(parts.map((part) => [part.type, part.value]));
-  const year = Number(values.get("year"));
-  const month = Number(values.get("month"));
-  const day = Number(values.get("day"));
-  const hour = Number(values.get("hour")) % 24;
-  const minute = Number(values.get("minute"));
-  const second = Number(values.get("second"));
-  const zonedAsUtc = Date.UTC(year, month - 1, day, hour, minute, second);
-
-  return zonedAsUtc - date.getTime();
-}
-
-function zonedWallTimeToUtc(input: {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  second: number;
-  timeZone: string;
-}): Date {
-  const wallClockUtc = Date.UTC(input.year, input.month - 1, input.day, input.hour, input.minute, input.second);
-  let utc = wallClockUtc;
-
-  for (let i = 0; i < 3; i += 1) {
-    const offset = getTimeZoneOffsetMs(new Date(utc), input.timeZone);
-    const next = wallClockUtc - offset;
-    if (Math.abs(next - utc) < 1000) break;
-    utc = next;
-  }
-
-  return new Date(utc);
-}
-
-export function addDaysToDateLabel(dateLabel: string, days: number, timeZone: string): string {
-  const { year, month, day } = parseDateLabel(dateLabel);
-  const localNoonUtc = zonedWallTimeToUtc({
-    year,
-    month,
-    day,
-    hour: 12,
-    minute: 0,
-    second: 0,
-    timeZone
-  });
-  return formatDate(new Date(localNoonUtc.getTime() + days * ONE_DAY_MS), timeZone);
-}
-
-export function getDateRangeForLabel(dateLabel: string, timeZone: string): { startIso: string; endIso: string } {
-  const start = parseDateLabel(dateLabel);
-  const end = parseDateLabel(addDaysToDateLabel(dateLabel, 1, timeZone));
-
-  return {
-    startIso: zonedWallTimeToUtc({ ...start, hour: 0, minute: 0, second: 0, timeZone }).toISOString(),
-    endIso: zonedWallTimeToUtc({ ...end, hour: 0, minute: 0, second: 0, timeZone }).toISOString()
-  };
-}
-
-export function readDailyCursor(value: string | null, startIso: string, endIso: string): { done: boolean; after: string | null } {
-  if (!value) return { done: false, after: null };
-  if (value.startsWith("done:")) return { done: true, after: null };
-  if (value >= startIso && value < endIso) return { done: false, after: value };
-  return { done: false, after: null };
-}
-
-function extractJsonObject(text: string): unknown | null {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    // Some providers wrap JSON in prose; pull out the outermost object.
-  }
-
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as unknown;
-  } catch {
-    return null;
-  }
-}
 
 function normalizeExtractedMemory(value: unknown): ExtractedMemory | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;

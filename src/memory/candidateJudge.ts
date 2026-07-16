@@ -14,8 +14,8 @@ import {
   upsertMemoryByFactKey,
   type MemoryCandidateRow
 } from "../db/v2";
-import { callOpenAICompat } from "../proxy/openaiAdapter";
-import type { Env, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
+import { callModelWithRetry, readModelName } from "../utils/modelCall";
+import type { Env, MessageRecord } from "../types";
 import { extractJsonObject } from "../utils/parse";
 import { createVectorMemory } from "./vectorStore";
 
@@ -110,26 +110,22 @@ function buildJudgePrompt(candidate: MemoryCandidateRow, messages: MessageRecord
 }
 
 async function callJudgeModel(env: Env, model: string, prompt: string): Promise<JudgeModelResult | null> {
-  const request: OpenAIChatRequest = {
-    model,
-    messages: [
-      { role: "system", content: "你是严格的 JSON 生成器。你只输出 JSON。" },
-      { role: "user", content: prompt }
-    ],
-    temperature: 0,
-    max_tokens: JUDGE_MAX_TOKENS,
-    response_format: { type: "json_object" },
-    stream: false
-  };
+  // backoffMs: [] preserves prior single-attempt behavior (no retry loop here before).
+  // systemPrompt preserves this caller's original (shorter) JSON-generator prompt.
+  let text: string;
+  try {
+    text = await callModelWithRetry(env, {
+      model,
+      prompt,
+      maxTokens: JUDGE_MAX_TOKENS,
+      backoffMs: [],
+      systemPrompt: "你是严格的 JSON 生成器。你只输出 JSON。"
+    });
+  } catch {
+    return null;
+  }
 
-  const response = await callOpenAICompat(env, request);
-  if (!response.ok) return null;
-
-  const parsed = (await response.json()) as OpenAIChatResponse;
-  const message = parsed.choices?.[0]?.message as ({ content?: unknown; reasoning_content?: unknown }) | undefined;
-  const content = typeof message?.content === "string" ? message.content.trim() : "";
-  const reasoning = typeof message?.reasoning_content === "string" ? message.reasoning_content.trim() : "";
-  const raw = extractJsonObject(content || reasoning);
+  const raw = extractJsonObject(text);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
 
   const obj = raw as Record<string, unknown>;
@@ -220,7 +216,7 @@ export async function runCandidateJudge(
     return { ran: false, judged: 0, approved: 0, discarded: 0, kept: 0, failed: 0, reason: "judge_disabled" };
   }
 
-  const model = env.JUDGE_MODEL?.trim() || env.DREAM_MODEL?.trim() || "";
+  const model = readModelName(env, ["JUDGE_MODEL", "DREAM_MODEL"], "");
   if (!model) {
     return { ran: false, judged: 0, approved: 0, discarded: 0, kept: 0, failed: 0, reason: "missing_model" };
   }

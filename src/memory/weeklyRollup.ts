@@ -6,8 +6,8 @@ import {
   listDailyLogDatesBefore,
   listDailyLogsInRange
 } from "../db/v2";
-import { callOpenAICompat } from "../proxy/openaiAdapter";
-import type { Env, OpenAIChatRequest, OpenAIChatResponse } from "../types";
+import type { Env } from "../types";
+import { callModelWithRetry, ModelCallError, readModelName } from "../utils/modelCall";
 import {
   addDaysToDateLabel,
   getDateLabelsLookback,
@@ -19,7 +19,6 @@ import { extractJsonObject, readString } from "../utils/parse";
 const DEFAULT_TIME_ZONE = "Asia/Singapore";
 const DEFAULT_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";
 const MAX_WEEKS_PER_RUN = 2;
-const MODEL_RETRY_BACKOFF_MS = [2000, 8000];
 
 export interface WeeklyRollupWeekDetail {
   week: string;
@@ -73,8 +72,7 @@ function isWeeklyRollupEnabled(env: Env): boolean {
 }
 
 function readRollupModel(env: Env): string {
-  const raw = readString(env.DREAM_MODEL) || readString(env.DAILY_DIGEST_MODEL) || readString(env.SUMMARY_MODEL);
-  return raw || DEFAULT_DREAM_MODEL;
+  return readModelName(env, ["DREAM_MODEL", "DAILY_DIGEST_MODEL", "SUMMARY_MODEL"], DEFAULT_DREAM_MODEL);
 }
 
 function readRollupMaxTokens(env: Env): number {
@@ -143,14 +141,6 @@ function normalizeWeeklyRollupResult(value: unknown): WeeklyRollupModelResult {
   return { title, summary };
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isRetriableModelStatus(status: number): boolean {
-  return status === 429 || status >= 500;
-}
-
 function buildWeeklyRollupPrompt(input: {
   week: string;
   startDate: string;
@@ -192,18 +182,7 @@ async function callWeeklyRollupModel(
   meta: { week: string; dayCount: number }
 ): Promise<WeeklyRollupModelCallResult> {
   const model = readRollupModel(env);
-
-  const request: OpenAIChatRequest = {
-    model,
-    messages: [
-      { role: "system", content: "你是严格的 JSON 生成器。你只输出 JSON，不要输出思考过程。" },
-      { role: "user", content: prompt }
-    ],
-    temperature: 0,
-    max_tokens: readRollupMaxTokens(env),
-    response_format: { type: "json_object" },
-    stream: false
-  };
+  const maxTokens = readRollupMaxTokens(env);
 
   const startedAt = Date.now();
   console.log("weekly_rollup: calling model", {
@@ -211,85 +190,46 @@ async function callWeeklyRollupModel(
     model,
     dayCount: meta.dayCount,
     promptChars: prompt.length,
-    maxTokens: request.max_tokens
+    maxTokens
   });
 
-  const maxAttempts = 1 + MODEL_RETRY_BACKOFF_MS.length;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (attempt > 0) {
-      const backoffMs = MODEL_RETRY_BACKOFF_MS[attempt - 1] ?? MODEL_RETRY_BACKOFF_MS.at(-1) ?? 8000;
-      console.warn("weekly_rollup: retrying model call after non-ok response", {
-        week: meta.week,
-        model,
-        attempt: attempt + 1,
-        maxAttempts,
-        backoffMs
-      });
-      await delay(backoffMs);
-    }
-
-    try {
-      const response = await callOpenAICompat(env, request);
-      const elapsedMs = Date.now() - startedAt;
-      if (!response.ok) {
-        const retriable = isRetriableModelStatus(response.status);
-        console.error("weekly_rollup: model returned non-ok", {
-          week: meta.week,
-          model,
-          status: response.status,
-          statusText: response.statusText,
-          elapsedMs,
-          attempt: attempt + 1,
-          retriable
-        });
-        if (retriable && attempt < maxAttempts - 1) continue;
-        return { result: null, reason: "model_error", model, status: response.status };
-      }
-
-      const parsed = (await response.json()) as OpenAIChatResponse;
-      const choice = parsed.choices?.[0];
-      const message = choice?.message as ({ content?: unknown; reasoning_content?: unknown }) | undefined;
-      const content = typeof message?.content === "string" ? message.content.trim() : "";
-      const reasoning = typeof message?.reasoning_content === "string" ? message.reasoning_content.trim() : "";
-      const json = extractJsonObject(content || reasoning);
-      const result = normalizeWeeklyRollupResult(json);
-      if (!result) {
-        console.error("weekly_rollup: model returned invalid JSON", {
-          week: meta.week,
-          model,
-          elapsedMs,
-          finishReason: choice?.finish_reason ?? null,
-          contentChars: content.length,
-          reasoningChars: reasoning.length
-        });
-        return { result: null, reason: "model_invalid_json", model, finishReason: choice?.finish_reason };
-      }
-
-      console.log("weekly_rollup: model returned valid JSON", {
-        week: meta.week,
-        model,
-        elapsedMs,
-        finishReason: choice?.finish_reason ?? null,
-        attempt: attempt + 1
-      });
-      return { result, model };
-    } catch (error) {
-      const elapsedMs = Date.now() - startedAt;
-      const message = error instanceof Error && error.message ? error.message : String(error);
-      console.error("weekly_rollup model failed", {
-        week: meta.week,
-        model,
-        elapsedMs,
-        attempt: attempt + 1,
-        error: message
-      });
-      if (attempt < maxAttempts - 1) continue;
-      return { result: null, reason: "model_error", model };
-    }
+  let text: string;
+  try {
+    text = await callModelWithRetry(env, {
+      model,
+      prompt,
+      maxTokens,
+      logPrefix: "weekly_rollup",
+      logMeta: { week: meta.week }
+    });
+  } catch (error) {
+    return {
+      result: null,
+      reason: "model_error",
+      model,
+      status: error instanceof ModelCallError ? error.status : undefined
+    };
   }
 
-  return { result: null, reason: "model_error", model };
+  const elapsedMs = Date.now() - startedAt;
+  const json = extractJsonObject(text);
+  const result = normalizeWeeklyRollupResult(json);
+  if (!result) {
+    console.error("weekly_rollup: model returned invalid JSON", {
+      week: meta.week,
+      model,
+      elapsedMs,
+      contentChars: text.length
+    });
+    return { result: null, reason: "model_invalid_json", model };
+  }
+
+  console.log("weekly_rollup: model returned valid JSON", {
+    week: meta.week,
+    model,
+    elapsedMs
+  });
+  return { result, model };
 }
 
 function collectEligibleWeeks(input: {

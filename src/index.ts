@@ -26,10 +26,12 @@ import { handleMcp } from "./api/mcp";
 import { handleModels } from "./api/models";
 import { handleRelationsGraph } from "./api/relations";
 import { runDailyMemoryDigest, runDreamBackfill } from "./memory/dailyDigest";
-import { runDiaryWriterNightly } from "./memory/diaryWriter";
-import { runMonthlyRollup } from "./memory/monthlyRollup";
-import { runWeeklyRollup } from "./memory/weeklyRollup";
-import { runGithubDailyPull } from "./memory/githubDaily";
+import {
+  runDiaryTrigger,
+  runGithubDailyTrigger,
+  runMonthlyRollupTrigger,
+  runWeeklyRollupTrigger
+} from "./memory/dream/rollupPhase";
 import { runMemoryRetention } from "./memory/retention";
 import { handleQueueMessage } from "./queue/consumer";
 import type { Env, QueueMessage } from "./types";
@@ -223,9 +225,10 @@ export default {
         const dreamResults = await runDailyMemoryDigestBatches(env, namespace);
         results.push({ type: "dream_batches", results: dreamResults });
 
-        let diaryWriter: Awaited<ReturnType<typeof runDiaryWriterNightly>> | undefined;
+        // Rollup phase triggers (diary → github∥retention → weekly → monthly). Order preserved.
+        let diaryWriter: Awaited<ReturnType<typeof runDiaryTrigger>> | undefined;
         try {
-          diaryWriter = await runDiaryWriterNightly(env, namespace);
+          diaryWriter = await runDiaryTrigger(env, namespace);
         } catch (error) {
           console.error("scheduled diary writer failed", {
             namespace,
@@ -243,7 +246,7 @@ export default {
             }
           ),
           // 04:10 SGT cron (20:10 UTC) runs ~4h after cmh-lite's 23:50 local push — safe to pull yesterday's daily.
-          runGithubDailyPull(env).then(
+          runGithubDailyTrigger(env).then(
             (r) => {
               console.log("github daily pull", r);
               return r;
@@ -257,9 +260,9 @@ export default {
         results.push({ type: "retention", result: retentionResult });
         results.push({ type: "github_daily", result: githubResult });
 
-        let weeklyRollup: Awaited<ReturnType<typeof runWeeklyRollup>> | undefined;
+        let weeklyRollup: Awaited<ReturnType<typeof runWeeklyRollupTrigger>> | undefined;
         try {
-          weeklyRollup = await runWeeklyRollup(env, namespace);
+          weeklyRollup = await runWeeklyRollupTrigger(env, namespace);
         } catch (error) {
           console.error("scheduled weekly rollup failed", {
             namespace,
@@ -268,9 +271,9 @@ export default {
         }
         results.push({ type: "weekly_rollup", result: weeklyRollup ?? { ok: false } });
 
-        let monthlyRollup: Awaited<ReturnType<typeof runMonthlyRollup>> | undefined;
+        let monthlyRollup: Awaited<ReturnType<typeof runMonthlyRollupTrigger>> | undefined;
         try {
-          monthlyRollup = await runMonthlyRollup(env, namespace);
+          monthlyRollup = await runMonthlyRollupTrigger(env, namespace);
         } catch (error) {
           console.error("scheduled monthly rollup failed", {
             namespace,

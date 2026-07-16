@@ -18,7 +18,15 @@ import { dirname, join, resolve } from "node:path";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = readFileSync(resolve(root, "src/memory/vectorStore.ts"), "utf8");
 const searchSource = readFileSync(resolve(root, "src/memory/search.ts"), "utf8");
-const digestSource = readFileSync(resolve(root, "src/memory/dailyDigest.ts"), "utf8");
+// dailyDigest may be a thin re-export after the dream/ phase split; scan barrel + phases.
+const dreamDir = resolve(root, "src/memory/dream");
+const dreamPhaseFiles = existsSync(dreamDir)
+  ? readdirSync(dreamDir).filter((name) => name.endsWith(".ts")).sort()
+  : [];
+const digestSource = [
+  readFileSync(resolve(root, "src/memory/dailyDigest.ts"), "utf8"),
+  ...dreamPhaseFiles.map((name) => readFileSync(join(dreamDir, name), "utf8"))
+].join("\n");
 const recallSource = readFileSync(resolve(root, "src/memory/v2/recall.ts"), "utf8");
 const mcpSource = readFileSync(resolve(root, "src/api/mcp.ts"), "utf8");
 const dreamExtractSource = readFileSync(resolve(root, "src/memory/dreamExtract.ts"), "utf8");

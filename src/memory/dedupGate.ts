@@ -1,3 +1,4 @@
+import { getMemoryById } from "../db/memories";
 import type { Env, MemoryApiRecord } from "../types";
 import { readNumber } from "../utils/request";
 import { searchVectorMemories } from "./vectorStore";
@@ -5,12 +6,6 @@ import { searchVectorMemories } from "./vectorStore";
 export interface SimilarHit {
   memory: MemoryApiRecord;
   score: number;
-}
-
-function isActiveNonSuperseded(memory: MemoryApiRecord): boolean {
-  if (memory.status !== "active") return false;
-  if (memory.version_status === "superseded") return false;
-  return true;
 }
 
 export async function findSimilarActiveMemory(
@@ -29,9 +24,10 @@ export async function findSimilarActiveMemory(
     let best: SimilarHit | null = null;
     for (const memory of hits) {
       if (exclude.has(memory.id)) continue;
-      if (!isActiveNonSuperseded(memory)) continue;
       const score = memory.score ?? 0;
       if (score < threshold) continue;
+      const d1Row = await getMemoryById(env.DB, { namespace: input.namespace, id: memory.id });
+      if (!d1Row || d1Row.status !== "active" || d1Row.version_status === "superseded") continue;
       if (!best || score > best.score) {
         best = { memory, score };
       }

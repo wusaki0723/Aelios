@@ -892,11 +892,19 @@ export async function resolveMemoryFactKey(
   namespace?: string
 ): Promise<string | null> {
   const row = await env.DB
-    .prepare(`SELECT m.fact_key, m.namespace FROM memories m WHERE m.id = ?`)
+    .prepare(
+      `SELECT m.fact_key, m.namespace, m.status, m.version_status FROM memories m WHERE m.id = ?`
+    )
     .bind(id)
-    .first<{ fact_key: string | null; namespace: string }>();
+    .first<{
+      fact_key: string | null;
+      namespace: string;
+      status: string;
+      version_status: string | null;
+    }>();
   if (!row) return null;
   if (namespace && row.namespace !== namespace) return null;
+  if (row.status !== "active" || row.version_status === "superseded") return null;
   if (row.fact_key) return row.fact_key;
   const lifecycle = await env.DB
     .prepare(`SELECT fact_key FROM memory_lifecycle WHERE memory_id = ?`)
@@ -1113,10 +1121,14 @@ export async function supersedeMemory(
   // 3. 同步向量：新条目 upsert，旧条目下架
   await syncMemoryVector(env, { namespace: input.namespace, id: nextId });
   if (old.vector_id) {
-    try {
-      await env.VECTORIZE?.deleteByIds([old.vector_id]);
-    } catch (error) {
-      console.error("v2 vector delete (supersede old) failed", { id: old.id, error });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await env.VECTORIZE?.deleteByIds([old.vector_id]);
+        break;
+      } catch (error) {
+        if (attempt === 0) continue;
+        console.error("v2 vector delete (supersede old) failed", { id: old.id, error });
+      }
     }
   }
 

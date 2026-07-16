@@ -65,6 +65,48 @@ function countMessageBlocks(content) {
   return content.length;
 }
 
+function formatImpressionLine(entry) {
+  return `【${entry.label}·${entry.title}】${entry.summary}`;
+}
+
+function buildImpressionsLadder(boot) {
+  const ladder = boot.impressions;
+  if (!ladder) return [];
+
+  const lines = [];
+  if (ladder.daily) lines.push(formatImpressionLine(ladder.daily));
+  if (ladder.weekly) lines.push(formatImpressionLine(ladder.weekly));
+  if (ladder.monthly) lines.push(formatImpressionLine(ladder.monthly));
+  if (lines.length === 0) return [];
+
+  const maxChars = ladder.max_chars > 0 ? ladder.max_chars : 1000;
+  const selected = [...lines];
+  while (selected.length > 1) {
+    if (selected.join("\n").length <= maxChars) return selected;
+    selected.pop();
+  }
+  const dailyLine = selected[0];
+  if (!dailyLine) return [];
+  if (dailyLine.length <= maxChars) return selected;
+  if (!ladder.daily) return selected;
+  const prefix = `【${ladder.daily.label}·${ladder.daily.title}】`;
+  const summaryBudget = Math.max(0, maxChars - prefix.length);
+  return [`${prefix}${ladder.daily.summary.slice(0, summaryBudget)}`];
+}
+
+function formatBootStable(boot) {
+  const parts = [];
+  const impressions = buildImpressionsLadder(boot);
+  if (impressions.length > 0) {
+    parts.push("<impressions>", ...impressions, "</impressions>");
+  }
+  if (boot.glossary && boot.glossary.length > 0) {
+    const entries = boot.glossary.map((g) => `${g.term}: ${g.definition}`);
+    parts.push("<glossary>", ...entries, "</glossary>");
+  }
+  return parts.join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Text constants — must match src/assembler/blocks.ts
 // ---------------------------------------------------------------------------
@@ -287,19 +329,7 @@ function assemble(ctx) {
       if (stable.length > 0) text = stable.join("\n\n");
     } else if (blockId === "boot_stable") {
       if (ctx.boot) {
-        const parts = [];
-        if (ctx.boot.yesterday_log) {
-          parts.push(
-            "<yesterday_log>",
-            `【${ctx.boot.yesterday_log.title}】${ctx.boot.yesterday_log.summary}`,
-            "</yesterday_log>"
-          );
-        }
-        if (ctx.boot.glossary && ctx.boot.glossary.length > 0) {
-          const entries = ctx.boot.glossary.map((g) => `${g.term}: ${g.definition}`);
-          parts.push("<glossary>", ...entries, "</glossary>");
-        }
-        if (parts.length > 0) text = parts.join("\n");
+        text = formatBootStable(ctx.boot) || null;
       }
     } else if (TURN_CONTEXT_BLOCK_IDS.includes(blockId)) {
       if (blockId === "client_volatile_context") {
@@ -603,7 +633,12 @@ check("no other block has cache_control (no boot → single anchor)", () => {
 check("with boot: persona_pinned and boot_stable are both cache anchors", () => {
   const ctx = makeBaseCtx();
   ctx.boot = {
-    yesterday_log: { title: "昨日", summary: "聊了缓存" },
+    impressions: {
+      daily: { label: "2026-07-15", title: "昨日", summary: "聊了缓存" },
+      weekly: null,
+      monthly: null,
+      max_chars: 1000,
+    },
     glossary: [{ term: "Aelios", definition: "记忆系统" }],
     precious: [],
   };
@@ -653,7 +688,12 @@ check("boot_stable alone does not occupy anchor_index", () => {
   const ctx = makeBaseCtx();
   ctx.pinnedPersonaMemories = [];
   ctx.boot = {
-    yesterday_log: { title: "昨日", summary: "只有 boot" },
+    impressions: {
+      daily: { label: "2026-07-15", title: "昨日", summary: "只有 boot" },
+      weekly: null,
+      monthly: null,
+      max_chars: 1000,
+    },
     glossary: [{ term: "Aelios", definition: "记忆系统" }],
     precious: [],
   };
@@ -1424,7 +1464,12 @@ check("cache_control on persona_pinned block only (no boot)", () => {
 check("cache_control on persona_pinned and boot_stable when boot present", () => {
   const ctx = makeBaseCtx();
   ctx.boot = {
-    yesterday_log: { title: "昨日", summary: "聊了缓存" },
+    impressions: {
+      daily: { label: "2026-07-15", title: "昨日", summary: "聊了缓存" },
+      weekly: null,
+      monthly: null,
+      max_chars: 1000,
+    },
     glossary: [{ term: "Aelios", definition: "记忆系统" }],
     precious: [],
   };

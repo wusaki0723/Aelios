@@ -137,7 +137,6 @@ export interface BootImpressionEntry {
 }
 
 export interface BootPackage {
-  yesterday_log: { date: string; title: string; summary: string } | null;
   impressions: {
     daily: BootImpressionEntry | null;
     weekly: BootImpressionEntry | null;
@@ -213,7 +212,6 @@ export async function buildBootPackage(
   const monthly = monthlyRows[0] ?? null;
 
   return {
-    yesterday_log: dailyLog ? { date: dailyLog.date, title: dailyLog.title, summary: dailyLog.summary } : null,
     impressions: {
       daily: dailyLog
         ? { label: dailyLog.date, title: dailyLog.title, summary: dailyLog.summary }

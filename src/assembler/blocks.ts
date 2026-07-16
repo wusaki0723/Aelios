@@ -273,7 +273,7 @@ const personaPinnedBlock: Block = {
 
 // ---------------------------------------------------------------------------
 // Block 5: boot_stable (stable, cache_anchor = true)
-// v2 boot package: yesterday_log + glossary.
+// v2 boot package: impressions ladder + glossary.
 // Second Anthropic explicit-cache system breakpoint — changes daily, so it
 // sits after persona_pinned and forms its own cached prefix tier.
 // When content_fn returns null the block is skipped (single-anchor fallback).

@@ -704,6 +704,7 @@ async function createApprovedMemoryFromCandidate(
     tags: string[];
     sourceMessageIds: string[];
     source: string;
+    excludeIds?: string[];
   }
 ): Promise<ApprovedMemoryResult> {
   if (input.factKey) {
@@ -723,7 +724,8 @@ async function createApprovedMemoryFromCandidate(
 
   const hit = await findSimilarActiveMemory(env, {
     namespace: input.namespace,
-    content: input.content
+    content: input.content,
+    excludeIds: input.excludeIds
   });
   if (hit) {
     const result = await supersedeMemory(env, {
@@ -863,7 +865,8 @@ export async function handleMemoryCandidates(request: Request, env: Env): Promis
       importance,
       tags,
       sourceMessageIds,
-      source: "review"
+      source: "review",
+      excludeIds: candidate.target_memory_id ? [candidate.target_memory_id] : undefined
     });
     const updated = await updateMemoryCandidateStatus(env.DB, {
       namespace,

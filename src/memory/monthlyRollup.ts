@@ -14,7 +14,7 @@ import {
 } from "./dailyDigest";
 import { getMondayOfIsoWeek } from "./weeklyRollup";
 
-const DEFAULT_TIME_ZONE = "Asia/Singapore";
+const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 const DEFAULT_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";
 const MAX_MONTHS_PER_RUN = 2;
 const ROLLUP_AGE_DAYS = 35;
@@ -68,7 +68,7 @@ function isMonthlyRollupEnabled(env: Env): boolean {
 }
 
 function readRollupModel(env: Env): string {
-  const raw = readString(env.DIARY_MODEL) || readString(env.DREAM_MODEL) || readString(env.DAILY_DIGEST_MODEL);
+  const raw = readString(env.DIARY_MODEL) || readString(env.DREAM_MODEL);
   return raw || DEFAULT_DREAM_MODEL;
 }
 
@@ -135,12 +135,13 @@ function isRetriableModelStatus(status: number): boolean {
 function buildMonthlyRollupPrompt(input: {
   month: string;
   weeklyLogs: Array<{ week: string; title: string; summary: string }>;
+  existingMonthly?: { title: string; summary: string } | null;
 }): string {
   const weekLines = input.weeklyLogs
     .map((row) => `- ${row.week} | ${row.title}\n  ${row.summary}`)
     .join("\n\n");
 
-  return [
+  const sections = [
     "你是 Aelios 的月度印象整理器。你会读取多周周记，写成 2-3 句宽泛的月度印象。",
     "只输出 JSON，不要 markdown，不要解释，不要输出思考过程。",
     "",
@@ -157,11 +158,23 @@ function buildMonthlyRollupPrompt(input: {
     JSON.stringify({
       title: "一月印象",
       summary: "这个月整体氛围如何、关系主题是什么、有哪些值得继续感受的线索。"
-    }),
-    "",
-    "本周周记：",
-    weekLines || "(无周记内容)"
-  ].join("\n");
+    })
+  ];
+
+  if (input.existingMonthly) {
+    sections.push(
+      "",
+      "已有月记（需与新周记合并刷新）：",
+      `- ${input.existingMonthly.title}\n  ${input.existingMonthly.summary}`,
+      "",
+      "新增周记：",
+      weekLines || "(无周记内容)"
+    );
+  } else {
+    sections.push("", "本月周记：", weekLines || "(无周记内容)");
+  }
+
+  return sections.join("\n");
 }
 
 async function callMonthlyRollupModel(
@@ -304,30 +317,13 @@ async function processMonth(
   }
 
   const existingMonthly = await getMonthlyLog(env.DB, { namespace, month });
-  if (existingMonthly) {
-    let deletedWeeks = 0;
-    if (!dryRun) {
-      const deleteStmts = bindDeleteWeeklyLogsByWeeksStatement(env.DB, {
-        namespace,
-        weeks: weeklyLogs.map((row) => row.week)
-      });
-      if (deleteStmts.length > 0) {
-        const results = await env.DB.batch(deleteStmts);
-        deletedWeeks = results[0]?.meta?.changes ?? 0;
-      }
-    }
-    return {
-      ...baseDetail,
-      status: "skipped",
-      reason: "already_rolled_up",
-      source_weeks: weeklyLogs.length,
-      deleted_weeks: deletedWeeks
-    };
-  }
 
   const prompt = buildMonthlyRollupPrompt({
     month,
-    weeklyLogs: weeklyLogs.map((row) => ({ week: row.week, title: row.title, summary: row.summary }))
+    weeklyLogs: weeklyLogs.map((row) => ({ week: row.week, title: row.title, summary: row.summary })),
+    existingMonthly: existingMonthly
+      ? { title: existingMonthly.title, summary: existingMonthly.summary }
+      : null
   });
   const modelResult = await callMonthlyRollupModel(env, prompt, {
     month,
@@ -431,11 +427,21 @@ export async function runMonthlyRollup(
     beforeStartDate: cutoffDate
   });
   const byMonth = collectEligibleMonths({ weeklyLogs, timeZone });
-  const eligibleMonths = [...byMonth.entries()]
-    .filter(([, rows]) => rows.length >= 2)
-    .sort((a, b) => a[0].localeCompare(b[0]));
+  const sortedMonths = [...byMonth.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const eligibleMonths = sortedMonths.filter(([, rows]) => rows.length >= 2);
+  const orphanMonths = sortedMonths.filter(([, rows]) => rows.length < 2);
   const monthsToProcess = eligibleMonths.slice(0, MAX_MONTHS_PER_RUN);
   const details: MonthlyRollupMonthDetail[] = [];
+
+  for (const [month, rows] of orphanMonths) {
+    try {
+      const detail = await processMonth(env, { namespace, month, weeklyLogs: rows, dryRun });
+      details.push(detail);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      details.push({ month, status: "error", reason });
+    }
+  }
 
   for (const [month, rows] of monthsToProcess) {
     try {
@@ -463,7 +469,7 @@ export async function runMonthlyRollup(
     enabled: true,
     dry_run: dryRun,
     cutoff_date: cutoffDate,
-    months_eligible: eligibleMonths.length,
+    months_eligible: byMonth.size,
     months_processed: monthsProcessed,
     months_skipped: monthsSkipped,
     details

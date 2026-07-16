@@ -383,7 +383,6 @@ hard delete: deleted/superseded/expired 超 30 天 → 先删 Vectorize 再删 D
 | `MEMORY_FILTER_MAX_OUTPUT` | `3` | 注入条数（代理默认 k） |
 | `MEMORY_FILTER_MIN_SCORE` | `0.1` | 进 reranker 前地板（故意低） |
 | `RECALL_MIN_SCORE` | `0.15` | 召回分数地板 |
-| `MEMORY_MIN_IMPORTANCE` | `0.55` | 写入最低重要性 |
 | `DREAM_TIME_ZONE` | `Asia/Singapore` | 按此时区切自然日 |
 | `DREAM_MAX_MESSAGES` | `40` | 每次 dream 最多消息数 |
 | `DREAM_MAX_RUNS` | `10` | 每次 cron 最多 dream 批数 |
@@ -406,7 +405,6 @@ hard delete: deleted/superseded/expired 超 30 天 → 先删 Vectorize 再删 D
 | `ANTHROPIC_CACHE_USER_ID` | 空 | 多客户端 cache 隔离用 `metadata.user_id` |
 | `ANTHROPIC_THINKING_ENABLED` | `false` | 深度思考 |
 | `ANTHROPIC_THINKING_BUDGET` | `1024` | 思考 token（1024–32000） |
-| `FORCE_ANTHROPIC_NATIVE` | 空 | `true` 强制 Anthropic native |
 | `CUSTOM_ANTHROPIC_MESSAGES_PATH` | `messages` | 原生 messages 路径 |
 
 ### 高级

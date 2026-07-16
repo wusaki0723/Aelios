@@ -95,7 +95,6 @@ export interface Env {
   MEMORY_FILTER_MIN_SCORE?: string;
   MEMORY_FILTER_FAIL_OPEN?: string;
   MEMORY_EXTRACT_EVERY_N_MESSAGES?: string;
-  MEMORY_MIN_IMPORTANCE?: string;
   INJECTION_MODE?: string;
   EMBEDDING_MODEL?: string;
   EMBEDDING_DIMENSIONS?: string;
@@ -113,7 +112,6 @@ export interface Env {
   CUSTOM_ANTHROPIC_MESSAGES_PATH?: string;
   ANTHROPIC_THINKING_ENABLED?: string;
   ANTHROPIC_THINKING_BUDGET?: string;
-  FORCE_ANTHROPIC_NATIVE?: string;
   ENABLE_CACHE_API?: string;
   CACHE_DEFAULT_TTL_SECONDS?: string;
   CACHE_MAX_VALUE_BYTES?: string;

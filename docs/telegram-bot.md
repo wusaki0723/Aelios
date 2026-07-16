@@ -83,5 +83,9 @@ Send another message. The bot should type, then reply.
 - **Memory**: because the bot goes through `/v1/chat/completions`, recall
   injection and conversation ingest work exactly as they do for Chatbox — the
   bot and Chatbox share one memory.
+- **Cron / rollups**: the twin worker has no cron triggers. Dream, weekly rollup,
+  and monthly rollup run only on the main worker (`companion-memory-proxy`). Shared
+  D1 means the bot still sees their output (daily/weekly/monthly logs, boot
+  impressions ladder, dream candidates).
 - **Privacy**: non-allowlisted chats get no reply at all (nothing probeable),
   only a log line.

@@ -684,6 +684,48 @@ export async function listMemoriesUpdatedInRange(
   return result.results ?? [];
 }
 
+// 梦境收成 (dream harvest)：当天夜里新写入的记忆，不看 status——
+// 当夜出生又被替代的也算新生，状态交给前端展示。
+export async function listMemoriesCreatedInRange(
+  db: D1Database,
+  input: { namespace: string; startIso: string; endIso: string; limit?: number }
+): Promise<Array<{ id: string; type: string; content: string; importance: number; status: string; created_at: string }>> {
+  const limit = Math.min(Math.max(Math.floor(input.limit ?? 200), 1), 500);
+  const result = await db
+    .prepare(
+      `SELECT id, type, content, importance, status, created_at
+       FROM memories
+       WHERE namespace = ?
+         AND created_at >= ? AND created_at < ?
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .bind(input.namespace, input.startIso, input.endIso, limit)
+    .all<{ id: string; type: string; content: string; importance: number; status: string; created_at: string }>();
+  return result.results ?? [];
+}
+
+// 梦境收成：当天转入沉眠的记忆 (superseded / archived)，superseded_by 指出被谁接替。
+export async function listMemoriesGoneDormantInRange(
+  db: D1Database,
+  input: { namespace: string; startIso: string; endIso: string; limit?: number }
+): Promise<Array<{ id: string; type: string; content: string; importance: number; status: string; superseded_by: string | null; updated_at: string }>> {
+  const limit = Math.min(Math.max(Math.floor(input.limit ?? 200), 1), 500);
+  const result = await db
+    .prepare(
+      `SELECT id, type, content, importance, status, superseded_by, updated_at
+       FROM memories
+       WHERE namespace = ?
+         AND status IN ('superseded', 'archived')
+         AND updated_at >= ? AND updated_at < ?
+       ORDER BY updated_at DESC
+       LIMIT ?`
+    )
+    .bind(input.namespace, input.startIso, input.endIso, limit)
+    .all<{ id: string; type: string; content: string; importance: number; status: string; superseded_by: string | null; updated_at: string }>();
+  return result.results ?? [];
+}
+
 // 同 fact_key 的 current/active 多版本对 (z_audit 用)
 export async function listDuplicateFactKeyGroups(
   db: D1Database,

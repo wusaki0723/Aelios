@@ -23,54 +23,203 @@ tailwind = {
 document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colorMode') || 'light';
 </script>
 <style>
-  :root { color-scheme: dark; }
-  :root[data-theme="light"] { color-scheme: light; }
+  /* ===== 星空色板：dark 深空 / light 晨昏，全站颜色由这组变量驱动 ===== */
+  :root {
+    color-scheme: dark;
+    --bg-deep: #070a16;
+    --bg-deep-95: rgba(7, 10, 22, .94);
+    --bg-deep-70: rgba(7, 10, 22, .7);
+    --panel-bg: rgba(21, 27, 54, .55);
+    --panel-bg-strong: rgba(23, 29, 58, .88);
+    --panel-border: rgba(148, 163, 255, .16);
+    --panel-glow: 0 1px 0 rgba(180, 190, 255, .07) inset, 0 10px 30px rgba(2, 5, 18, .5);
+    --hover-bg: rgba(39, 47, 86, .62);
+    --text-1: #eef0ff;
+    --text-2: #c9cdea;
+    --text-3: #9aa0c8;
+    --text-4: #6d7299;
+    --on-accent: #251304;
+    --coral: #F4A07C;
+    --violet: #8b7cf6;
+    --cyan: #67e8f9;
+    --ok: #6ee7b7;
+    --err: #f87171;
+    --warn: #fbbf24;
+    --aurora: linear-gradient(135deg, #8b7cf6, #67e8f9);
+    --nebula-1: rgba(124, 93, 250, .13);
+    --nebula-2: rgba(56, 189, 248, .09);
+    --star-1: rgba(255, 255, 255, .85);
+    --star-2: rgba(190, 205, 255, .7);
+    --star-3: rgba(244, 160, 124, .55);
+    --stars-opacity: .9;
+    --scrollbar-thumb: #2c3355;
+    --scrollbar-track: #0a0e1f;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg-deep: #eceef8;
+    --bg-deep-95: rgba(236, 238, 248, .94);
+    --bg-deep-70: rgba(236, 238, 248, .72);
+    --panel-bg: rgba(255, 255, 255, .6);
+    --panel-bg-strong: rgba(252, 252, 255, .9);
+    --panel-border: rgba(109, 92, 210, .18);
+    --panel-glow: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 10px 26px rgba(88, 76, 160, .12);
+    --hover-bg: rgba(233, 230, 250, .85);
+    --text-1: #232437;
+    --text-2: #3c3e5c;
+    --text-3: #60638a;
+    --text-4: #888cb2;
+    --on-accent: #2a1608;
+    --nebula-1: rgba(244, 160, 124, .22);
+    --nebula-2: rgba(139, 124, 246, .16);
+    --star-1: rgba(124, 108, 220, .5);
+    --star-2: rgba(244, 160, 124, .5);
+    --star-3: rgba(103, 180, 249, .45);
+    --stars-opacity: .5;
+    --scrollbar-thumb: #c5c8e2;
+    --scrollbar-track: #eceef8;
+  }
+
   [x-cloak] { display: none !important; }
-  html, body { min-height: 100%; background: #0a0a0b; }
+  html, body { min-height: 100%; background: var(--bg-deep); }
   body { margin: 0; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; }
-  * { scrollbar-width: thin; scrollbar-color: #3f3f46 #18181b; }
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
   button, input, textarea, select { font: inherit; }
-  :focus-visible { outline: 2px solid #F4A07C; outline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
   h1, h2, button, .text-keep { word-break: keep-all; }
   .tap { min-height: 44px; min-width: 44px; }
+
+  /* ===== 全局星 field：纯 CSS 星点 + 两片星云，只动 opacity ===== */
+  .starfield { position: fixed; inset: 0; z-index: 0; pointer-events: none; background: var(--bg-deep); }
+  .star-nebula {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(58% 42% at 76% 10%, var(--nebula-1), transparent 72%),
+      radial-gradient(52% 42% at 10% 82%, var(--nebula-2), transparent 72%);
+  }
+  .star-layer { position: absolute; inset: 0; background-repeat: repeat; opacity: var(--stars-opacity); }
+  .star-layer-a {
+    background-image:
+      radial-gradient(1px 1px at 24px 36px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 128px 96px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1.5px 1.5px at 212px 180px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 320px 64px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 392px 240px, var(--star-3), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 72px 300px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1.5px 1.5px at 268px 356px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 428px 400px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 168px 424px, var(--star-1), rgba(255, 255, 255, 0));
+    background-size: 460px 460px;
+    animation: star-twinkle-a 9s ease-in-out infinite alternate;
+  }
+  .star-layer-b {
+    background-image:
+      radial-gradient(1px 1px at 96px 148px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1.5px 1.5px at 336px 44px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 512px 208px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 184px 392px, var(--star-3), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 568px 460px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1.5px 1.5px at 48px 520px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 432px 584px, var(--star-1), rgba(255, 255, 255, 0));
+    background-size: 620px 620px;
+    animation: star-twinkle-b 13s ease-in-out infinite alternate;
+  }
+  @keyframes star-twinkle-a { from { opacity: calc(var(--stars-opacity) * .35); } to { opacity: var(--stars-opacity); } }
+  @keyframes star-twinkle-b { from { opacity: var(--stars-opacity); } to { opacity: calc(var(--stars-opacity) * .3); } }
+  .app-shell { position: relative; z-index: 1; }
+
+  /* ===== 既有 Tailwind 类 → 星空变量映射（玻璃拟态 + 深空底） ===== */
+  body, .bg-\[\#0a0a0b\] { background-color: var(--bg-deep) !important; }
+  .bg-\[\#0a0a0b\]\/95 { background-color: var(--bg-deep-95) !important; }
+  .bg-\[\#0a0a0b\]\/70 { background-color: var(--bg-deep-70) !important; }
+  .bg-zinc-900 {
+    background-color: var(--panel-bg) !important;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: var(--panel-glow) !important;
+  }
+  .bg-zinc-900\/90, .bg-zinc-900\/95 {
+    background-color: var(--panel-bg-strong) !important;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  .hover\:bg-zinc-900:hover {
+    background-color: var(--hover-bg) !important;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  .active\:bg-zinc-800:active { background-color: var(--hover-bg) !important; }
+  .border-zinc-800, .border-zinc-700 { border-color: var(--panel-border) !important; }
+  .ring-zinc-800 { --tw-ring-color: var(--panel-border) !important; }
+  .text-zinc-100 { color: var(--text-1) !important; }
+  .hover\:text-zinc-100:hover { color: var(--text-1) !important; }
+  .text-zinc-200, .text-zinc-300 { color: var(--text-2) !important; }
+  .text-zinc-400 { color: var(--text-3) !important; }
+  .text-zinc-500 { color: var(--text-4) !important; }
+  .text-zinc-950 { color: var(--on-accent) !important; }
+  input, textarea, pre { color: var(--text-1); }
+
+  /* coral 动作色兜底：head 里的 tailwind config 会被 CDN 自身对象覆盖，
+     自定义色板不保证生成，面板用变量自己定义，两套主题同源。 */
+  .bg-coral { background-color: var(--coral) !important; }
+  .text-coral { color: var(--coral) !important; }
+  .hover\:border-coral:hover, .focus\:border-coral:focus { border-color: var(--coral) !important; }
+  .active\:bg-coral\/80:active { background-color: rgba(244, 160, 124, .8) !important; }
+
   .choice-tab {
-    border-color: #27272a;
-    background-color: #18181b;
-    color: #a1a1aa;
+    border-color: var(--panel-border);
+    background-color: var(--panel-bg);
+    color: var(--text-3);
   }
   .choice-tab.is-active {
-    border-color: #F4A07C;
-    background-color: rgba(244, 160, 124, .16);
-    color: #f4f4f5;
+    border-color: rgba(139, 124, 246, .55);
+    background-image: linear-gradient(135deg, rgba(139, 124, 246, .22), rgba(103, 232, 249, .14));
+    color: var(--text-1);
     font-weight: 650;
   }
-  :root[data-theme="light"] body,
-  :root[data-theme="light"] .bg-\[\#0a0a0b\] { background-color: #f6f7f8 !important; }
-  :root[data-theme="light"] .bg-\[\#0a0a0b\]\/95 { background-color: rgb(246 247 248 / .95) !important; }
-  :root[data-theme="light"] .bg-zinc-900 { background-color: #ffffff !important; }
-  :root[data-theme="light"] .active\:bg-zinc-800:active,
-  :root[data-theme="light"] .hover\:bg-zinc-900:hover { background-color: #f0f1f3 !important; }
-  :root[data-theme="light"] .text-zinc-100 { color: #18181b !important; }
-  :root[data-theme="light"] .hover\:text-zinc-100:hover { color: #18181b !important; }
-  :root[data-theme="light"] .text-zinc-300 { color: #3f3f46 !important; }
-  :root[data-theme="light"] .text-zinc-400 { color: #71717a !important; }
-  :root[data-theme="light"] .text-zinc-950 { color: #18181b !important; }
-  :root[data-theme="light"] .border-zinc-800 { border-color: #e4e4e7 !important; }
-  :root[data-theme="light"] .ring-zinc-800 { --tw-ring-color: #e4e4e7 !important; }
-  :root[data-theme="light"] input,
-  :root[data-theme="light"] textarea,
-  :root[data-theme="light"] pre { color: #18181b; }
-  :root[data-theme="light"] * { scrollbar-color: #d4d4d8 #f6f7f8; }
-  :root[data-theme="light"] .choice-tab {
-    border-color: #e4e4e7;
-    background-color: #ffffff;
-    color: #71717a;
+
+  /* ===== 极光系小件：徽标 / 选中态 / 图表条 ===== */
+  .aurora-text { background: var(--aurora); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    border-radius: 999px; border: 1px solid var(--panel-border);
+    padding: 2px 8px; font-size: 11px; line-height: 1.6; color: var(--text-3);
   }
-  :root[data-theme="light"] .choice-tab.is-active {
-    border-color: #F4A07C;
-    background-color: rgba(244, 160, 124, .24);
-    color: #18181b;
+  .chip-ok { color: var(--ok); border-color: rgba(110, 231, 183, .35); }
+  .chip-err { color: var(--err); border-color: rgba(248, 113, 113, .35); }
+  .chip-warn { color: var(--warn); border-color: rgba(251, 191, 36, .35); }
+  .chip-dim { color: var(--text-4); }
+  .chip-aurora { border-color: rgba(139, 124, 246, .45); color: var(--violet); }
+
+  /* ===== 梦境观测台 ===== */
+  .dream-stat { position: relative; }
+  .dream-stat::before {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+    border-radius: 2px; background: var(--aurora); opacity: .75;
   }
+  .dream-rail { position: relative; }
+  .dream-rail::before {
+    content: ""; position: absolute; left: 7px; top: 12px; bottom: 12px; width: 1px;
+    background: linear-gradient(to bottom, rgba(139, 124, 246, .55), rgba(103, 232, 249, .12));
+  }
+  .dream-rail-item { position: relative; padding-left: 26px; }
+  .dream-rail-item::before {
+    content: ""; position: absolute; left: 3px; top: 24px; width: 9px; height: 9px;
+    border-radius: 999px; background: var(--rail-dot, var(--text-4));
+    box-shadow: 0 0 10px 1px var(--rail-glow, transparent);
+  }
+  .dot-ok { --rail-dot: var(--ok); --rail-glow: rgba(110, 231, 183, .4); }
+  .dot-err { --rail-dot: var(--err); --rail-glow: rgba(248, 113, 113, .4); }
+  .dot-dim { --rail-dot: var(--text-4); }
+  .dot-run { --rail-dot: var(--warn); --rail-glow: rgba(251, 191, 36, .4); }
+  .breathe { animation: dream-breathe 2.2s ease-in-out infinite; }
+  @keyframes dream-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  .raw-bar-track { height: 6px; border-radius: 999px; background: var(--bg-deep); overflow: hidden; }
+  .raw-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--violet), var(--cyan)); opacity: .8; }
+  .raw-bar-fill.is-done { background: var(--text-4); opacity: .45; }
+  .harvest-dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; }
+  .harvest-dot-new { background: var(--coral); box-shadow: 0 0 10px 2px rgba(244, 160, 124, .55); }
+
   .starmap-shell { min-height: min(70dvh, 720px); }
   .starmap-canvas { touch-action: none; display: block; width: 100%; height: 100%; }
   .starmap-legend-btn.is-off { opacity: .35; text-decoration: line-through; }
@@ -81,10 +230,25 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
   .starmap-drawer {
     max-height: min(48dvh, 360px);
   }
+
+  /* 星空是氛围：reduced-motion 时全部静止 */
+  @media (prefers-reduced-motion: reduce) {
+    .star-layer-a, .star-layer-b, .breathe { animation: none !important; }
+    *, *::before, *::after {
+      transition-duration: .01ms !important;
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
 </style>
 </head>
 <body class="bg-[#0a0a0b] text-zinc-100 antialiased">
-<div x-data="memoryAdmin()" x-init="init()" x-cloak class="min-h-dvh pb-24 md:pb-0">
+<div class="starfield" aria-hidden="true">
+  <div class="star-nebula"></div>
+  <div class="star-layer star-layer-a"></div>
+  <div class="star-layer star-layer-b"></div>
+</div>
+<div x-data="memoryAdmin()" x-init="init()" x-cloak class="app-shell min-h-dvh pb-24 md:pb-0">
   <div class="mx-auto flex min-h-dvh w-full max-w-[1440px] md:px-4 md:py-4">
     <aside class="hidden w-64 shrink-0 flex-col gap-4 border-r border-zinc-800 px-3 py-3 md:flex">
       <div class="flex items-center gap-3 px-2 py-2">
@@ -593,6 +757,275 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
         </div>
       </section>
 
+      <section x-show="page === 'dream'" class="space-y-4">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <h1 class="text-2xl font-semibold">梦境观测台</h1>
+            <p class="mt-1 text-sm text-zinc-400">每晚大脑发生了什么：运行、收成与手动做梦。</p>
+          </div>
+          <button type="button" @click="refreshDream()" class="tap inline-flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-sm transition duration-150 ease-in-out hover:border-coral">
+            <i data-lucide="refresh-cw" class="h-4 w-4"></i><span>刷新</span>
+          </button>
+        </div>
+
+        <div class="grid grid-cols-3 gap-3">
+          <div class="dream-stat rounded-2xl border border-zinc-800 bg-zinc-900 p-3 shadow-sm">
+            <div class="text-xs text-zinc-400">最近一次</div>
+            <div class="mt-1 truncate text-lg font-semibold" x-text="dreamLatestLabel()"></div>
+            <div class="truncate text-[11px] text-zinc-500" x-text="dreamLatestSub()"></div>
+          </div>
+          <div class="dream-stat rounded-2xl border border-zinc-800 bg-zinc-900 p-3 shadow-sm">
+            <div class="text-xs text-zinc-400">近 7 天成功率</div>
+            <div class="mt-1 text-xl font-semibold aurora-text" x-text="dreamSuccessRate()"></div>
+          </div>
+          <div class="dream-stat rounded-2xl border border-zinc-800 bg-zinc-900 p-3 shadow-sm">
+            <div class="text-xs text-zinc-400">近 7 天处理消息</div>
+            <div class="mt-1 text-xl font-semibold" x-text="dreamProcessedTotal()"></div>
+          </div>
+        </div>
+
+        <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-base font-semibold">每日待消化消息</h2>
+            <span class="text-xs text-zinc-400" x-text="dreamAnchorLabel()"></span>
+          </div>
+          <template x-if="dreamDayBars().length === 0">
+            <div class="text-sm text-zinc-400">还没有消息记录。</div>
+          </template>
+          <div class="space-y-2.5">
+            <template x-for="day in dreamDayBars()" :key="day.date">
+              <div class="flex items-center gap-3">
+                <span class="w-14 shrink-0 text-xs text-zinc-400" x-text="day.date.slice(5)"></span>
+                <div class="raw-bar-track min-w-0 flex-1">
+                  <div class="raw-bar-fill" :class="day.done ? 'is-done' : ''" :style="'width:' + day.widthPct + '%'"></div>
+                </div>
+                <span class="w-9 shrink-0 text-right text-xs" :class="day.pending ? 'text-coral' : 'text-zinc-400'" x-text="day.raw"></span>
+                <span class="chip hidden shrink-0 sm:inline-flex" :class="day.done ? '' : (day.pending ? 'chip-warn' : 'chip-dim')" x-text="day.stateLabel"></span>
+              </div>
+            </template>
+          </div>
+        </article>
+
+        <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+          <h2 class="text-base font-semibold">现在做梦</h2>
+          <p class="mt-1 text-xs text-zinc-400">预演只看不落库；关掉预演才是真跑。force 会重做已经梦过的夜晚。</p>
+          <div class="mt-3 grid gap-3 md:grid-cols-[170px_1fr_1fr_auto]">
+            <input type="date" x-model="dreamDate" class="h-11 rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral">
+            <label class="tap flex items-center gap-2 rounded-2xl border border-zinc-800 px-3 text-sm text-zinc-300">
+              <input type="checkbox" x-model="dreamDryRun" class="h-4 w-4 shrink-0 accent-[#ff7a66]"><span>预演 dry_run</span>
+            </label>
+            <label class="tap flex items-center gap-2 rounded-2xl border border-zinc-800 px-3 text-sm text-zinc-300">
+              <input type="checkbox" x-model="dreamForce" class="h-4 w-4 shrink-0 accent-[#ff7a66]"><span>force 重跑</span>
+            </label>
+            <button type="button" @click="triggerDream()" :disabled="dreamTriggering" class="tap inline-flex items-center justify-center gap-2 rounded-2xl bg-coral px-4 text-sm font-semibold text-zinc-950 transition duration-150 ease-in-out disabled:opacity-50">
+              <i data-lucide="moon-star" class="h-4 w-4"></i><span x-text="dreamTriggering ? '做梦中…' : '现在做梦'"></span>
+            </button>
+          </div>
+
+          <div x-show="dreamRunResult" class="mt-4 space-y-3">
+            <template x-if="dreamRunResult && dreamRunResult.result && !dreamRunResult.result.ran">
+              <div class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3 text-sm text-zinc-300" x-text="'这一夜没有做梦：' + dreamReasonLabel(dreamRunResult.result.reason)"></div>
+            </template>
+
+            <template x-if="dreamRunResult && !dreamRunResult.dry_run && dreamRunResult.result && dreamRunResult.result.ran">
+              <div class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3 text-xs leading-6 text-zinc-300">
+                <span class="font-semibold text-zinc-100">这一夜梦完了。</span>
+                <span x-text="dreamRunStatsLine()"></span>
+              </div>
+            </template>
+
+            <template x-if="dreamRunResult && dreamRunResult.dry_run && dreamRunResult.result && dreamRunResult.result.ran">
+              <div class="space-y-3">
+                <div x-show="dreamProposal()" class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3">
+                  <div class="mb-1 text-xs font-semibold text-zinc-300">当夜提案</div>
+                  <div class="text-sm font-semibold text-zinc-100" x-text="dreamProposal() && (dreamProposal().title || '(无标题)')"></div>
+                  <p class="mt-1 whitespace-pre-wrap text-xs leading-6 text-zinc-400" x-text="dreamProposal() && (dreamProposal().summary || '')"></p>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <span class="chip chip-ok" x-text="'新增 ' + dreamProposalList('memories_to_add').length"></span>
+                    <span class="chip chip-warn" x-text="'更新 ' + dreamProposalList('memories_to_update').length"></span>
+                    <span class="chip chip-err" x-text="'归档 ' + dreamProposalList('memories_to_delete').length"></span>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="mb-2 text-xs font-semibold text-zinc-300">抽取的记忆 <span class="text-zinc-500" x-text="'(' + dreamExtracted().length + ')'"></span></div>
+                  <template x-if="dreamExtracted().length === 0">
+                    <div class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3 text-xs text-zinc-500">这一夜没有抽取到记忆。</div>
+                  </template>
+                  <div class="grid gap-2 lg:grid-cols-2">
+                    <template x-for="(mem, idx) in dreamExtracted()" :key="idx">
+                      <div class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3">
+                        <div class="mb-1.5 flex flex-wrap items-center gap-2 text-xs">
+                          <span class="rounded-full bg-coral px-2 py-0.5 font-semibold text-zinc-950" x-text="mem.type"></span>
+                          <span class="text-zinc-400" x-text="'重要性 ' + pct(mem.importance)"></span>
+                          <span class="min-w-0 truncate text-zinc-500" x-text="mem.fact_key || ''"></span>
+                        </div>
+                        <p class="whitespace-pre-wrap text-xs leading-6 text-zinc-200" x-text="mem.content"></p>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="mb-2 text-xs font-semibold text-zinc-300">路由计划</div>
+                  <template x-if="dreamRoutingGroups().length === 0">
+                    <div class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3 text-xs text-zinc-500">没有路由项。</div>
+                  </template>
+                  <div class="space-y-2">
+                    <template x-for="group in dreamRoutingGroups()" :key="group.key">
+                      <div class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3">
+                        <div class="mb-1.5 flex items-center gap-2 text-xs">
+                          <span class="chip chip-aurora" x-text="group.label"></span>
+                          <span class="text-zinc-500" x-text="group.items.length + ' 条'"></span>
+                        </div>
+                        <div class="space-y-1.5">
+                          <template x-for="(item, i) in group.items" :key="i">
+                            <div class="flex items-start gap-2 text-xs leading-6">
+                              <span class="chip chip-dim shrink-0" x-text="dreamRoutingKindLabel(item.kind)"></span>
+                              <span class="min-w-0 flex-1 text-zinc-300" x-text="item.content || item.target_id || item.fact_key || '(无内容)'"></span>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </article>
+
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <h2 class="text-base font-semibold">运行时间线</h2>
+            <span class="text-xs text-zinc-400" x-text="dreamRuns.length + ' 次'"></span>
+          </div>
+          <template x-if="dreamRuns.length === 0">
+            <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 text-sm text-zinc-400">近 7 天还没有做梦记录。</div>
+          </template>
+          <div class="dream-rail space-y-3">
+            <template x-for="run in dreamRuns" :key="run.id">
+              <article class="dream-rail-item" :class="dreamRailClass(run.status)">
+                <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+                  <div class="mb-2 flex flex-wrap items-center gap-2">
+                    <span class="text-sm font-semibold text-zinc-100" x-text="run.date_label"></span>
+                    <span class="chip" :class="dreamStatusChipClass(run.status)">
+                      <span x-show="run.status === 'running'" class="breathe inline-block h-1.5 w-1.5 rounded-full bg-current"></span>
+                      <span x-text="dreamStatusLabel(run.status)"></span>
+                    </span>
+                    <span class="chip chip-dim" x-text="dreamTriggerLabel(run.trigger)"></span>
+                    <span class="ml-auto text-xs text-zinc-400" x-text="dreamDuration(run)"></span>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400">
+                    <span class="min-w-0 truncate" x-text="run.model || '模型未知'"></span>
+                    <span x-text="'消息 ' + (run.processed_messages == null ? '—' : run.processed_messages)"></span>
+                    <span x-text="fmt(run.started_at)"></span>
+                  </div>
+                  <template x-if="dreamRunNote(run)">
+                    <div class="mt-2">
+                      <p class="text-xs leading-6 text-zinc-400" :class="isDreamExpanded(run.id) ? '' : 'line-clamp-2'" x-text="dreamRunNote(run)"></p>
+                      <button type="button" x-show="dreamRunNote(run).length > 80" @click="toggleDreamExpand(run.id)" class="tap text-xs text-coral transition duration-150 ease-in-out hover:underline" x-text="isDreamExpanded(run.id) ? '收起' : '展开全文'"></button>
+                    </div>
+                  </template>
+                </div>
+              </article>
+            </template>
+          </div>
+        </div>
+
+        <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <h2 class="text-base font-semibold">当夜收成</h2>
+              <p class="mt-1 text-xs text-zinc-400">某个夜晚，记忆来了又暗下去的完整清单。</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <input type="date" x-model="dreamHarvestDate" @change="loadDreamHarvest()" class="h-10 rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral">
+              <button type="button" @click="loadDreamHarvest()" :disabled="dreamHarvestLoading" class="tap inline-flex items-center gap-2 rounded-2xl border border-zinc-800 px-3 text-sm transition duration-150 ease-in-out hover:border-coral disabled:opacity-50">
+                <i data-lucide="refresh-cw" class="h-4 w-4"></i><span x-text="dreamHarvestLoading ? '加载中…' : '查看'"></span>
+              </button>
+            </div>
+          </div>
+
+          <div x-show="dreamHarvest" class="mt-4 grid gap-3 md:grid-cols-3">
+            <section class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3">
+              <button type="button" @click="harvestOpen.new = !harvestOpen.new" class="tap flex w-full items-center gap-2 text-left">
+                <span class="harvest-dot harvest-dot-new"></span>
+                <span class="text-sm font-semibold text-zinc-100">新生</span>
+                <span class="text-xs text-zinc-500" x-text="dreamHarvestCreated().length + ' 条'"></span>
+                <span class="ml-auto text-xs text-zinc-500" x-text="harvestOpen.new ? '▾' : '▸'"></span>
+              </button>
+              <div x-show="harvestOpen.new" class="mt-3 space-y-2">
+                <template x-if="dreamHarvestCreated().length === 0">
+                  <div class="text-xs text-zinc-500">这一夜没有新的记忆落下。</div>
+                </template>
+                <template x-for="item in dreamHarvestCreated()" :key="item.id">
+                  <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-3">
+                    <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
+                      <span class="rounded-full bg-coral px-2 py-0.5 font-semibold text-zinc-950" x-text="item.type"></span>
+                      <span class="text-zinc-400" x-text="pct(item.importance)"></span>
+                      <span x-show="item.status !== 'active'" class="chip chip-dim" x-text="item.status"></span>
+                    </div>
+                    <p class="whitespace-pre-wrap text-xs leading-6 text-zinc-200" x-text="item.content"></p>
+                  </div>
+                </template>
+              </div>
+            </section>
+
+            <section class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3">
+              <button type="button" @click="harvestOpen.dim = !harvestOpen.dim" class="tap flex w-full items-center gap-2 text-left">
+                <i data-lucide="star" class="h-3.5 w-3.5 text-zinc-500"></i>
+                <span class="text-sm font-semibold text-zinc-100">沉眠</span>
+                <span class="text-xs text-zinc-500" x-text="dreamHarvestDormant().length + ' 条'"></span>
+                <span class="ml-auto text-xs text-zinc-500" x-text="harvestOpen.dim ? '▾' : '▸'"></span>
+              </button>
+              <div x-show="harvestOpen.dim" class="mt-3 space-y-2">
+                <template x-if="dreamHarvestDormant().length === 0">
+                  <div class="text-xs text-zinc-500">这一夜没有记忆暗下去。</div>
+                </template>
+                <template x-for="item in dreamHarvestDormant()" :key="item.id">
+                  <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-3 opacity-80">
+                    <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
+                      <span class="chip chip-dim" x-text="dreamDormantLabel(item.status)"></span>
+                      <span class="text-zinc-500" x-text="item.type"></span>
+                      <span class="text-zinc-500" x-text="fmt(item.updated_at)"></span>
+                    </div>
+                    <p class="whitespace-pre-wrap text-xs leading-6 text-zinc-400" x-text="item.content"></p>
+                    <p x-show="item.superseded_by" class="mt-1 text-[11px] text-zinc-500">接替者 <span class="font-mono" x-text="item.superseded_by"></span></p>
+                  </div>
+                </template>
+              </div>
+            </section>
+
+            <section class="rounded-2xl border border-zinc-800 bg-[#0a0a0b] p-3">
+              <button type="button" @click="harvestOpen.judged = !harvestOpen.judged" class="tap flex w-full items-center gap-2 text-left">
+                <span class="chip chip-aurora">判</span>
+                <span class="text-sm font-semibold text-zinc-100">判决</span>
+                <span class="text-xs text-zinc-500" x-text="dreamHarvestCandidates().length + ' 条'"></span>
+                <span class="ml-auto text-xs text-zinc-500" x-text="harvestOpen.judged ? '▾' : '▸'"></span>
+              </button>
+              <div x-show="harvestOpen.judged" class="mt-3 space-y-2">
+                <template x-if="dreamHarvestCandidates().length === 0">
+                  <div class="text-xs text-zinc-500">这一夜没有判决。</div>
+                </template>
+                <template x-for="item in dreamHarvestCandidates()" :key="item.id">
+                  <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-3">
+                    <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
+                      <span class="chip" :class="item.status === 'approved' ? 'chip-ok' : 'chip-dim'" x-text="dreamCandidateStatusLabel(item.status)"></span>
+                      <span class="chip chip-dim" x-text="dreamCandidateSourceLabel(item.source)"></span>
+                      <span class="text-zinc-500" x-text="item.type"></span>
+                    </div>
+                    <p class="whitespace-pre-wrap text-xs leading-6 text-zinc-200" x-text="item.content"></p>
+                    <p x-show="item.decision_note" class="mt-1 text-[11px] leading-5 text-zinc-500" x-text="item.decision_note"></p>
+                  </div>
+                </template>
+              </div>
+            </section>
+          </div>
+          <div x-show="!dreamHarvest && !dreamHarvestLoading" class="mt-4 text-xs text-zinc-500">选一个夜晚，看看那晚大脑里发生了什么。</div>
+        </article>
+      </section>
+
       <section x-show="page === 'settings'" class="space-y-4 md:hidden">
         <h1 class="text-2xl font-semibold">设置</h1>
         <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
@@ -621,9 +1054,10 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
   </div>
 
   <nav class="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-800 bg-[#0a0a0b]/95 px-2 pb-[max(10px,env(safe-area-inset-bottom))] pt-2 backdrop-blur md:hidden">
-    <div class="grid grid-cols-7 gap-0.5">
+    <div class="grid grid-cols-8 gap-0.5">
       <button type="button" @click="go('today')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'today' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="sun" class="h-5 w-5"></i><span>今日</span></button>
       <button type="button" @click="go('diary')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'diary' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="book-open" class="h-5 w-5"></i><span>日记</span></button>
+      <button type="button" @click="go('dream')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'dream' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="moon-star" class="h-5 w-5"></i><span>梦境</span></button>
       <button type="button" @click="go('review')" class="tap relative grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'review' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="inbox" class="h-5 w-5"></i><span>审核</span><span x-show="pendingCount" class="absolute right-1 top-1 rounded-full bg-coral px-1.5 text-[10px] font-semibold text-zinc-950" x-text="pendingCount"></span></button>
       <button type="button" @click="go('memory')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'memory' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="database" class="h-5 w-5"></i><span>记忆</span></button>
       <button type="button" @click="go('starmap')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'starmap' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="sparkles" class="h-5 w-5"></i><span>星图</span></button>
@@ -884,7 +1318,7 @@ var starmapEngine = (function() {
     var ctx = s.ctx;
     if (!ctx || !s.canvas) return;
     var light = s.theme === 'light';
-    var bg = light ? '#f6f7f8' : '#0a0a0b';
+    var bg = light ? '#eceef8' : '#070a16';
     ctx.setTransform(s.dpr, 0, 0, s.dpr, 0, 0);
     ctx.clearRect(0, 0, s.w, s.h);
     ctx.fillStyle = bg;
@@ -1296,6 +1730,7 @@ function memoryAdmin() {
     nav: [
       { id: 'today', label: '今日', icon: 'sun' },
       { id: 'diary', label: '日记', icon: 'book-open' },
+      { id: 'dream', label: '梦境', icon: 'moon-star' },
       { id: 'review', label: '审核队列', icon: 'inbox' },
       { id: 'memory', label: '重要记忆', icon: 'database' },
       { id: 'starmap', label: '星图', icon: 'sparkles' },
@@ -1363,6 +1798,20 @@ function memoryAdmin() {
       { id: 'same_thread', label: 'same_thread', color: 'rgb(125,180,220)' },
       { id: 'supersedes', label: 'supersedes', color: 'rgb(140,140,150)' }
     ],
+
+    dreamStatus: null,
+    dreamRuns: [],
+    dreamLoading: false,
+    dreamTriggering: false,
+    dreamDate: '',
+    dreamForce: false,
+    dreamDryRun: true,
+    dreamRunResult: null,
+    dreamHarvestDate: '',
+    dreamHarvest: null,
+    dreamHarvestLoading: false,
+    dreamExpanded: {},
+    harvestOpen: { new: true, dim: true, judged: true },
 
     init() {
       this.applyTheme();
@@ -1442,6 +1891,10 @@ function memoryAdmin() {
       this.savePrefs();
       var tasks = [this.loadBoot(), this.loadCandidates(), this.loadMemories()];
       if (this.page === 'starmap') tasks.push(this.loadStarmap());
+      if (this.page === 'dream') {
+        tasks.push(this.loadDreamStatus());
+        tasks.push(this.loadDreamHarvest());
+      }
       await Promise.all(tasks);
       this.icons();
     },
@@ -1864,6 +2317,10 @@ function memoryAdmin() {
       if (id === 'diary') this.loadDiary();
       if (id === 'starmap') this.loadStarmap();
       if (id === 'more') this.loadMoreView();
+      if (id === 'dream') {
+        this.loadDreamStatus();
+        this.loadDreamHarvest();
+      }
       this.icons();
     },
     async loadDiary() {
@@ -1885,6 +2342,235 @@ function memoryAdmin() {
       if (next[key]) delete next[key];
       else next[key] = true;
       this.diaryExpanded = next;
+    },
+    yesterdayLabel() {
+      const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const pad = function(n) { return String(n).padStart(2, '0'); };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    },
+    dreamAnchorDate() {
+      return (this.dreamStatus && this.dreamStatus.anchor_date_label) || this.yesterdayLabel();
+    },
+    async loadDreamStatus() {
+      this.dreamLoading = true;
+      try {
+        const data = await this.request(this.withNamespace('/v1/dream/status'));
+        const payload = data.data || {};
+        this.dreamStatus = payload;
+        this.dreamRuns = payload.dream_runs || [];
+        if (!this.dreamDate) this.dreamDate = this.dreamAnchorDate();
+        if (!this.dreamHarvestDate) this.dreamHarvestDate = this.dreamAnchorDate();
+      } catch (error) {
+        this.notify(error.message);
+      }
+      this.dreamLoading = false;
+      this.icons();
+    },
+    async loadDreamHarvest() {
+      if (!this.dreamHarvestDate) this.dreamHarvestDate = this.dreamAnchorDate();
+      this.dreamHarvestLoading = true;
+      try {
+        const data = await this.request(this.withNamespace('/admin/dream/harvest?date=' + encodeURIComponent(this.dreamHarvestDate)));
+        this.dreamHarvest = data.data || null;
+      } catch (error) {
+        this.dreamHarvest = null;
+        this.notify(error.message);
+      }
+      this.dreamHarvestLoading = false;
+      this.icons();
+    },
+    refreshDream() {
+      this.loadDreamStatus();
+      this.loadDreamHarvest();
+    },
+    async triggerDream() {
+      if (this.dreamTriggering) return;
+      const date = this.dreamDate || this.dreamAnchorDate();
+      if (this.dreamForce && !this.dreamDryRun) {
+        if (!window.confirm('force + 真跑会重做 ' + date + ' 这一夜的梦境，已经梦过的也会重跑。确认继续？')) return;
+      }
+      this.dreamTriggering = true;
+      this.dreamRunResult = null;
+      try {
+        const data = await this.request('/v1/dream/run', {
+          method: 'POST',
+          body: JSON.stringify({ namespace: this.namespace, date: date, force: this.dreamForce, dry_run: this.dreamDryRun })
+        });
+        this.dreamRunResult = data.data || null;
+        if (!this.dreamDryRun) {
+          this.dreamHarvestDate = date;
+          await Promise.all([this.loadDreamStatus(), this.loadDreamHarvest()]);
+          this.notify('这一夜梦完了');
+        }
+      } catch (error) {
+        this.notify(error.message);
+      }
+      this.dreamTriggering = false;
+      this.icons();
+    },
+    dreamLatestRun() {
+      return this.dreamRuns.length ? this.dreamRuns[0] : null;
+    },
+    dreamLatestLabel() {
+      const run = this.dreamLatestRun();
+      return run ? this.dreamStatusLabel(run.status) : '还没有记录';
+    },
+    dreamLatestSub() {
+      const run = this.dreamLatestRun();
+      return run ? run.date_label + ' · ' + this.fmt(run.started_at) : '';
+    },
+    dreamSuccessRate() {
+      let ok = 0;
+      let err = 0;
+      this.dreamRuns.forEach(function(run) {
+        if (run.status === 'ok') ok += 1;
+        else if (run.status === 'error') err += 1;
+      });
+      const total = ok + err;
+      if (!total) return '—';
+      return Math.round((ok / total) * 100) + '%';
+    },
+    dreamProcessedTotal() {
+      return this.dreamRuns.reduce(function(sum, run) { return sum + (Number(run.processed_messages) || 0); }, 0);
+    },
+    dreamAnchorLabel() {
+      const payload = this.dreamStatus || {};
+      if (!payload.anchor_date_label) return '';
+      return '锚点 ' + payload.anchor_date_label + (payload.time_zone ? ' · ' + payload.time_zone : '');
+    },
+    dreamDayBars() {
+      const payload = this.dreamStatus || {};
+      const counts = payload.raw_message_counts || [];
+      const cursors = {};
+      (payload.cursors || []).forEach(function(item) { cursors[item.date_label] = item.cursor; });
+      const max = counts.reduce(function(m, item) { return Math.max(m, Number(item.raw_messages) || 0); }, 0);
+      return counts.map(function(item) {
+        const cursor = cursors[item.date_label];
+        const done = typeof cursor === 'string' && cursor.indexOf('done:') === 0;
+        const raw = Number(item.raw_messages) || 0;
+        return {
+          date: item.date_label,
+          raw: raw,
+          done: done,
+          pending: raw > 0 && !done,
+          widthPct: max > 0 && raw > 0 ? Math.max(Math.round((raw / max) * 100), 4) : 0,
+          stateLabel: done ? '已梦完' : (cursor ? '梦到一半' : '未开始')
+        };
+      });
+    },
+    dreamStatusLabel(status) {
+      return { ok: '完成', error: '出错', skipped: '跳过', running: '进行中' }[status] || status || '未知';
+    },
+    dreamStatusChipClass(status) {
+      return { ok: 'chip-ok', error: 'chip-err', skipped: 'chip-dim', running: 'chip-warn' }[status] || 'chip-dim';
+    },
+    dreamRailClass(status) {
+      return { ok: 'dot-ok', error: 'dot-err', skipped: 'dot-dim', running: 'dot-run' }[status] || 'dot-dim';
+    },
+    dreamTriggerLabel(trigger) {
+      return { cron: '定时', manual: '手动' }[trigger] || trigger || '—';
+    },
+    dreamDuration(run) {
+      if (!run.finished_at) return run.status === 'running' ? '进行中' : '—';
+      const ms = new Date(run.finished_at).getTime() - new Date(run.started_at).getTime();
+      if (!Number.isFinite(ms) || ms < 0) return '—';
+      const sec = Math.round(ms / 1000);
+      if (sec < 60) return sec + 's';
+      return Math.floor(sec / 60) + 'm' + String(sec % 60).padStart(2, '0') + 's';
+    },
+    dreamReasonLabel(reason) {
+      const map = {
+        already_done: '这一夜已经梦过',
+        no_messages: '没有新消息',
+        dry_run: '只是预演',
+        dream_disabled: '梦境未启用',
+        model_error: '模型出错',
+        model_invalid_json: '模型返回无法解析',
+        extract_model_error: '抽取模型出错',
+        v2_disabled: 'v2 未启用'
+      };
+      return map[reason] || reason || '原因未知';
+    },
+    dreamRunNote(run) {
+      const parts = [];
+      if (run.reason) parts.push(this.dreamReasonLabel(run.reason));
+      if (run.error) {
+        let text = run.error;
+        try {
+          const parsed = JSON.parse(run.error);
+          if (Array.isArray(parsed)) {
+            text = parsed.length + ' 条落库出错：' + parsed.map(function(item) {
+              return (item.target_id || '?') + '（' + (item.reason || '?') + '）';
+            }).join('；');
+          }
+        } catch (error) {}
+        parts.push(text);
+      }
+      return parts.join(' · ');
+    },
+    isDreamExpanded(id) {
+      return Boolean(this.dreamExpanded[id]);
+    },
+    toggleDreamExpand(id) {
+      const next = Object.assign({}, this.dreamExpanded);
+      if (next[id]) delete next[id];
+      else next[id] = true;
+      this.dreamExpanded = next;
+    },
+    dreamProposal() {
+      return this.dreamRunResult && this.dreamRunResult.proposal ? this.dreamRunResult.proposal : null;
+    },
+    dreamProposalList(key) {
+      const proposal = this.dreamProposal();
+      return proposal && Array.isArray(proposal[key]) ? proposal[key] : [];
+    },
+    dreamExtracted() {
+      return this.dreamRunResult && Array.isArray(this.dreamRunResult.extracted_memories) ? this.dreamRunResult.extracted_memories : [];
+    },
+    dreamRoutingGroups() {
+      const plan = this.dreamRunResult && this.dreamRunResult.routing_plan;
+      const items = plan && Array.isArray(plan.items) ? plan.items : [];
+      const groups = {};
+      const order = [];
+      items.forEach(function(item) {
+        const dest = item.destination || 'candidate';
+        if (!groups[dest]) {
+          groups[dest] = { key: dest, label: dest === 'world_fact_direct' ? '直达世界事实' : '候选队列', items: [] };
+          order.push(dest);
+        }
+        groups[dest].items.push(item);
+      });
+      return order.map(function(key) { return groups[key]; });
+    },
+    dreamRoutingKindLabel(kind) {
+      return { extract: '抽取', add: '新增', update: '更新', delete: '归档' }[kind] || kind || '—';
+    },
+    dreamRunStatsLine() {
+      const stats = this.dreamRunResult && this.dreamRunResult.result && this.dreamRunResult.result.stats;
+      if (!stats) return '';
+      return '处理消息 ' + (stats.processedMessages || 0)
+        + ' · 新增 ' + (stats.addedMemories || 0)
+        + ' · 更新 ' + (stats.updatedMemories || 0)
+        + ' · 归档 ' + (stats.deletedMemories || 0)
+        + ' · 入候选 ' + (stats.queuedCandidates || 0);
+    },
+    dreamHarvestCreated() {
+      return (this.dreamHarvest && this.dreamHarvest.created) || [];
+    },
+    dreamHarvestDormant() {
+      return (this.dreamHarvest && this.dreamHarvest.dormant) || [];
+    },
+    dreamHarvestCandidates() {
+      return (this.dreamHarvest && this.dreamHarvest.candidates) || [];
+    },
+    dreamDormantLabel(status) {
+      return status === 'superseded' ? '被接替' : (status === 'archived' ? '归档' : status || '—');
+    },
+    dreamCandidateStatusLabel(status) {
+      return status === 'approved' ? '采纳' : (status === 'discarded' ? '未采' : status || '—');
+    },
+    dreamCandidateSourceLabel(source) {
+      return { dream_add: '新增提案', dream_update: '更新提案', dream_delete: '归档提案', extract: '抽取', zone_full: '区满' }[source] || source || '—';
     },
     starmapCountLabel() {
       var nodes = this.starmapNodes.length;

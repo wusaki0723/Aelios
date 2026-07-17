@@ -37,7 +37,6 @@ interface DiaryWriterModelCallResult {
   reason?: "model_error" | "model_invalid_json";
   model?: string;
   status?: number;
-  finishReason?: string | null;
 }
 
 function isDiaryWriterEnabled(env: Env): boolean {

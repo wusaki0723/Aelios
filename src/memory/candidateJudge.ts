@@ -109,7 +109,7 @@ function buildJudgePrompt(candidate: MemoryCandidateRow, messages: MessageRecord
   ].join("\n");
 }
 
-async function callJudgeModel(env: Env, model: string, prompt: string): Promise<JudgeModelResult | null> {
+async function callJudgeModel(env: Env, model: string, prompt: string, meta: { id: string }): Promise<JudgeModelResult | null> {
   // backoffMs: [] preserves prior single-attempt behavior (no retry loop here before).
   // systemPrompt preserves this caller's original (shorter) JSON-generator prompt.
   let text: string;
@@ -119,7 +119,9 @@ async function callJudgeModel(env: Env, model: string, prompt: string): Promise<
       prompt,
       maxTokens: JUDGE_MAX_TOKENS,
       backoffMs: [],
-      systemPrompt: "你是严格的 JSON 生成器。你只输出 JSON。"
+      systemPrompt: "你是严格的 JSON 生成器。你只输出 JSON。",
+      logPrefix: "candidate_judge",
+      logMeta: { id: meta.id }
     });
   } catch {
     return null;
@@ -255,7 +257,7 @@ export async function runCandidateJudge(
         // 找不到任何原始消息可核对：直接判 ungrounded，不必浪费一次模型调用。
         judgeResult = { score: 0, grounded: false, durable: false, reason: "没有可核对的原始消息，无法确认是否有据" };
       } else {
-        const modelResult = await callJudgeModel(env, model, buildJudgePrompt(candidate, messages));
+        const modelResult = await callJudgeModel(env, model, buildJudgePrompt(candidate, messages), { id: candidate.id });
         if (!modelResult) {
           failed += 1;
           console.error("candidate judge: model call failed or returned invalid JSON", { namespace, id: candidate.id });

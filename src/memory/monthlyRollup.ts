@@ -54,7 +54,6 @@ interface MonthlyRollupModelCallResult {
   reason?: "model_error" | "model_invalid_json";
   model?: string;
   status?: number;
-  finishReason?: string | null;
 }
 
 function isMonthlyRollupEnabled(env: Env): boolean {

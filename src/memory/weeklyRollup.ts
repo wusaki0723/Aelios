@@ -56,7 +56,6 @@ interface WeeklyRollupModelCallResult {
   reason?: "model_error" | "model_invalid_json";
   model?: string;
   status?: number;
-  finishReason?: string | null;
 }
 
 interface IsoWeekRange {

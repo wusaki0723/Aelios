@@ -23,54 +23,203 @@ tailwind = {
 document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colorMode') || 'light';
 </script>
 <style>
-  :root { color-scheme: dark; }
-  :root[data-theme="light"] { color-scheme: light; }
+  /* ===== 星空色板：dark 深空 / light 晨昏，全站颜色由这组变量驱动 ===== */
+  :root {
+    color-scheme: dark;
+    --bg-deep: #070a16;
+    --bg-deep-95: rgba(7, 10, 22, .94);
+    --bg-deep-70: rgba(7, 10, 22, .7);
+    --panel-bg: rgba(21, 27, 54, .55);
+    --panel-bg-strong: rgba(23, 29, 58, .88);
+    --panel-border: rgba(148, 163, 255, .16);
+    --panel-glow: 0 1px 0 rgba(180, 190, 255, .07) inset, 0 10px 30px rgba(2, 5, 18, .5);
+    --hover-bg: rgba(39, 47, 86, .62);
+    --text-1: #eef0ff;
+    --text-2: #c9cdea;
+    --text-3: #9aa0c8;
+    --text-4: #6d7299;
+    --on-accent: #251304;
+    --coral: #F4A07C;
+    --violet: #8b7cf6;
+    --cyan: #67e8f9;
+    --ok: #6ee7b7;
+    --err: #f87171;
+    --warn: #fbbf24;
+    --aurora: linear-gradient(135deg, #8b7cf6, #67e8f9);
+    --nebula-1: rgba(124, 93, 250, .13);
+    --nebula-2: rgba(56, 189, 248, .09);
+    --star-1: rgba(255, 255, 255, .85);
+    --star-2: rgba(190, 205, 255, .7);
+    --star-3: rgba(244, 160, 124, .55);
+    --stars-opacity: .9;
+    --scrollbar-thumb: #2c3355;
+    --scrollbar-track: #0a0e1f;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg-deep: #eceef8;
+    --bg-deep-95: rgba(236, 238, 248, .94);
+    --bg-deep-70: rgba(236, 238, 248, .72);
+    --panel-bg: rgba(255, 255, 255, .6);
+    --panel-bg-strong: rgba(252, 252, 255, .9);
+    --panel-border: rgba(109, 92, 210, .18);
+    --panel-glow: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 10px 26px rgba(88, 76, 160, .12);
+    --hover-bg: rgba(233, 230, 250, .85);
+    --text-1: #232437;
+    --text-2: #3c3e5c;
+    --text-3: #60638a;
+    --text-4: #888cb2;
+    --on-accent: #2a1608;
+    --nebula-1: rgba(244, 160, 124, .22);
+    --nebula-2: rgba(139, 124, 246, .16);
+    --star-1: rgba(124, 108, 220, .5);
+    --star-2: rgba(244, 160, 124, .5);
+    --star-3: rgba(103, 180, 249, .45);
+    --stars-opacity: .5;
+    --scrollbar-thumb: #c5c8e2;
+    --scrollbar-track: #eceef8;
+  }
+
   [x-cloak] { display: none !important; }
-  html, body { min-height: 100%; background: #0a0a0b; }
+  html, body { min-height: 100%; background: var(--bg-deep); }
   body { margin: 0; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; }
-  * { scrollbar-width: thin; scrollbar-color: #3f3f46 #18181b; }
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
   button, input, textarea, select { font: inherit; }
-  :focus-visible { outline: 2px solid #F4A07C; outline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
   h1, h2, button, .text-keep { word-break: keep-all; }
   .tap { min-height: 44px; min-width: 44px; }
+
+  /* ===== 全局星 field：纯 CSS 星点 + 两片星云，只动 opacity ===== */
+  .starfield { position: fixed; inset: 0; z-index: 0; pointer-events: none; background: var(--bg-deep); }
+  .star-nebula {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(58% 42% at 76% 10%, var(--nebula-1), transparent 72%),
+      radial-gradient(52% 42% at 10% 82%, var(--nebula-2), transparent 72%);
+  }
+  .star-layer { position: absolute; inset: 0; background-repeat: repeat; opacity: var(--stars-opacity); }
+  .star-layer-a {
+    background-image:
+      radial-gradient(1px 1px at 24px 36px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 128px 96px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1.5px 1.5px at 212px 180px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 320px 64px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 392px 240px, var(--star-3), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 72px 300px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1.5px 1.5px at 268px 356px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 428px 400px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 168px 424px, var(--star-1), rgba(255, 255, 255, 0));
+    background-size: 460px 460px;
+    animation: star-twinkle-a 9s ease-in-out infinite alternate;
+  }
+  .star-layer-b {
+    background-image:
+      radial-gradient(1px 1px at 96px 148px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1.5px 1.5px at 336px 44px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 512px 208px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 184px 392px, var(--star-3), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 568px 460px, var(--star-1), rgba(255, 255, 255, 0)),
+      radial-gradient(1.5px 1.5px at 48px 520px, var(--star-2), rgba(255, 255, 255, 0)),
+      radial-gradient(1px 1px at 432px 584px, var(--star-1), rgba(255, 255, 255, 0));
+    background-size: 620px 620px;
+    animation: star-twinkle-b 13s ease-in-out infinite alternate;
+  }
+  @keyframes star-twinkle-a { from { opacity: calc(var(--stars-opacity) * .35); } to { opacity: var(--stars-opacity); } }
+  @keyframes star-twinkle-b { from { opacity: var(--stars-opacity); } to { opacity: calc(var(--stars-opacity) * .3); } }
+  .app-shell { position: relative; z-index: 1; }
+
+  /* ===== 既有 Tailwind 类 → 星空变量映射（玻璃拟态 + 深空底） ===== */
+  body, .bg-\[\#0a0a0b\] { background-color: var(--bg-deep) !important; }
+  .bg-\[\#0a0a0b\]\/95 { background-color: var(--bg-deep-95) !important; }
+  .bg-\[\#0a0a0b\]\/70 { background-color: var(--bg-deep-70) !important; }
+  .bg-zinc-900 {
+    background-color: var(--panel-bg) !important;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: var(--panel-glow) !important;
+  }
+  .bg-zinc-900\/90, .bg-zinc-900\/95 {
+    background-color: var(--panel-bg-strong) !important;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  .hover\:bg-zinc-900:hover {
+    background-color: var(--hover-bg) !important;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  .active\:bg-zinc-800:active { background-color: var(--hover-bg) !important; }
+  .border-zinc-800, .border-zinc-700 { border-color: var(--panel-border) !important; }
+  .ring-zinc-800 { --tw-ring-color: var(--panel-border) !important; }
+  .text-zinc-100 { color: var(--text-1) !important; }
+  .hover\:text-zinc-100:hover { color: var(--text-1) !important; }
+  .text-zinc-200, .text-zinc-300 { color: var(--text-2) !important; }
+  .text-zinc-400 { color: var(--text-3) !important; }
+  .text-zinc-500 { color: var(--text-4) !important; }
+  .text-zinc-950 { color: var(--on-accent) !important; }
+  input, textarea, pre { color: var(--text-1); }
+
+  /* coral 动作色兜底：head 里的 tailwind config 会被 CDN 自身对象覆盖，
+     自定义色板不保证生成，面板用变量自己定义，两套主题同源。 */
+  .bg-coral { background-color: var(--coral) !important; }
+  .text-coral { color: var(--coral) !important; }
+  .hover\:border-coral:hover, .focus\:border-coral:focus { border-color: var(--coral) !important; }
+  .active\:bg-coral\/80:active { background-color: rgba(244, 160, 124, .8) !important; }
+
   .choice-tab {
-    border-color: #27272a;
-    background-color: #18181b;
-    color: #a1a1aa;
+    border-color: var(--panel-border);
+    background-color: var(--panel-bg);
+    color: var(--text-3);
   }
   .choice-tab.is-active {
-    border-color: #F4A07C;
-    background-color: rgba(244, 160, 124, .16);
-    color: #f4f4f5;
+    border-color: rgba(139, 124, 246, .55);
+    background-image: linear-gradient(135deg, rgba(139, 124, 246, .22), rgba(103, 232, 249, .14));
+    color: var(--text-1);
     font-weight: 650;
   }
-  :root[data-theme="light"] body,
-  :root[data-theme="light"] .bg-\[\#0a0a0b\] { background-color: #f6f7f8 !important; }
-  :root[data-theme="light"] .bg-\[\#0a0a0b\]\/95 { background-color: rgb(246 247 248 / .95) !important; }
-  :root[data-theme="light"] .bg-zinc-900 { background-color: #ffffff !important; }
-  :root[data-theme="light"] .active\:bg-zinc-800:active,
-  :root[data-theme="light"] .hover\:bg-zinc-900:hover { background-color: #f0f1f3 !important; }
-  :root[data-theme="light"] .text-zinc-100 { color: #18181b !important; }
-  :root[data-theme="light"] .hover\:text-zinc-100:hover { color: #18181b !important; }
-  :root[data-theme="light"] .text-zinc-300 { color: #3f3f46 !important; }
-  :root[data-theme="light"] .text-zinc-400 { color: #71717a !important; }
-  :root[data-theme="light"] .text-zinc-950 { color: #18181b !important; }
-  :root[data-theme="light"] .border-zinc-800 { border-color: #e4e4e7 !important; }
-  :root[data-theme="light"] .ring-zinc-800 { --tw-ring-color: #e4e4e7 !important; }
-  :root[data-theme="light"] input,
-  :root[data-theme="light"] textarea,
-  :root[data-theme="light"] pre { color: #18181b; }
-  :root[data-theme="light"] * { scrollbar-color: #d4d4d8 #f6f7f8; }
-  :root[data-theme="light"] .choice-tab {
-    border-color: #e4e4e7;
-    background-color: #ffffff;
-    color: #71717a;
+
+  /* ===== 极光系小件：徽标 / 选中态 / 图表条 ===== */
+  .aurora-text { background: var(--aurora); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    border-radius: 999px; border: 1px solid var(--panel-border);
+    padding: 2px 8px; font-size: 11px; line-height: 1.6; color: var(--text-3);
   }
-  :root[data-theme="light"] .choice-tab.is-active {
-    border-color: #F4A07C;
-    background-color: rgba(244, 160, 124, .24);
-    color: #18181b;
+  .chip-ok { color: var(--ok); border-color: rgba(110, 231, 183, .35); }
+  .chip-err { color: var(--err); border-color: rgba(248, 113, 113, .35); }
+  .chip-warn { color: var(--warn); border-color: rgba(251, 191, 36, .35); }
+  .chip-dim { color: var(--text-4); }
+  .chip-aurora { border-color: rgba(139, 124, 246, .45); color: var(--violet); }
+
+  /* ===== 梦境观测台 ===== */
+  .dream-stat { position: relative; }
+  .dream-stat::before {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+    border-radius: 2px; background: var(--aurora); opacity: .75;
   }
+  .dream-rail { position: relative; }
+  .dream-rail::before {
+    content: ""; position: absolute; left: 7px; top: 12px; bottom: 12px; width: 1px;
+    background: linear-gradient(to bottom, rgba(139, 124, 246, .55), rgba(103, 232, 249, .12));
+  }
+  .dream-rail-item { position: relative; padding-left: 26px; }
+  .dream-rail-item::before {
+    content: ""; position: absolute; left: 3px; top: 24px; width: 9px; height: 9px;
+    border-radius: 999px; background: var(--rail-dot, var(--text-4));
+    box-shadow: 0 0 10px 1px var(--rail-glow, transparent);
+  }
+  .dot-ok { --rail-dot: var(--ok); --rail-glow: rgba(110, 231, 183, .4); }
+  .dot-err { --rail-dot: var(--err); --rail-glow: rgba(248, 113, 113, .4); }
+  .dot-dim { --rail-dot: var(--text-4); }
+  .dot-run { --rail-dot: var(--warn); --rail-glow: rgba(251, 191, 36, .4); }
+  .breathe { animation: dream-breathe 2.2s ease-in-out infinite; }
+  @keyframes dream-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  .raw-bar-track { height: 6px; border-radius: 999px; background: var(--bg-deep); overflow: hidden; }
+  .raw-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--violet), var(--cyan)); opacity: .8; }
+  .raw-bar-fill.is-done { background: var(--text-4); opacity: .45; }
+  .harvest-dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; }
+  .harvest-dot-new { background: var(--coral); box-shadow: 0 0 10px 2px rgba(244, 160, 124, .55); }
+
   .starmap-shell { min-height: min(70dvh, 720px); }
   .starmap-canvas { touch-action: none; display: block; width: 100%; height: 100%; }
   .starmap-legend-btn.is-off { opacity: .35; text-decoration: line-through; }
@@ -81,10 +230,25 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
   .starmap-drawer {
     max-height: min(48dvh, 360px);
   }
+
+  /* 星空是氛围：reduced-motion 时全部静止 */
+  @media (prefers-reduced-motion: reduce) {
+    .star-layer-a, .star-layer-b, .breathe { animation: none !important; }
+    *, *::before, *::after {
+      transition-duration: .01ms !important;
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
 </style>
 </head>
 <body class="bg-[#0a0a0b] text-zinc-100 antialiased">
-<div x-data="memoryAdmin()" x-init="init()" x-cloak class="min-h-dvh pb-24 md:pb-0">
+<div class="starfield" aria-hidden="true">
+  <div class="star-nebula"></div>
+  <div class="star-layer star-layer-a"></div>
+  <div class="star-layer star-layer-b"></div>
+</div>
+<div x-data="memoryAdmin()" x-init="init()" x-cloak class="app-shell min-h-dvh pb-24 md:pb-0">
   <div class="mx-auto flex min-h-dvh w-full max-w-[1440px] md:px-4 md:py-4">
     <aside class="hidden w-64 shrink-0 flex-col gap-4 border-r border-zinc-800 px-3 py-3 md:flex">
       <div class="flex items-center gap-3 px-2 py-2">
@@ -884,7 +1048,7 @@ var starmapEngine = (function() {
     var ctx = s.ctx;
     if (!ctx || !s.canvas) return;
     var light = s.theme === 'light';
-    var bg = light ? '#f6f7f8' : '#0a0a0b';
+    var bg = light ? '#eceef8' : '#070a16';
     ctx.setTransform(s.dpr, 0, 0, s.dpr, 0, 0);
     ctx.clearRect(0, 0, s.w, s.h);
     ctx.fillStyle = bg;

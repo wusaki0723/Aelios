@@ -21,7 +21,11 @@ const DREAM_HARVEST_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function isValidHarvestDateLabel(label: string): boolean {
   if (!DREAM_HARVEST_DATE_RE.test(label)) return false;
   const [year, month, day] = label.split("-").map(Number);
-  return year >= 1970 && month >= 1 && month <= 12 && day >= 1 && day <= 31;
+  if (year < 1970 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  // 回环反验：Date.UTC 会把 2/31 这类不存在的日期静默规整进下月，
+  // 构造后年月日对不上即非法（闰年 2/29 由此自然判别）。
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  return utc.getUTCFullYear() === year && utc.getUTCMonth() === month - 1 && utc.getUTCDate() === day;
 }
 
 export async function handleDreamStatus(request: Request, env: Env): Promise<Response> {

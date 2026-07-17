@@ -14,8 +14,9 @@ import {
   upsertMemoryByFactKey,
   type MemoryCandidateRow
 } from "../db/v2";
-import { callOpenAICompat } from "../proxy/openaiAdapter";
-import type { Env, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
+import { callModelWithRetry, readModelName } from "../utils/modelCall";
+import type { Env, MessageRecord } from "../types";
+import { extractJsonObject } from "../utils/parse";
 import { createVectorMemory } from "./vectorStore";
 
 // listMemoryCandidates 本身按 confidence ASC 排序，正好是"先看最没把握的"，直接复用，
@@ -68,23 +69,6 @@ function parseJsonArray(raw: string | null): string[] {
   return [];
 }
 
-// 和 dreamExtract.ts 的 extractJsonObject 同样的容错解析：模型偶尔会在 JSON 外面裹一层文字。
-function extractJsonObject(text: string): unknown | null {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    // fallthrough to brace-scan
-  }
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as unknown;
-  } catch {
-    return null;
-  }
-}
-
 function formatTranscript(messages: MessageRecord[]): string {
   return messages
     .map((message) => {
@@ -125,27 +109,25 @@ function buildJudgePrompt(candidate: MemoryCandidateRow, messages: MessageRecord
   ].join("\n");
 }
 
-async function callJudgeModel(env: Env, model: string, prompt: string): Promise<JudgeModelResult | null> {
-  const request: OpenAIChatRequest = {
-    model,
-    messages: [
-      { role: "system", content: "你是严格的 JSON 生成器。你只输出 JSON。" },
-      { role: "user", content: prompt }
-    ],
-    temperature: 0,
-    max_tokens: JUDGE_MAX_TOKENS,
-    response_format: { type: "json_object" },
-    stream: false
-  };
+async function callJudgeModel(env: Env, model: string, prompt: string, meta: { id: string }): Promise<JudgeModelResult | null> {
+  // backoffMs: [] preserves prior single-attempt behavior (no retry loop here before).
+  // systemPrompt preserves this caller's original (shorter) JSON-generator prompt.
+  let text: string;
+  try {
+    text = await callModelWithRetry(env, {
+      model,
+      prompt,
+      maxTokens: JUDGE_MAX_TOKENS,
+      backoffMs: [],
+      systemPrompt: "你是严格的 JSON 生成器。你只输出 JSON。",
+      logPrefix: "candidate_judge",
+      logMeta: { id: meta.id }
+    });
+  } catch {
+    return null;
+  }
 
-  const response = await callOpenAICompat(env, request);
-  if (!response.ok) return null;
-
-  const parsed = (await response.json()) as OpenAIChatResponse;
-  const message = parsed.choices?.[0]?.message as ({ content?: unknown; reasoning_content?: unknown }) | undefined;
-  const content = typeof message?.content === "string" ? message.content.trim() : "";
-  const reasoning = typeof message?.reasoning_content === "string" ? message.reasoning_content.trim() : "";
-  const raw = extractJsonObject(content || reasoning);
+  const raw = extractJsonObject(text);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
 
   const obj = raw as Record<string, unknown>;
@@ -236,7 +218,7 @@ export async function runCandidateJudge(
     return { ran: false, judged: 0, approved: 0, discarded: 0, kept: 0, failed: 0, reason: "judge_disabled" };
   }
 
-  const model = env.JUDGE_MODEL?.trim() || env.DREAM_MODEL?.trim() || "";
+  const model = readModelName(env, ["JUDGE_MODEL", "DREAM_MODEL"], "");
   if (!model) {
     return { ran: false, judged: 0, approved: 0, discarded: 0, kept: 0, failed: 0, reason: "missing_model" };
   }
@@ -275,7 +257,7 @@ export async function runCandidateJudge(
         // 找不到任何原始消息可核对：直接判 ungrounded，不必浪费一次模型调用。
         judgeResult = { score: 0, grounded: false, durable: false, reason: "没有可核对的原始消息，无法确认是否有据" };
       } else {
-        const modelResult = await callJudgeModel(env, model, buildJudgePrompt(candidate, messages));
+        const modelResult = await callJudgeModel(env, model, buildJudgePrompt(candidate, messages), { id: candidate.id });
         if (!modelResult) {
           failed += 1;
           console.error("candidate judge: model call failed or returned invalid JSON", { namespace, id: candidate.id });

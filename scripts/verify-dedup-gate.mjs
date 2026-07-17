@@ -50,7 +50,17 @@ function readDbV2Source() {
 
 const dedupGateSource = readSource("src/memory/dedupGate.ts");
 const memoriesSource = readSource("src/api/memories.ts");
-const digestSource = readSource("src/memory/dailyDigest.ts");
+// dailyDigest may be a thin re-export after the dream/ phase split; scan barrel + phases.
+const dreamDir = resolve(root, "src/memory/dream");
+const digestSource = [
+  readSource("src/memory/dailyDigest.ts"),
+  ...(existsSync(dreamDir)
+    ? readdirSync(dreamDir)
+        .filter((name) => name.endsWith(".ts"))
+        .sort()
+        .map((name) => readFileSync(join(dreamDir, name), "utf8"))
+    : [])
+].join("\n");
 const dbV2Source = readDbV2Source();
 const recallSource = readSource("src/memory/v2/recall.ts");
 const typesSource = readSource("src/assembler/types.ts");

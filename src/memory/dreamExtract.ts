@@ -1,6 +1,7 @@
 import { listActiveFactKeys } from "../db/v2";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
+import { clampScore, extractJsonObject, readString, readStringArray } from "../utils/parse";
 import { clampMemoryType } from "./canonicalTypes";
 import type { ExtractedMemory } from "./extract";
 
@@ -20,19 +21,6 @@ function readPositiveInt(value: unknown, fallback: number, max: number): number 
   return Math.min(Math.max(Math.floor(numeric), 1), max);
 }
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-}
-
-function clampScore(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
-}
-
 function readDreamExtractModel(env: Env): string {
   return (
     env.DREAM_MODEL?.trim() ||
@@ -40,24 +28,6 @@ function readDreamExtractModel(env: Env): string {
     env.SUMMARY_MODEL?.trim() ||
     DEFAULT_WORKERS_AI_DREAM_MODEL
   );
-}
-
-function extractJsonObject(text: string): unknown | null {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    // Some providers wrap JSON in prose; pull out the outermost object.
-  }
-
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function normalizeCandidate(item: unknown): ExtractedMemory | null {

@@ -3,6 +3,7 @@ import { requireScope } from "../auth/scopes";
 import { deleteCacheEntry, getCacheEntry, parseCacheEntryValue, putCacheEntry } from "../db/cacheEntries";
 import type { Env, KeyProfile } from "../types";
 import { json, openAiError } from "../utils/json";
+import { readStringArray } from "../utils/parse";
 
 function decodePathPart(value: string): string | null {
   try {
@@ -10,11 +11,6 @@ function decodePathPart(value: string): string | null {
   } catch {
     return null;
   }
-}
-
-function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
 }
 
 async function readBody(request: Request): Promise<Record<string, unknown> | null> {

@@ -1,5 +1,6 @@
 import type { Env, MemoryApiRecord, MemoryRecord } from "../types";
 import { newId } from "../utils/ids";
+import { clampScore, parseStringArray, readString } from "../utils/parse";
 import { nowIso } from "../utils/time";
 import { createEmbedding } from "./embedding";
 import { clampMemoryType } from "./canonicalTypes";
@@ -58,30 +59,8 @@ export interface VectorMemoryListPage {
   totalCount?: number;
 }
 
-function clampScore(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function readBoolean(value: unknown): boolean {
   return value === true || value === "true" || value === 1;
-}
-
-function parseStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-  if (typeof value !== "string" || !value.trim()) return [];
-
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (Array.isArray(parsed)) return parseStringArray(parsed);
-  } catch {
-    // Plain metadata strings are also valid single tags.
-  }
-
-  return [value.trim()];
 }
 
 function toMetadata(input: Required<VectorMemoryInput> & { id: string; vectorId: string; createdAt: string; updatedAt: string; status?: string }): Record<string, VectorizeVectorMetadata> {

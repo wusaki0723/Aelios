@@ -1,8 +1,10 @@
 import { authenticate } from "../auth/apiKey";
 import { listDreamRunsForNamespace } from "../db/dreamRuns";
+import { listJudgedCandidatesInRange, listMemoriesCreatedInRange, listMemoriesGoneDormantInRange } from "../db/v2";
 import {
   countRawMessagesForDateLabel,
   getDateLabelsLookback,
+  getDateRangeForLabel,
   getTargetDigestDateLabel,
   readDreamCursorValue,
   readDreamTimeZoneFromEnv,
@@ -14,6 +16,13 @@ import type { Env } from "../types";
 
 const DREAM_STATUS_LOOKBACK_DAYS = 7;
 const DREAM_CURSOR_DATE_LABELS = 3;
+const DREAM_HARVEST_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isValidHarvestDateLabel(label: string): boolean {
+  if (!DREAM_HARVEST_DATE_RE.test(label)) return false;
+  const [year, month, day] = label.split("-").map(Number);
+  return year >= 1970 && month >= 1 && month <= 12 && day >= 1 && day <= 31;
+}
 
 export async function handleDreamStatus(request: Request, env: Env): Promise<Response> {
   const auth = await authenticate(request, env);
@@ -101,6 +110,53 @@ export async function handleDreamRun(request: Request, env: Env): Promise<Respon
     }
 
     return json({ data: response });
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  }
+}
+
+// 当夜收成 (harvest)：返回某个 date_label 当晚的记忆变动，只读。
+// created 新生 / dormant 沉眠 (superseded+archived) / candidates 判决 (approved+discarded)。
+export async function handleDreamHarvest(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+  if (!auth.profile.scopes.includes("memory:write")) {
+    return openAiError("Missing required scope: memory:write", 403);
+  }
+
+  const url = new URL(request.url);
+  const namespace = readString(url.searchParams.get("namespace")) || auth.profile.namespace;
+  const dateLabel = readString(url.searchParams.get("date"));
+  if (!dateLabel || !isValidHarvestDateLabel(dateLabel)) {
+    return openAiError("date must be YYYY-MM-DD", 400);
+  }
+
+  const timeZone = readDreamTimeZoneFromEnv(env);
+  let startIso: string;
+  let endIso: string;
+  try {
+    ({ startIso, endIso } = getDateRangeForLabel(dateLabel, timeZone));
+  } catch {
+    return openAiError("date must be YYYY-MM-DD", 400);
+  }
+
+  try {
+    const [created, dormant, candidates] = await Promise.all([
+      listMemoriesCreatedInRange(env.DB, { namespace, startIso, endIso }),
+      listMemoriesGoneDormantInRange(env.DB, { namespace, startIso, endIso }),
+      listJudgedCandidatesInRange(env.DB, { namespace, startIso, endIso })
+    ]);
+
+    return json({
+      data: {
+        namespace,
+        date: dateLabel,
+        time_zone: timeZone,
+        created,
+        dormant,
+        candidates
+      }
+    });
   } catch (error) {
     return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

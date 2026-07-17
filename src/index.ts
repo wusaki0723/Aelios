@@ -8,7 +8,7 @@ import {
 import { handleHealth } from "./api/health";
 import { handleCache } from "./api/cache";
 import { handleCacheHealth, handleVectorDoctor, handleVectorHealth, handleVectorReindex } from "./api/debug";
-import { handleDreamRun, handleDreamStatus } from "./api/dream";
+import { handleDreamHarvest, handleDreamRun, handleDreamStatus } from "./api/dream";
 import { handleChatCompletions } from "./api/chatCompletions";
 import { handleGuideDogChatCompletions } from "./api/guideDog";
 import {
@@ -183,6 +183,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/v1/vector-doctor") {
       return handleVectorDoctor(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/dream/harvest") {
+      return handleDreamHarvest(request, env);
     }
 
     if (request.method === "GET" && url.pathname === "/v1/dream/status") {

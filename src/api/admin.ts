@@ -1,1 +1,8 @@
-export { handleAdmin, handleDiaryAdmin, handleDiaryRewriteAdmin, handleWeeklyRollupAdmin, handleMonthlyRollupAdmin } from "./admin/handlers";
+export {
+  handleAdmin,
+  handleDiaryAdmin,
+  handleDiaryRewriteAdmin,
+  handleWeeklyRollupAdmin,
+  handleMonthlyRollupAdmin,
+  handleStarmap
+} from "./admin/handlers";

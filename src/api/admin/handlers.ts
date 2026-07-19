@@ -6,10 +6,21 @@ import { runWeeklyRollup } from "../../memory/weeklyRollup";
 import type { Env } from "../../types";
 import { json, openAiError } from "../../utils/json";
 import { readBoolean, readJsonObject, readString } from "../../utils/request";
+import { STARMAP_HTML } from "./starmap";
 import { ADMIN_HTML } from "./ui";
 
 export function handleAdmin(): Response {
   return new Response(ADMIN_HTML, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    }
+  });
+}
+
+/** 记忆星图 v2 · 两江交汇（独立 Three.js 页，鉴权与 admin 面板一致：前端 Bearer） */
+export function handleStarmap(): Response {
+  return new Response(STARMAP_HTML, {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store"

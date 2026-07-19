@@ -388,8 +388,8 @@ function mulberry32(a) {
   };
 }
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-function easeInOut(t) {
-  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 function starSize(importance, pinned) {
   var imp = Number(importance);
@@ -827,6 +827,12 @@ var haloMaterial = new THREE.ShaderMaterial({
   blending: THREE.AdditiveBlending
 });
 var haloPoints = null;
+// smooth transitions: focus changes write targets, the frame loop eases toward them
+var targetSizes = null;
+var targetAlphas = null;
+var targetHaloSizes = null;
+var targetHaloAlphas = null;
+var animActive = false;
 
 // particle flow (GPU): curves baked into float textures, drift runs in shader
 var flowMaterials = [];
@@ -1215,6 +1221,12 @@ function rebuildStars(laid) {
     haloPoints = new THREE.Points(hgeo, haloMaterial);
     starsGroup.add(haloPoints);
   }
+
+  targetSizes = new Float32Array(sizes);
+  targetAlphas = new Float32Array(alphas);
+  targetHaloSizes = haloCount ? new Float32Array(haloSize) : null;
+  targetHaloAlphas = haloCount ? new Float32Array(haloAlpha) : null;
+  animActive = false;
 }
 
 function rebuildAdj() {
@@ -1312,11 +1324,8 @@ function applyFocusVisual() {
     var list = adj[focus] || [];
     for (var i = 0; i < list.length; i++) neigh[list[i]] = true;
   }
+  // colors snap instantly; size/alpha go through the easing targets
   var colors = starsPoints.geometry.getAttribute('aColor');
-  var sizes = starsPoints.geometry.getAttribute('aSize');
-  var alphas = starsPoints.geometry.getAttribute('aAlpha');
-  var haloSizes = haloPoints ? haloPoints.geometry.getAttribute('aSize') : null;
-  var haloAlphas = haloPoints ? haloPoints.geometry.getAttribute('aAlpha') : null;
   var now = performance.now();
   for (var j = 0; j < nodes.length; j++) {
     var node = nodes[j];
@@ -1337,22 +1346,75 @@ function applyFocusVisual() {
         var p = (pulseUntil - now) / 900;
         sizeMul *= 1 + 0.55 * Math.sin((1 - p) * Math.PI * 4) * p;
       }
-      sizes.setX(idx, node._baseSize * sizeMul);
-      alphas.setX(idx, dim);
+      targetSizes[idx] = node._baseSize * sizeMul;
+      targetAlphas[idx] = dim;
     } else {
-      alphas.setX(idx, 0);
+      targetAlphas[idx] = 0;
     }
-    if (haloSizes && node._halo != null && node._halo >= 0) {
-      haloSizes.setX(node._halo, node._haloBaseSize * (sizeMul > 1 ? 1.12 : 1));
-      haloAlphas.setX(node._halo, typeOn ? node._haloBaseAlpha * dim : 0);
+    if (targetHaloSizes && node._halo != null && node._halo >= 0) {
+      targetHaloSizes[node._halo] = node._haloBaseSize * (sizeMul > 1 ? 1.12 : 1);
+      targetHaloAlphas[node._halo] = typeOn ? node._haloBaseAlpha * dim : 0;
     }
   }
   colors.needsUpdate = true;
+  animActive = true;
+}
+
+// ease current sizes/alphas toward targets; rests (and snaps) when close
+function applyStarAnim(dt) {
+  if (!animActive || !starsPoints || !targetSizes) return;
+  var k = 1 - Math.exp(-dt * 9);
+  var sizes = starsPoints.geometry.getAttribute('aSize');
+  var alphas = starsPoints.geometry.getAttribute('aAlpha');
+  var pulseIdx = -1;
+  if (pulseId && starById[pulseId] && starById[pulseId]._index != null) {
+    pulseIdx = starById[pulseId]._index;
+  }
+  var maxD = 0;
+  var n = indexToNode.length;
+  for (var i = 0; i < n; i++) {
+    if (i === pulseIdx) continue; // the pulse owns this star's size
+    var ns = sizes.getX(i) + (targetSizes[i] - sizes.getX(i)) * k;
+    var na = alphas.getX(i) + (targetAlphas[i] - alphas.getX(i)) * k;
+    sizes.setX(i, ns);
+    alphas.setX(i, na);
+    var d = Math.max(Math.abs(targetSizes[i] - ns), Math.abs(targetAlphas[i] - na) * 2);
+    if (d > maxD) maxD = d;
+  }
+  if (haloPoints && targetHaloSizes) {
+    var hs = haloPoints.geometry.getAttribute('aSize');
+    var ha = haloPoints.geometry.getAttribute('aAlpha');
+    var hn = hs.count;
+    for (var j = 0; j < hn; j++) {
+      var nhs = hs.getX(j) + (targetHaloSizes[j] - hs.getX(j)) * k;
+      var nha = ha.getX(j) + (targetHaloAlphas[j] - ha.getX(j)) * k;
+      hs.setX(j, nhs);
+      ha.setX(j, nha);
+      var hd = Math.abs(targetHaloSizes[j] - nhs) * 0.2;
+      if (hd > maxD) maxD = hd;
+    }
+    hs.needsUpdate = true;
+    ha.needsUpdate = true;
+  }
   sizes.needsUpdate = true;
   alphas.needsUpdate = true;
-  if (haloSizes) {
-    haloSizes.needsUpdate = true;
-    haloAlphas.needsUpdate = true;
+  if (maxD < 0.004) {
+    for (var i2 = 0; i2 < n; i2++) {
+      if (i2 === pulseIdx) continue;
+      sizes.setX(i2, targetSizes[i2]);
+      alphas.setX(i2, targetAlphas[i2]);
+    }
+    if (haloPoints && targetHaloSizes) {
+      var hs2 = haloPoints.geometry.getAttribute('aSize');
+      var ha2 = haloPoints.geometry.getAttribute('aAlpha');
+      for (var j2 = 0; j2 < hs2.count; j2++) {
+        hs2.setX(j2, targetHaloSizes[j2]);
+        ha2.setX(j2, targetHaloAlphas[j2]);
+      }
+      hs2.needsUpdate = true;
+      ha2.needsUpdate = true;
+    }
+    animActive = false;
   }
 }
 
@@ -1375,13 +1437,19 @@ function updatePulse(now) {
 }
 
 // ── interaction ──────────────────────────────────────────────
-function markActivity() {
+// light activity: resets idle timer and stops auto-orbit (mouse move)
+function noteActivity() {
   idleT0 = performance.now();
-  camTween = null;
   if (autoOrbit) {
     autoOrbit = false;
     controls.enableDamping = true;
   }
+}
+
+// deliberate input: also cancels camera tweens and skips the intro
+function markActivity() {
+  noteActivity();
+  camTween = null;
   if (introActive) skipIntro();
 }
 
@@ -1405,12 +1473,12 @@ function startIntro() {
 
 function updateIntro(now) {
   if (!introActive) return;
-  var t = (now - introT0) / 3000;
+  var t = (now - introT0) / 3400;
   if (t >= 1) {
     skipIntro();
     return;
   }
-  t = easeInOut(clamp(t, 0, 1));
+  t = easeInOutCubic(clamp(t, 0, 1));
   var fromPos = new THREE.Vector3(4, 12, 92);
   var toPos = new THREE.Vector3(6, 18, 28);
   var fromTarget = new THREE.Vector3(0, -1, 40);
@@ -1668,7 +1736,7 @@ function frame(now) {
   updateIntro(now);
   if (camTween) {
     var tt = clamp((now - camTween.t0) / camTween.dur, 0, 1);
-    var te = easeInOut(tt);
+    var te = easeInOutCubic(tt);
     camera.position.lerpVectors(camTween.fromPos, camTween.toPos, te);
     controls.target.lerpVectors(camTween.fromTgt, camTween.toTgt, te);
     if (tt >= 1) camTween = null;
@@ -1698,6 +1766,7 @@ function frame(now) {
     var fs = fogSprites[f];
     fs.mat.opacity = fs.base * (0.8 + 0.2 * Math.sin(tSec * fs.speed + fs.phase));
   }
+  applyStarAnim(dt);
   updatePulse(now);
   renderer.render(scene, camera);
   fpsEma += (1 / Math.max(dt, 0.001) - fpsEma) * 0.05;
@@ -1828,7 +1897,7 @@ canvas.addEventListener('pointerdown', function (ev) {
   pointerDown = { x: ev.clientX, y: ev.clientY, t: performance.now() };
 });
 canvas.addEventListener('pointermove', function (ev) {
-  markActivity();
+  noteActivity();
   var node = pickStar(ev.clientX, ev.clientY);
   var next = node ? node.id : null;
   if (next !== hoverId) {

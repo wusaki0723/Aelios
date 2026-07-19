@@ -3,6 +3,7 @@ import {
   handleDiaryAdmin,
   handleDiaryRewriteAdmin,
   handleMonthlyRollupAdmin,
+  handleStarmap,
   handleWeeklyRollupAdmin
 } from "./api/admin";
 import { handleHealth } from "./api/health";
@@ -73,6 +74,10 @@ export default {
 
     if (request.method === "GET" && (url.pathname === "/admin" || url.pathname === "/memory-admin")) {
       return handleAdmin();
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/starmap") {
+      return handleStarmap();
     }
 
     if (request.method === "POST" && url.pathname === "/admin/weekly-rollup") {

@@ -447,12 +447,35 @@ function buildCurves() {
 }
 var curves = buildCurves();
 
-function makeRiverRibbon(curve, width, colorHex, opacity) {
+// river ribbons: soft luminous water with a slow flowing shimmer
+var ribbonMaterials = [];
+var ribbonVertexShader = [
+  'varying vec2 vUv;',
+  'void main() {',
+  '  vUv = uv;',
+  '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+  '}'
+].join('\n');
+var ribbonFragmentShader = [
+  'uniform vec3 uColor;',
+  'uniform float uTime;',
+  'uniform float uOpacity;',
+  'uniform float uEndFade;',
+  'varying vec2 vUv;',
+  'void main() {',
+  '  float edge = sin(vUv.y * 3.14159);',
+  '  edge *= edge;',
+  '  float flow = 0.7 + 0.3 * sin(vUv.x * 55.0 - uTime * 0.8 + sin(vUv.y * 6.283) * 0.8);',
+  '  float along = 1.0 - uEndFade * vUv.x * 0.65;',
+  '  gl_FragColor = vec4(uColor, edge * flow * along * uOpacity);',
+  '}'
+].join('\n');
+
+function makeRiverRibbon(curve, width, colorHex, opacity, endFade) {
   var segs = 120;
   var pts = curve.getSpacedPoints(segs);
   var positions = [];
-  var colors = [];
-  var col = new THREE.Color(colorHex);
+  var uvs = [];
   for (var i = 0; i < pts.length; i++) {
     var p = pts[i];
     var t = i / (pts.length - 1);
@@ -464,39 +487,45 @@ function makeRiverRibbon(curve, width, colorHex, opacity) {
     if (side.lengthSq() < 1e-8) side.set(1, 0, 0);
     else side.normalize();
     var w = width * (0.55 + 0.45 * Math.sin(t * Math.PI));
-    var fade = 0.4 + 0.6 * (1 - t * 0.2);
     var a = p.clone().addScaledVector(side, w);
     var b = p.clone().addScaledVector(side, -w);
     a.y -= 0.4;
     b.y -= 0.4;
     positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
-    // RGB only; overall opacity via material (Three vertexColors is 3-comp)
-    colors.push(col.r * fade, col.g * fade, col.b * fade, col.r * fade, col.g * fade, col.b * fade);
+    uvs.push(t, 0, t, 1);
   }
   var geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   var idx = [];
   for (var s = 0; s < pts.length - 1; s++) {
     var i0 = s * 2, i1 = s * 2 + 1, i2 = (s + 1) * 2, i3 = (s + 1) * 2 + 1;
     idx.push(i0, i1, i2, i1, i3, i2);
   }
   geo.setIndex(idx);
-  var mat = new THREE.MeshBasicMaterial({
-    vertexColors: true,
+  var mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Color(colorHex) },
+      uTime: { value: 0 },
+      uOpacity: { value: opacity },
+      uEndFade: { value: endFade ? 1 : 0 }
+    },
+    vertexShader: ribbonVertexShader,
+    fragmentShader: ribbonFragmentShader,
     transparent: true,
-    opacity: opacity,
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending
   });
+  ribbonMaterials.push(mat);
   return new THREE.Mesh(geo, mat);
 }
 
 var riverGroup = new THREE.Group();
-riverGroup.add(makeRiverRibbon(curves.han, 1.15, 0x4a9de0, 0.15));
-riverGroup.add(makeRiverRibbon(curves.yang, 2.05, 0xf0b060, 0.17));
-riverGroup.add(makeRiverRibbon(curves.down, 2.7, 0x9098b8, 0.08));
+riverGroup.add(makeRiverRibbon(curves.han, 1.15, 0x5f9ed8, 0.16, false));
+riverGroup.add(makeRiverRibbon(curves.yang, 2.05, 0xeab058, 0.17, false));
+riverGroup.add(makeRiverRibbon(curves.merge, 1.7, 0xc9b06a, 0.13, false));
+riverGroup.add(makeRiverRibbon(curves.down, 2.7, 0x8a90b0, 0.10, true));
 scene.add(riverGroup);
 
 var cityLight = new THREE.PointLight(0xffd090, 1.5, 42, 2);
@@ -711,10 +740,9 @@ var haloMaterial = new THREE.ShaderMaterial({
 });
 var haloPoints = null;
 
-// particle flow
-var particleSystems = [];
+// particle flow (GPU): curves baked into float textures, drift runs in shader
+var flowMaterials = [];
 var CURVE_SAMPLES = 256;
-var UP0 = new THREE.Vector3(0, 1, 0);
 
 function bakeCurve(curve) {
   var pos = new Float32Array(CURVE_SAMPLES * 3);
@@ -730,76 +758,130 @@ function bakeCurve(curve) {
   return { pos: pos, tan: tan };
 }
 
-// lerp into caller-provided vectors — no allocation, no getUtoTmapping search
-function sampleBaked(baked, t, outPos, outTan) {
-  var f = clamp(t, 0, 1) * (CURVE_SAMPLES - 1);
-  var i0 = Math.floor(f);
-  var i1 = Math.min(i0 + 1, CURVE_SAMPLES - 1);
-  var fr = f - i0;
-  var a = i0 * 3, b = i1 * 3;
-  outPos.set(
-    baked.pos[a] + (baked.pos[b] - baked.pos[a]) * fr,
-    baked.pos[a + 1] + (baked.pos[b + 1] - baked.pos[a + 1]) * fr,
-    baked.pos[a + 2] + (baked.pos[b + 2] - baked.pos[a + 2]) * fr
-  );
-  outTan.set(
-    baked.tan[a] + (baked.tan[b] - baked.tan[a]) * fr,
-    baked.tan[a + 1] + (baked.tan[b + 1] - baked.tan[a + 1]) * fr,
-    baked.tan[a + 2] + (baked.tan[b + 2] - baked.tan[a + 2]) * fr
-  );
-  if (outTan.lengthSq() < 1e-8) outTan.set(0, 0, 1); else outTan.normalize();
+function curveTexture(arr) {
+  var n = CURVE_SAMPLES;
+  var rgba = new Float32Array(n * 4);
+  for (var i = 0; i < n; i++) {
+    rgba[i * 4] = arr[i * 3];
+    rgba[i * 4 + 1] = arr[i * 3 + 1];
+    rgba[i * 4 + 2] = arr[i * 3 + 2];
+    rgba[i * 4 + 3] = 0;
+  }
+  var tex = new THREE.DataTexture(rgba, n, 1, THREE.RGBAFormat, THREE.FloatType);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.needsUpdate = true;
+  return tex;
 }
 
-function makeFlowParticles(curve, count, colorA, colorB, speed) {
-  count = Math.min(count, MAX_PARTICLES);
+var flowVertexShader = [
+  'attribute vec4 aSeed;', // t0, speed, radius, sizeFactor
+  'attribute float aTint;',
+  'attribute float aAng;',
+  'uniform float uTime;',
+  'uniform float uPixelRatio;',
+  'uniform float uSize;',
+  'uniform float uOpacity;',
+  'uniform float uMixToMid;',
+  'uniform float uEndFade;',
+  'uniform vec3 uColorA;',
+  'uniform vec3 uColorB;',
+  'uniform sampler2D uCurvePos;',
+  'uniform sampler2D uCurveTan;',
+  'varying vec3 vColor;',
+  'varying float vAlpha;',
+  'vec3 bakeSample(sampler2D tex, float t) {',
+  '  float ft = t * ' + (CURVE_SAMPLES - 1).toFixed(1) + ';',
+  '  float i0 = floor(ft);',
+  '  float i1 = min(i0 + 1.0, ' + (CURVE_SAMPLES - 1).toFixed(1) + ');',
+  '  vec3 s0 = texture2D(tex, vec2((i0 + 0.5) / ' + CURVE_SAMPLES.toFixed(1) + ', 0.5)).xyz;',
+  '  vec3 s1 = texture2D(tex, vec2((i1 + 0.5) / ' + CURVE_SAMPLES.toFixed(1) + ', 0.5)).xyz;',
+  '  return mix(s0, s1, fract(ft));',
+  '}',
+  'void main() {',
+  '  float t = fract(aSeed.x + uTime * aSeed.y);',
+  '  vec3 bp = bakeSample(uCurvePos, t);',
+  '  vec3 bt = bakeSample(uCurveTan, t);',
+  '  vec3 side = cross(bt, vec3(0.0, 1.0, 0.0));',
+  '  if (dot(side, side) < 1e-6) side = vec3(1.0, 0.0, 0.0);',
+  '  else side = normalize(side);',
+  '  vec3 up = normalize(cross(side, bt));',
+  '  float ang = aAng + t * 10.0;',
+  '  vec3 pos = bp + side * cos(ang) * aSeed.z + up * sin(ang) * aSeed.z * 0.35;',
+  // two lineages start pure, then blend toward each other downstream
+  '  float mixT = mix(aTint, 0.5, uMixToMid * smoothstep(0.10, 0.75, t));',
+  '  vColor = mix(uColorA, uColorB, mixT);',
+  '  float head = smoothstep(0.0, 0.05, t) * (1.0 - smoothstep(0.93, 1.0, t));',
+  '  float shimmer = 0.6 + 0.4 * sin(uTime * 0.9 + aAng * 7.0);',
+  '  vAlpha = uOpacity * head * (1.0 - uEndFade * t * 0.6) * shimmer;',
+  '  vec4 mv = modelViewMatrix * vec4(pos, 1.0);',
+  '  gl_PointSize = uSize * aSeed.w * uPixelRatio * (180.0 / -mv.z);',
+  '  gl_Position = projectionMatrix * mv;',
+  '}'
+].join('\n');
+var flowFragmentShader = [
+  'varying vec3 vColor;',
+  'varying float vAlpha;',
+  'void main() {',
+  '  float d = length(gl_PointCoord - vec2(0.5));',
+  '  if (d > 0.5) discard;',
+  '  float a = exp(-d * 5.0) * vAlpha;',
+  '  gl_FragColor = vec4(vColor, a);',
+  '}'
+].join('\n');
+
+function makeFlowParticles(curve, opts) {
+  var count = Math.min(opts.count, MAX_PARTICLES);
   var baked = bakeCurve(curve);
-  var pos = new Float32Array(count * 3);
-  var col = new Float32Array(count * 3);
-  var metaArr = new Float32Array(count * 3); // t, speed, radius
-  var rnd = mulberry32(hashStr('flow-' + colorA.getHexString() + '-' + count));
-  var cA = colorA.clone();
-  var cB = colorB.clone();
-  var p = new THREE.Vector3();
-  var tangent = new THREE.Vector3();
-  var side = new THREE.Vector3();
-  var up = new THREE.Vector3();
-  var cc = new THREE.Color();
+  var rnd = mulberry32(hashStr('flow2-' + opts.seed));
+  var pos = new Float32Array(count * 3); // dummy; real positions are shader-side
+  var seed = new Float32Array(count * 4);
+  var tint = new Float32Array(count);
+  var ang = new Float32Array(count);
   for (var i = 0; i < count; i++) {
-    var t = rnd();
-    var rad = 0.3 + rnd() * 1.8;
-    var ang = rnd() * Math.PI * 2;
-    sampleBaked(baked, t, p, tangent);
-    side.crossVectors(tangent, UP0);
-    if (side.lengthSq() < 1e-8) side.set(1, 0, 0); else side.normalize();
-    up.crossVectors(side, tangent).normalize();
-    p.addScaledVector(side, Math.cos(ang) * rad);
-    p.addScaledVector(up, Math.sin(ang) * rad * 0.4);
-    pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
-    cc.copy(cA).lerp(cB, rnd());
-    col[i * 3] = cc.r; col[i * 3 + 1] = cc.g; col[i * 3 + 2] = cc.b;
-    metaArr[i * 3] = t;
-    metaArr[i * 3 + 1] = speed * (0.55 + rnd() * 0.9);
-    metaArr[i * 3 + 2] = rad;
+    seed[i * 4] = rnd();
+    seed[i * 4 + 1] = opts.speed * (0.6 + rnd() * 0.8);
+    seed[i * 4 + 2] = 0.25 + rnd() * 1.7;
+    seed[i * 4 + 3] = 0.6 + rnd() * 0.9;
+    tint[i] = rnd();
+    ang[i] = rnd() * Math.PI * 2;
   }
   var geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  var mat = new THREE.PointsMaterial({
-    size: 0.22, sizeAttenuation: true, vertexColors: true,
-    transparent: true, opacity: 0.35, depthWrite: false,
+  geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 4));
+  geo.setAttribute('aTint', new THREE.BufferAttribute(tint, 1));
+  geo.setAttribute('aAng', new THREE.BufferAttribute(ang, 1));
+  var mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) },
+      uSize: { value: opts.size },
+      uOpacity: { value: opts.opacity },
+      uMixToMid: { value: opts.mixToMid ? 1 : 0 },
+      uEndFade: { value: opts.endFade ? 1 : 0 },
+      uColorA: { value: new THREE.Color(opts.colorA) },
+      uColorB: { value: new THREE.Color(opts.colorB) },
+      uCurvePos: { value: curveTexture(baked.pos) },
+      uCurveTan: { value: curveTexture(baked.tan) }
+    },
+    vertexShader: flowVertexShader,
+    fragmentShader: flowFragmentShader,
+    transparent: true,
+    depthWrite: false,
     blending: THREE.AdditiveBlending
   });
   var pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false; // positions are zero CPU-side; culling would hide the river
   scene.add(pts);
-  particleSystems.push({
-    points: pts, baked: baked, meta: metaArr, count: count
-  });
+  flowMaterials.push(mat);
 }
 
-makeFlowParticles(curves.han, 420, new THREE.Color(0x4a9de0), new THREE.Color(0xc8e8f8), 0.035);
-makeFlowParticles(curves.yang, 620, new THREE.Color(0xf0b060), new THREE.Color(0xffd0a0), 0.03);
-makeFlowParticles(curves.down, 700, new THREE.Color(0xa0b0d0), new THREE.Color(0xf0c080), 0.028);
-// total particles ~1740 < 3000
+// slow night water: full traverse ~60-80s, densest on the 长江 main stem
+makeFlowParticles(curves.han, { count: 500, colorA: 0x7cb3e8, colorB: 0xe9eef8, speed: 0.014, size: 0.30, opacity: 0.5, seed: 'han' });
+makeFlowParticles(curves.yang, { count: 700, colorA: 0xf0c062, colorB: 0xf0977f, speed: 0.012, size: 0.34, opacity: 0.48, seed: 'yang' });
+makeFlowParticles(curves.merge, { count: 360, colorA: 0x7cb3e8, colorB: 0xf0c062, speed: 0.018, size: 0.32, opacity: 0.6, mixToMid: true, seed: 'merge' });
+makeFlowParticles(curves.down, { count: 380, colorA: 0x9fb6d8, colorB: 0xf0c890, speed: 0.013, size: 0.30, opacity: 0.42, mixToMid: true, endFade: true, seed: 'down' });
+// flow 1940 + dust 950 ≈ 2890, within the 3000 particle budget
 
 // edges as lines
 var edgesGroup = new THREE.Group();
@@ -1476,34 +1558,6 @@ function updateCount() {
   countLabel.textContent = real + ' 星 · ' + edgeN + ' 边' + extra;
 }
 
-// ── particles tick ───────────────────────────────────────────
-var _pp = new THREE.Vector3();
-var _tt = new THREE.Vector3();
-var _side = new THREE.Vector3();
-var _up = new THREE.Vector3();
-function tickParticles(dt) {
-  for (var s = 0; s < particleSystems.length; s++) {
-    var sys = particleSystems[s];
-    var pos = sys.points.geometry.getAttribute('position');
-    for (var i = 0; i < sys.count; i++) {
-      var t = sys.meta[i * 3] + sys.meta[i * 3 + 1] * dt;
-      if (t > 1) t -= 1;
-      sys.meta[i * 3] = t;
-      sampleBaked(sys.baked, t, _pp, _tt);
-      _side.crossVectors(_tt, UP0);
-      if (_side.lengthSq() < 1e-8) _side.set(1, 0, 0);
-      else _side.normalize();
-      _up.crossVectors(_side, _tt).normalize();
-      var rad = sys.meta[i * 3 + 2];
-      var ang = t * 12 + i * 0.4;
-      _pp.addScaledVector(_side, Math.cos(ang) * rad);
-      _pp.addScaledVector(_up, Math.sin(ang) * rad * 0.35);
-      pos.setXYZ(i, _pp.x, _pp.y, _pp.z);
-    }
-    pos.needsUpdate = true;
-  }
-}
-
 // ── render loop ──────────────────────────────────────────────
 function resize() {
   var w = window.innerWidth;
@@ -1513,6 +1567,9 @@ function resize() {
   renderer.setSize(w, h, false);
   starMaterial.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio || 1, 2);
   haloMaterial.uniforms.uPixelRatio.value = starMaterial.uniforms.uPixelRatio.value;
+  for (var fm = 0; fm < flowMaterials.length; fm++) {
+    flowMaterials[fm].uniforms.uPixelRatio.value = starMaterial.uniforms.uPixelRatio.value;
+  }
 }
 
 function frame(now) {
@@ -1543,10 +1600,11 @@ function frame(now) {
     );
   }
   controls.update();
-  tickParticles(dt);
   var tSec = now * 0.001;
   starMaterial.uniforms.uTime.value = tSec;
   haloMaterial.uniforms.uTime.value = tSec;
+  for (var fm = 0; fm < flowMaterials.length; fm++) flowMaterials[fm].uniforms.uTime.value = tSec;
+  for (var rb = 0; rb < ribbonMaterials.length; rb++) ribbonMaterials[rb].uniforms.uTime.value = tSec;
   for (var f = 0; f < fogSprites.length; f++) {
     var fs = fogSprites[f];
     fs.mat.opacity = fs.base * (0.8 + 0.2 * Math.sin(tSec * fs.speed + fs.phase));

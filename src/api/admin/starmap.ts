@@ -236,6 +236,7 @@ export const STARMAP_HTML = String.raw`<!doctype html>
   需要 Token 才能读记忆。<br>
   请先在 <a href="/admin">控制台 · 设置</a> 保存 Bearer token。
 </div>
+<div class="empty-banner" id="errorBanner" hidden></div>
 <div class="skip-hint" id="skipHint">点击或拖拽跳过开场</div>
 <div class="caption">汉江是她 · 长江是我们 · 城是攒下的重要</div>
 
@@ -347,6 +348,7 @@ var countLabel = document.getElementById('countLabel');
 var loadingBanner = document.getElementById('loadingBanner');
 var emptyBanner = document.getElementById('emptyBanner');
 var authBanner = document.getElementById('authBanner');
+var errorBanner = document.getElementById('errorBanner');
 var skipHint = document.getElementById('skipHint');
 var toolbar = document.getElementById('toolbar');
 var typeLegendEl = document.getElementById('typeLegend');
@@ -362,6 +364,7 @@ var nodes = [];
 var edges = [];
 var meta = { total_nodes: 0, total_edges: 0, truncated: false };
 var starById = {};
+var indexToNode = [];
 var adj = {};
 var hoverId = null;
 var selectedId = null;
@@ -371,6 +374,10 @@ var introActive = true;
 var introT0 = 0;
 var idleT0 = performance.now();
 var autoOrbit = false;
+var orbitAng = 0;
+var camTween = null;
+var loadSeq = 0;
+var firstLoad = true;
 var pageVisible = !document.hidden;
 var raf = 0;
 var pointer = new THREE.Vector2(-10, -10);
@@ -384,6 +391,7 @@ var renderer = new THREE.WebGLRenderer({
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setClearColor(0x050816, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+var clock = new THREE.Clock();
 
 var scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x050816, 0.011);
@@ -575,29 +583,69 @@ scene.add(starsGroup);
 
 // particle flow
 var particleSystems = [];
+var CURVE_SAMPLES = 256;
+var UP0 = new THREE.Vector3(0, 1, 0);
+
+function bakeCurve(curve) {
+  var pos = new Float32Array(CURVE_SAMPLES * 3);
+  var tan = new Float32Array(CURVE_SAMPLES * 3);
+  for (var i = 0; i < CURVE_SAMPLES; i++) {
+    var t = i / (CURVE_SAMPLES - 1);
+    var p = curve.getPointAt(t);
+    var g = curve.getTangentAt(t);
+    if (g.lengthSq() < 1e-8) g.set(0, 0, 1); else g.normalize();
+    pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
+    tan[i * 3] = g.x; tan[i * 3 + 1] = g.y; tan[i * 3 + 2] = g.z;
+  }
+  return { pos: pos, tan: tan };
+}
+
+// lerp into caller-provided vectors — no allocation, no getUtoTmapping search
+function sampleBaked(baked, t, outPos, outTan) {
+  var f = clamp(t, 0, 1) * (CURVE_SAMPLES - 1);
+  var i0 = Math.floor(f);
+  var i1 = Math.min(i0 + 1, CURVE_SAMPLES - 1);
+  var fr = f - i0;
+  var a = i0 * 3, b = i1 * 3;
+  outPos.set(
+    baked.pos[a] + (baked.pos[b] - baked.pos[a]) * fr,
+    baked.pos[a + 1] + (baked.pos[b + 1] - baked.pos[a + 1]) * fr,
+    baked.pos[a + 2] + (baked.pos[b + 2] - baked.pos[a + 2]) * fr
+  );
+  outTan.set(
+    baked.tan[a] + (baked.tan[b] - baked.tan[a]) * fr,
+    baked.tan[a + 1] + (baked.tan[b + 1] - baked.tan[a + 1]) * fr,
+    baked.tan[a + 2] + (baked.tan[b + 2] - baked.tan[a + 2]) * fr
+  );
+  if (outTan.lengthSq() < 1e-8) outTan.set(0, 0, 1); else outTan.normalize();
+}
+
 function makeFlowParticles(curve, count, colorA, colorB, speed) {
   count = Math.min(count, MAX_PARTICLES);
+  var baked = bakeCurve(curve);
   var pos = new Float32Array(count * 3);
   var col = new Float32Array(count * 3);
   var metaArr = new Float32Array(count * 3); // t, speed, radius
   var rnd = mulberry32(hashStr('flow-' + colorA.getHexString() + '-' + count));
   var cA = colorA.clone();
   var cB = colorB.clone();
+  var p = new THREE.Vector3();
+  var tangent = new THREE.Vector3();
+  var side = new THREE.Vector3();
+  var up = new THREE.Vector3();
+  var cc = new THREE.Color();
   for (var i = 0; i < count; i++) {
     var t = rnd();
-    var p = curve.getPointAt(t);
     var rad = 0.3 + rnd() * 1.8;
     var ang = rnd() * Math.PI * 2;
-    var tangent = curve.getTangentAt(t).normalize();
-    var side = new THREE.Vector3().crossVectors(tangent, new THREE.Vector3(0, 1, 0));
-    if (side.lengthSq() < 1e-8) side.set(1, 0, 0);
-    side.normalize();
-    var up = new THREE.Vector3().crossVectors(side, tangent).normalize();
+    sampleBaked(baked, t, p, tangent);
+    side.crossVectors(tangent, UP0);
+    if (side.lengthSq() < 1e-8) side.set(1, 0, 0); else side.normalize();
+    up.crossVectors(side, tangent).normalize();
     p.addScaledVector(side, Math.cos(ang) * rad);
     p.addScaledVector(up, Math.sin(ang) * rad * 0.4);
     pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
-    var mix = rnd();
-    var cc = cA.clone().lerp(cB, mix);
+    cc.copy(cA).lerp(cB, rnd());
     col[i * 3] = cc.r; col[i * 3 + 1] = cc.g; col[i * 3 + 2] = cc.b;
     metaArr[i * 3] = t;
     metaArr[i * 3 + 1] = speed * (0.55 + rnd() * 0.9);
@@ -614,7 +662,7 @@ function makeFlowParticles(curve, count, colorA, colorB, speed) {
   var pts = new THREE.Points(geo, mat);
   scene.add(pts);
   particleSystems.push({
-    points: pts, curve: curve, meta: metaArr, count: count, colorA: cA, colorB: cB
+    points: pts, baked: baked, meta: metaArr, count: count
   });
 }
 
@@ -773,6 +821,7 @@ function rebuildStars(laid) {
     starsPoints = null;
   }
   starById = {};
+  indexToNode = [];
   var n = laid.length;
   if (!n) return;
 
@@ -785,6 +834,7 @@ function rebuildStars(laid) {
   for (var i = 0; i < n; i++) {
     var node = laid[i];
     starById[node.id] = node;
+    indexToNode[i] = node;
     var pos = node._pos;
     positions[i * 3] = pos.x;
     positions[i * 3 + 1] = pos.y;
@@ -942,13 +992,34 @@ function applyFocusVisual() {
   colors.needsUpdate = true;
   sizes.needsUpdate = true;
   alphas.needsUpdate = true;
-  rebuildEdges();
+}
+
+// per-frame pulse: touches only the pulsing star's size, never rebuilds edges
+function updatePulse(now) {
+  if (!starsPoints || !pulseId) return;
+  var node = starById[pulseId];
+  if (!node || node._index == null) { pulseId = null; return; }
+  if (now >= pulseUntil) {
+    pulseId = null;
+    applyFocusVisual();
+    return;
+  }
+  var p = (pulseUntil - now) / 900;
+  var sizeMul = 1 + 0.55 * Math.sin((1 - p) * Math.PI * 4) * p;
+  if (hoverId === node.id || selectedId === node.id) sizeMul *= 1.1;
+  var sizes = starsPoints.geometry.getAttribute('aSize');
+  sizes.setX(node._index, node._baseSize * sizeMul);
+  sizes.needsUpdate = true;
 }
 
 // ── interaction ──────────────────────────────────────────────
 function markActivity() {
   idleT0 = performance.now();
-  if (autoOrbit) autoOrbit = false;
+  camTween = null;
+  if (autoOrbit) {
+    autoOrbit = false;
+    controls.enableDamping = true;
+  }
   if (introActive) skipIntro();
 }
 
@@ -998,15 +1069,12 @@ function pickStar(clientX, clientY) {
   raycaster.params.Points.threshold = clamp(dist * 0.02, 0.45, 2.2);
   var hits = raycaster.intersectObject(starsPoints, false);
   if (!hits.length) return null;
-  // find nearest visible
+  // nearest visible hit; index→node map keeps this O(hits)
   for (var i = 0; i < hits.length; i++) {
-    var idx = hits[i].index;
-    for (var j = 0; j < nodes.length; j++) {
-      if (nodes[j]._index === idx) {
-        if (typeVisible[nodes[j].type] === false && !nodes[j]._special) continue;
-        return nodes[j];
-      }
-    }
+    var node = indexToNode[hits[i].index];
+    if (!node) continue;
+    if (typeVisible[node.type] === false && !node._special) continue;
+    return node;
   }
   return null;
 }
@@ -1082,12 +1150,14 @@ function openDrawer(node) {
   }
   drawerEl.classList.add('open');
   applyFocusVisual();
+  rebuildEdges();
 }
 
 function closeDrawer() {
   selectedId = null;
   drawerEl.classList.remove('open');
   applyFocusVisual();
+  rebuildEdges();
 }
 
 function flyTo(id, openDetail) {
@@ -1095,21 +1165,19 @@ function flyTo(id, openDetail) {
   if (!node) return;
   markActivity();
   var dest = node._pos.clone();
-  var camFrom = camera.position.clone();
-  var tgtFrom = controls.target.clone();
-  var camTo = dest.clone().add(new THREE.Vector3(6, 10, 14));
-  var tgtTo = dest.clone().add(new THREE.Vector3(0, 0.5, 0));
-  var t0 = performance.now();
-  var dur = 900;
-  function step(now) {
-    var t = clamp((now - t0) / dur, 0, 1);
-    var e = easeInOut(t);
-    camera.position.lerpVectors(camFrom, camTo, e);
-    controls.target.lerpVectors(tgtFrom, tgtTo, e);
-    controls.update();
-    if (t < 1) requestAnimationFrame(step);
-  }
-  requestAnimationFrame(step);
+  // approach along the current view direction so far-upstream stars stay readable
+  var dir = camera.position.clone().sub(controls.target);
+  var dist = clamp(dir.length() * 0.45, 7, 18);
+  if (dir.lengthSq() < 1e-8) dir.set(0, 0.5, 1);
+  dir.normalize();
+  camTween = {
+    fromPos: camera.position.clone(),
+    toPos: dest.clone().addScaledVector(dir, dist).add(new THREE.Vector3(0, 1.6, 0)),
+    fromTgt: controls.target.clone(),
+    toTgt: dest.clone().add(new THREE.Vector3(0, 0.4, 0)),
+    t0: performance.now(),
+    dur: 1000
+  };
   pulseId = id;
   pulseUntil = performance.now() + 900;
   if (openDetail && !node._easter) openDrawer(node);
@@ -1117,9 +1185,11 @@ function flyTo(id, openDetail) {
     selectedId = null;
     hoverId = id;
     applyFocusVisual();
+    rebuildEdges();
   } else {
     selectedId = id;
     applyFocusVisual();
+    rebuildEdges();
   }
 }
 
@@ -1149,10 +1219,12 @@ function prefs() {
 }
 
 async function loadGraph() {
+  var seq = ++loadSeq;
   var p = prefs();
   loadingBanner.hidden = false;
   emptyBanner.hidden = true;
   authBanner.hidden = true;
+  errorBanner.hidden = true;
   if (!p.apiKey.trim()) {
     loadingBanner.hidden = true;
     authBanner.hidden = false;
@@ -1161,7 +1233,7 @@ async function loadGraph() {
     rebuildAdj();
     rebuildEdges();
     updateCount();
-    startIntro();
+    if (firstLoad) { firstLoad = false; startIntro(); }
     return;
   }
   try {
@@ -1170,6 +1242,7 @@ async function loadGraph() {
       headers: { Authorization: 'Bearer ' + p.apiKey }
     });
     var text = await res.text();
+    if (seq !== loadSeq) return; // superseded by a newer request
     var payload = null;
     try { payload = text ? JSON.parse(text) : null; } catch (err) { payload = null; }
     if (!res.ok) {
@@ -1186,21 +1259,19 @@ async function loadGraph() {
     rebuildStars(nodes);
     rebuildAdj();
     applyFocusVisual();
+    rebuildEdges();
     updateCount();
     var realCount = rawNodes.length;
     emptyBanner.textContent = '江还在流，星等你来';
     emptyBanner.hidden = realCount > 0;
-    // keep / restart intro so first paint always pushes from downstream
-    if (!introActive) startIntro();
-    else {
-      introT0 = performance.now();
-      skipHint.classList.add('show');
-    }
+    // intro runs on first load only; refresh keeps the user's camera
+    if (firstLoad) { firstLoad = false; startIntro(); }
   } catch (err) {
+    if (seq !== loadSeq) return;
     console.error(err);
     countLabel.textContent = '加载失败';
-    emptyBanner.hidden = false;
-    emptyBanner.textContent = (err && err.message) ? err.message : '加载失败';
+    errorBanner.textContent = (err && err.message) ? err.message : '加载失败';
+    errorBanner.hidden = false;
   }
   loadingBanner.hidden = true;
 }
@@ -1214,6 +1285,10 @@ function updateCount() {
 }
 
 // ── particles tick ───────────────────────────────────────────
+var _pp = new THREE.Vector3();
+var _tt = new THREE.Vector3();
+var _side = new THREE.Vector3();
+var _up = new THREE.Vector3();
 function tickParticles(dt) {
   for (var s = 0; s < particleSystems.length; s++) {
     var sys = particleSystems[s];
@@ -1222,20 +1297,16 @@ function tickParticles(dt) {
       var t = sys.meta[i * 3] + sys.meta[i * 3 + 1] * dt;
       if (t > 1) t -= 1;
       sys.meta[i * 3] = t;
-      var p = sys.curve.getPointAt(t);
-      var tangent = sys.curve.getTangentAt(t);
-      if (tangent.lengthSq() < 1e-8) tangent.set(0, 0, 1);
-      else tangent.normalize();
-      var side = new THREE.Vector3().crossVectors(tangent, new THREE.Vector3(0, 1, 0));
-      if (side.lengthSq() < 1e-8) side.set(1, 0, 0);
-      else side.normalize();
-      var up = new THREE.Vector3().crossVectors(side, tangent).normalize();
+      sampleBaked(sys.baked, t, _pp, _tt);
+      _side.crossVectors(_tt, UP0);
+      if (_side.lengthSq() < 1e-8) _side.set(1, 0, 0);
+      else _side.normalize();
+      _up.crossVectors(_side, _tt).normalize();
       var rad = sys.meta[i * 3 + 2];
       var ang = t * 12 + i * 0.4;
-      p.addScaledVector(side, Math.cos(ang) * rad);
-      p.addScaledVector(up, Math.sin(ang) * rad * 0.35);
-      // downstream fade: lower y already in curve
-      pos.setXYZ(i, p.x, p.y, p.z);
+      _pp.addScaledVector(_side, Math.cos(ang) * rad);
+      _pp.addScaledVector(_up, Math.sin(ang) * rad * 0.35);
+      pos.setXYZ(i, _pp.x, _pp.y, _pp.z);
     }
     pos.needsUpdate = true;
   }
@@ -1256,26 +1327,32 @@ function frame(now) {
   if (!pageVisible) return;
   var dt = Math.min(clock.getDelta(), 0.05);
   updateIntro(now);
+  if (camTween) {
+    var tt = clamp((now - camTween.t0) / camTween.dur, 0, 1);
+    var te = easeInOut(tt);
+    camera.position.lerpVectors(camTween.fromPos, camTween.toPos, te);
+    controls.target.lerpVectors(camTween.fromTgt, camTween.toTgt, te);
+    if (tt >= 1) camTween = null;
+  }
   if (!introActive && autoOrbit) {
-    var ang = (now * 0.00008);
+    // slow drift around the confluence; damping off so controls don't fight us
+    orbitAng += dt * 0.07; // ~90s per revolution
     var r = camera.position.distanceTo(controls.target);
-    // slow orbit around confluence
-    var baseY = camera.position.y;
-    camera.position.x = controls.target.x + Math.cos(ang) * r * 0.85;
-    camera.position.z = controls.target.z + Math.sin(ang) * r * 0.85;
-    camera.position.y = baseY;
+    camera.position.x = controls.target.x + Math.cos(orbitAng) * r;
+    camera.position.z = controls.target.z + Math.sin(orbitAng) * r;
     camera.lookAt(controls.target);
-  } else if (!introActive && performance.now() - idleT0 > 20000) {
+  } else if (!introActive && !camTween && now - idleT0 > 20000) {
     autoOrbit = true;
+    controls.enableDamping = false;
+    orbitAng = Math.atan2(
+      camera.position.z - controls.target.z,
+      camera.position.x - controls.target.x
+    );
   }
   controls.update();
   tickParticles(dt);
   starMaterial.uniforms.uTime.value = now * 0.001;
-  if (pulseId && now < pulseUntil) applyFocusVisual();
-  else if (pulseId && now >= pulseUntil) {
-    pulseId = null;
-    applyFocusVisual();
-  }
+  updatePulse(now);
   renderer.render(scene, camera);
   raf = requestAnimationFrame(frame);
 }
@@ -1302,6 +1379,7 @@ function buildLegends() {
       typeVisible[item.id] = !typeVisible[item.id];
       btn.classList.toggle('is-off', !typeVisible[item.id]);
       applyFocusVisual();
+      rebuildEdges();
     });
     typeLegendEl.appendChild(btn);
   });
@@ -1321,6 +1399,7 @@ function buildLegends() {
       btn.classList.toggle('is-off', !relVisible[item.id]);
       rebuildAdj();
       applyFocusVisual();
+      rebuildEdges();
     });
     relLegendEl.appendChild(btn);
   });
@@ -1339,6 +1418,7 @@ document.getElementById('edgesToggle').addEventListener('click', function () {
   showAllEdges = !showAllEdges;
   this.textContent = showAllEdges ? '边: 开' : '边: 关';
   applyFocusVisual();
+  rebuildEdges();
 });
 document.getElementById('searchBtn').addEventListener('click', function () {
   var q = document.getElementById('searchInput').value;
@@ -1368,6 +1448,7 @@ canvas.addEventListener('pointermove', function (ev) {
   if (next !== hoverId) {
     hoverId = next;
     applyFocusVisual();
+    rebuildEdges();
   }
   showTooltip(node, ev.clientX, ev.clientY);
   canvas.style.cursor = node ? 'pointer' : 'default';
@@ -1376,6 +1457,7 @@ canvas.addEventListener('pointerleave', function () {
   hoverId = null;
   showTooltip(null);
   applyFocusVisual();
+  rebuildEdges();
 });
 canvas.addEventListener('pointerup', function (ev) {
   if (!pointerDown) return;
@@ -1394,6 +1476,7 @@ canvas.addEventListener('pointerup', function (ev) {
     hoverId = node.id;
     drawerEl.classList.remove('open');
     applyFocusVisual();
+    rebuildEdges();
     showTooltip(node, ev.clientX, ev.clientY);
     return;
   }

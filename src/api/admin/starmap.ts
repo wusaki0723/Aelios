@@ -13,7 +13,7 @@ export const STARMAP_HTML = String.raw`<!doctype html>
 <style>
   :root {
     color-scheme: dark;
-    --bg: #050816;
+    --bg: #04050c;
     --panel: rgba(14, 18, 40, .82);
     --panel-border: rgba(148, 163, 255, .18);
     --text: #e8ecff;
@@ -247,18 +247,18 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 var HAN_TYPES = { fact: 1, preference: 1, habit: 1, note: 1 };
 var YANG_TYPES = { relationship: 1, event: 1, boundary: 1, decision: 1 };
 var HAN_COLORS = {
-  fact: new THREE.Color(0x4a9de0),
-  preference: new THREE.Color(0x5ed0c8),
-  habit: new THREE.Color(0x8aa4bc),
-  note: new THREE.Color(0xe4eaf5)
+  fact: new THREE.Color(0x7cb3e8),
+  preference: new THREE.Color(0x86d8cc),
+  habit: new THREE.Color(0x93a9c2),
+  note: new THREE.Color(0xe9eef8)
 };
 var YANG_COLORS = {
-  relationship: new THREE.Color(0xf08080),
-  event: new THREE.Color(0xf0b84a),
-  boundary: new THREE.Color(0xe04868),
-  decision: new THREE.Color(0xe8a040)
+  relationship: new THREE.Color(0xf0977f),
+  event: new THREE.Color(0xf0c062),
+  boundary: new THREE.Color(0xe06575),
+  decision: new THREE.Color(0xeaa94e)
 };
-var PINNED_COLOR = new THREE.Color(0xfff4e0);
+var PINNED_COLOR = new THREE.Color(0xfff6e2);
 var REL_COLORS = {
   supports: new THREE.Color(0xdce1eb),
   contradicts: new THREE.Color(0xef4444),
@@ -268,14 +268,14 @@ var REL_COLORS = {
   supersedes: new THREE.Color(0x8c8c96)
 };
 var TYPE_LEGEND = [
-  { id: 'fact', label: 'fact', color: '#4a9de0' },
-  { id: 'preference', label: 'preference', color: '#5ed0c8' },
-  { id: 'habit', label: 'habit', color: '#8aa4bc' },
-  { id: 'note', label: 'note', color: '#e4eaf5' },
-  { id: 'relationship', label: 'relationship', color: '#f08080' },
-  { id: 'event', label: 'event', color: '#f0b84a' },
-  { id: 'boundary', label: 'boundary', color: '#e04868' },
-  { id: 'decision', label: 'decision', color: '#e8a040' }
+  { id: 'fact', label: 'fact', color: '#7cb3e8' },
+  { id: 'preference', label: 'preference', color: '#86d8cc' },
+  { id: 'habit', label: 'habit', color: '#93a9c2' },
+  { id: 'note', label: 'note', color: '#e9eef8' },
+  { id: 'relationship', label: 'relationship', color: '#f0977f' },
+  { id: 'event', label: 'event', color: '#f0c062' },
+  { id: 'boundary', label: 'boundary', color: '#e06575' },
+  { id: 'decision', label: 'decision', color: '#eaa94e' }
 ];
 var REL_LEGEND = [
   { id: 'supports', label: 'supports', color: '#dce1eb' },
@@ -312,10 +312,10 @@ function starSize(importance, pinned) {
   var imp = Number(importance);
   if (!Number.isFinite(imp)) imp = 0.5;
   imp = clamp(imp, 0, 1);
-  var base = 0.55;
-  var k = 1.35;
-  var r = base + Math.pow(imp, 1.4) * k;
-  if (pinned) r *= 1.45;
+  var base = 0.6;
+  var k = 1.75;
+  var r = base + Math.pow(imp, 1.35) * k;
+  if (pinned) r *= 1.5;
   return r;
 }
 function typeColor(type) {
@@ -389,12 +389,12 @@ var renderer = new THREE.WebGLRenderer({
   canvas: canvas, antialias: true, alpha: false, powerPreference: 'high-performance'
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-renderer.setClearColor(0x050816, 1);
+renderer.setClearColor(0x04050c, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 var clock = new THREE.Clock();
 
 var scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x050816, 0.011);
+scene.fog = new THREE.FogExp2(0x04050c, 0.010);
 
 var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 400);
 camera.position.set(8, 34, 78);
@@ -504,49 +504,132 @@ cityLight.position.set(0, 4.5, 0);
 scene.add(cityLight);
 scene.add(new THREE.AmbientLight(0x334466, 0.55));
 
-// far dust
+// soft radial sprite texture shared by star halos and milky-way haze
+function makeGlowTexture() {
+  var c = document.createElement('canvas');
+  c.width = c.height = 128;
+  var ctx = c.getContext('2d');
+  var g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,255,255,0.60)');
+  g.addColorStop(0.25, 'rgba(255,255,255,0.22)');
+  g.addColorStop(0.6, 'rgba(255,255,255,0.06)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+}
+var glowTex = makeGlowTexture();
+
+// far dust: dense warm micro-dust on a tilted band + sparse brighter far stars
 (function makeDust() {
-  var n = 900;
-  var pos = new Float32Array(n * 3);
-  var col = new Float32Array(n * 3);
+  var warm = new THREE.Color(0xffe9c4);
+  var cool = new THREE.Color(0xbcd2ff);
+  var cc = new THREE.Color();
   var rnd = mulberry32(0xD057);
-  for (var i = 0; i < n; i++) {
-    var r = 30 + rnd() * 120;
+  // micro gold dust on a tilted slab, like a distant galaxy plane
+  var n1 = 700;
+  var pos = new Float32Array(n1 * 3);
+  var col = new Float32Array(n1 * 3);
+  for (var i = 0; i < n1; i++) {
+    var r = 26 + rnd() * 118;
     var th = rnd() * Math.PI * 2;
-    var ph = (rnd() - 0.5) * Math.PI * 0.7;
-    pos[i * 3] = r * Math.cos(ph) * Math.cos(th);
-    pos[i * 3 + 1] = 8 + r * Math.sin(ph) * 0.45;
-    pos[i * 3 + 2] = r * Math.cos(ph) * Math.sin(th) - 10;
-    var c = 0.55 + rnd() * 0.45;
-    col[i * 3] = c * 0.75;
-    col[i * 3 + 1] = c * 0.82;
-    col[i * 3 + 2] = c;
+    var x = Math.cos(th) * r;
+    pos[i * 3] = x;
+    pos[i * 3 + 1] = (rnd() + rnd() + rnd() - 1.5) * 9 + x * 0.2 - 4;
+    pos[i * 3 + 2] = Math.sin(th) * r - 12;
+    cc.copy(rnd() < 0.78 ? warm : cool);
+    var b = 0.35 + rnd() * 0.5;
+    col[i * 3] = cc.r * b; col[i * 3 + 1] = cc.g * b; col[i * 3 + 2] = cc.b * b;
   }
   var geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
   var mat = new THREE.PointsMaterial({
-    size: 0.35, sizeAttenuation: true, vertexColors: true,
-    transparent: true, opacity: 0.55, depthWrite: false
+    size: 0.3, sizeAttenuation: true, vertexColors: true,
+    transparent: true, opacity: 0.55, depthWrite: false,
+    blending: THREE.AdditiveBlending
   });
   scene.add(new THREE.Points(geo, mat));
+  // sparse brighter far stars
+  var n2 = 250;
+  var pos2 = new Float32Array(n2 * 3);
+  var col2 = new Float32Array(n2 * 3);
+  for (var j = 0; j < n2; j++) {
+    var r2 = 85 + rnd() * 90;
+    var th2 = rnd() * Math.PI * 2;
+    var ph2 = (rnd() - 0.5) * Math.PI;
+    pos2[j * 3] = r2 * Math.cos(ph2) * Math.cos(th2);
+    pos2[j * 3 + 1] = r2 * Math.sin(ph2) * 0.6;
+    pos2[j * 3 + 2] = r2 * Math.cos(ph2) * Math.sin(th2) - 10;
+    cc.copy(rnd() < 0.7 ? warm : cool);
+    var b2 = 0.5 + rnd() * 0.5;
+    col2[j * 3] = cc.r * b2; col2[j * 3 + 1] = cc.g * b2; col2[j * 3 + 2] = cc.b * b2;
+  }
+  var geo2 = new THREE.BufferGeometry();
+  geo2.setAttribute('position', new THREE.BufferAttribute(pos2, 3));
+  geo2.setAttribute('color', new THREE.BufferAttribute(col2, 3));
+  var mat2 = new THREE.PointsMaterial({
+    size: 0.62, sizeAttenuation: true, vertexColors: true,
+    transparent: true, opacity: 0.7, depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+  scene.add(new THREE.Points(geo2, mat2));
 })();
 
-// star shader
+// milky-way haze: a few huge soft sprites, very low opacity, slow breathing
+var fogSprites = [];
+(function makeFog() {
+  var defs = [
+    { p: [-46, 12, -85], s: 130, c: 0x2a3a6e, o: 0.10 },
+    { p: [52, -8, -72], s: 105, c: 0x1e4a56, o: 0.08 },
+    { p: [8, 6, -48], s: 72, c: 0x6e5a2e, o: 0.07 },
+    { p: [-72, 22, -28], s: 92, c: 0x3a2a5e, o: 0.07 },
+    { p: [34, 28, -105], s: 145, c: 0x22315e, o: 0.09 },
+    { p: [-18, -16, 62], s: 85, c: 0x4a3a2a, o: 0.05 },
+    { p: [0, 1.6, 0], s: 17, c: 0xffd9a0, o: 0.16 }
+  ];
+  for (var i = 0; i < defs.length; i++) {
+    var d = defs[i];
+    var m = new THREE.SpriteMaterial({
+      map: glowTex, color: d.c, transparent: true, opacity: d.o,
+      blending: THREE.AdditiveBlending, depthWrite: false
+    });
+    var sp = new THREE.Sprite(m);
+    sp.position.set(d.p[0], d.p[1], d.p[2]);
+    sp.scale.set(d.s, d.s, 1);
+    scene.add(sp);
+    fogSprites.push({ mat: m, base: d.o, phase: i * 1.7, speed: 0.18 + (i % 3) * 0.07 });
+  }
+})();
+
+// star shader: hot core + soft inner glow + wide halo, per-star breathing
 var starVertexShader = [
   'attribute float aSize;',
   'attribute float aPhase;',
   'attribute float aAlpha;',
+  'attribute float aCore;',
+  'attribute float aKind;',
   'attribute vec3 aColor;',
   'uniform float uTime;',
   'uniform float uPixelRatio;',
   'varying vec3 vColor;',
   'varying float vAlpha;',
+  'varying float vCore;',
   'void main() {',
   '  vColor = aColor;',
+  '  vCore = aCore;',
   '  float breathe = 0.82 + 0.18 * sin(uTime * 1.7 + aPhase);',
   '  vAlpha = aAlpha * breathe;',
-  '  vec4 mv = modelViewMatrix * vec4(position, 1.0);',
+  '  vec3 pos = position;',
+  '  if (aKind > 0.5 && aKind < 1.5) {',
+  '    // city lights gently float above the confluence',
+  '    pos.y += sin(uTime * 0.55 + aPhase * 3.1) * 0.16;',
+  '  }',
+  '  if (aKind > 1.5) {',
+  '    // easter-egg stars breathe slower and deeper',
+  '    vAlpha = aAlpha * (0.72 + 0.28 * sin(uTime * 0.9 + aPhase));',
+  '  }',
+  '  vec4 mv = modelViewMatrix * vec4(pos, 1.0);',
   '  gl_PointSize = aSize * uPixelRatio * (180.0 / -mv.z);',
   '  gl_Position = projectionMatrix * mv;',
   '}'
@@ -554,14 +637,17 @@ var starVertexShader = [
 var starFragmentShader = [
   'varying vec3 vColor;',
   'varying float vAlpha;',
+  'varying float vCore;',
   'void main() {',
   '  vec2 uv = gl_PointCoord - vec2(0.5);',
   '  float d = length(uv);',
   '  if (d > 0.5) discard;',
-  '  float core = smoothstep(0.5, 0.08, d);',
-  '  float glow = exp(-d * 5.2) * 0.85;',
-  '  float a = (core * 0.95 + glow * 0.55) * vAlpha;',
-  '  gl_FragColor = vec4(vColor, a);',
+  '  float core = smoothstep(0.16, 0.02, d);',
+  '  float mid = exp(-d * 7.5) * 0.9;',
+  '  float halo = exp(-d * 2.8) * 0.30;',
+  '  vec3 col = vColor + vec3(0.92, 0.95, 1.0) * core * vCore;',
+  '  float a = (core + mid + halo) * vAlpha;',
+  '  gl_FragColor = vec4(col, a);',
   '}'
 ].join('\n');
 
@@ -580,6 +666,50 @@ var starMaterial = new THREE.ShaderMaterial({
 var starsPoints = null;
 var starsGroup = new THREE.Group();
 scene.add(starsGroup);
+
+// halo layer: wide soft bloom for important / pinned / easter stars
+var haloVertexShader = [
+  'attribute float aSize;',
+  'attribute float aPhase;',
+  'attribute float aAlpha;',
+  'attribute float aKind;',
+  'attribute vec3 aColor;',
+  'uniform float uTime;',
+  'uniform float uPixelRatio;',
+  'varying vec3 vColor;',
+  'varying float vAlpha;',
+  'void main() {',
+  '  vColor = aColor;',
+  '  vAlpha = aAlpha * (0.82 + 0.18 * sin(uTime * 0.8 + aPhase));',
+  '  vec3 pos = position;',
+  '  if (aKind > 0.5) pos.y += sin(uTime * 0.55 + aPhase * 3.1) * 0.16;',
+  '  vec4 mv = modelViewMatrix * vec4(pos, 1.0);',
+  '  gl_PointSize = aSize * uPixelRatio * (150.0 / -mv.z);',
+  '  gl_Position = projectionMatrix * mv;',
+  '}'
+].join('\n');
+var haloFragmentShader = [
+  'uniform sampler2D uMap;',
+  'varying vec3 vColor;',
+  'varying float vAlpha;',
+  'void main() {',
+  '  vec4 tex = texture2D(uMap, gl_PointCoord);',
+  '  gl_FragColor = vec4(vColor, tex.a * vAlpha);',
+  '}'
+].join('\n');
+var haloMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    uTime: { value: 0 },
+    uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) },
+    uMap: { value: glowTex }
+  },
+  vertexShader: haloVertexShader,
+  fragmentShader: haloFragmentShader,
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending
+});
+var haloPoints = null;
 
 // particle flow
 var particleSystems = [];
@@ -820,6 +950,11 @@ function rebuildStars(laid) {
     starsPoints.geometry.dispose();
     starsPoints = null;
   }
+  if (haloPoints) {
+    starsGroup.remove(haloPoints);
+    haloPoints.geometry.dispose();
+    haloPoints = null;
+  }
   starById = {};
   indexToNode = [];
   var n = laid.length;
@@ -830,6 +965,18 @@ function rebuildStars(laid) {
   var sizes = new Float32Array(n);
   var phases = new Float32Array(n);
   var alphas = new Float32Array(n);
+  var cores = new Float32Array(n);
+  var kinds = new Float32Array(n);
+
+  var haloPos = [];
+  var haloCol = [];
+  var haloSize = [];
+  var haloPhase = [];
+  var haloAlpha = [];
+  var haloKind = [];
+  var haloCount = 0;
+  var white = new THREE.Color(0xffffff);
+  var tmpC = new THREE.Color();
 
   for (var i = 0; i < n; i++) {
     var node = laid[i];
@@ -849,10 +996,31 @@ function rebuildStars(laid) {
     sizes[i] = starSize(node.importance, node.pinned || node._special);
     phases[i] = (hashStr(node.id) % 6283) / 1000;
     alphas[i] = typeVisible[node.type] === false && !node._special ? 0.0 : 1.0;
+    var imp = clamp(Number(node.importance) || 0, 0, 1);
+    cores[i] = node.pinned || node._special ? 0.85 : 0.25 + imp * 0.5;
+    kinds[i] = node.pinned ? 1 : (node._special ? 2 : 0);
     node._index = i;
     node._baseColor = col;
     node._baseSize = sizes[i];
     node._baseAlpha = alphas[i];
+    node._halo = -1;
+
+    // wide soft bloom for stars that should carry the scene
+    if (node.pinned || node._special || imp >= 0.7) {
+      var hk = node.pinned ? 4.0 : (node._special ? 4.4 : 3.0);
+      var ha = node.pinned ? 0.5 : (node._special ? 0.42 : 0.28);
+      if (node.pinned) tmpC.set(0xffdca8);
+      else { tmpC.copy(col); tmpC.lerp(white, 0.3); }
+      haloPos.push(pos.x, pos.y, pos.z);
+      haloCol.push(tmpC.r, tmpC.g, tmpC.b);
+      haloSize.push(sizes[i] * hk);
+      haloPhase.push(phases[i]);
+      haloAlpha.push(ha);
+      haloKind.push(node.pinned ? 1 : 0);
+      node._halo = haloCount++;
+      node._haloBaseSize = sizes[i] * hk;
+      node._haloBaseAlpha = ha;
+    }
   }
 
   var geo = new THREE.BufferGeometry();
@@ -861,8 +1029,22 @@ function rebuildStars(laid) {
   geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
   geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
   geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
+  geo.setAttribute('aCore', new THREE.BufferAttribute(cores, 1));
+  geo.setAttribute('aKind', new THREE.BufferAttribute(kinds, 1));
   starsPoints = new THREE.Points(geo, starMaterial);
   starsGroup.add(starsPoints);
+
+  if (haloCount) {
+    var hgeo = new THREE.BufferGeometry();
+    hgeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(haloPos), 3));
+    hgeo.setAttribute('aColor', new THREE.BufferAttribute(new Float32Array(haloCol), 3));
+    hgeo.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(haloSize), 1));
+    hgeo.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(haloPhase), 1));
+    hgeo.setAttribute('aAlpha', new THREE.BufferAttribute(new Float32Array(haloAlpha), 1));
+    hgeo.setAttribute('aKind', new THREE.BufferAttribute(new Float32Array(haloKind), 1));
+    haloPoints = new THREE.Points(hgeo, haloMaterial);
+    starsGroup.add(haloPoints);
+  }
 }
 
 function rebuildAdj() {
@@ -963,35 +1145,45 @@ function applyFocusVisual() {
   var colors = starsPoints.geometry.getAttribute('aColor');
   var sizes = starsPoints.geometry.getAttribute('aSize');
   var alphas = starsPoints.geometry.getAttribute('aAlpha');
+  var haloSizes = haloPoints ? haloPoints.geometry.getAttribute('aSize') : null;
+  var haloAlphas = haloPoints ? haloPoints.geometry.getAttribute('aAlpha') : null;
   var now = performance.now();
   for (var j = 0; j < nodes.length; j++) {
     var node = nodes[j];
     var idx = node._index;
     if (idx == null) continue;
     var typeOn = node._special || typeVisible[node.type] !== false;
-    if (!typeOn) {
-      alphas.setX(idx, 0);
-      continue;
-    }
     var lit = !focus || neigh[node.id] || node._special;
     var dim = focus ? (lit ? 1 : 0.12) : 1;
-    var col = node._baseColor.clone();
-    if (focus && lit && node.id === focus) {
-      col.lerp(new THREE.Color(0xffffff), 0.25);
-    }
-    colors.setXYZ(idx, col.r, col.g, col.b);
     var sizeMul = 1;
-    if (hoverId === node.id || selectedId === node.id) sizeMul = 1.1;
-    if (pulseId === node.id && now < pulseUntil) {
-      var p = (pulseUntil - now) / 900;
-      sizeMul *= 1 + 0.55 * Math.sin((1 - p) * Math.PI * 4) * p;
+    if (typeOn) {
+      var col = node._baseColor.clone();
+      if (focus && lit && node.id === focus) {
+        col.lerp(new THREE.Color(0xffffff), 0.25);
+      }
+      colors.setXYZ(idx, col.r, col.g, col.b);
+      if (hoverId === node.id || selectedId === node.id) sizeMul = 1.1;
+      if (pulseId === node.id && now < pulseUntil) {
+        var p = (pulseUntil - now) / 900;
+        sizeMul *= 1 + 0.55 * Math.sin((1 - p) * Math.PI * 4) * p;
+      }
+      sizes.setX(idx, node._baseSize * sizeMul);
+      alphas.setX(idx, dim);
+    } else {
+      alphas.setX(idx, 0);
     }
-    sizes.setX(idx, node._baseSize * sizeMul);
-    alphas.setX(idx, dim);
+    if (haloSizes && node._halo != null && node._halo >= 0) {
+      haloSizes.setX(node._halo, node._haloBaseSize * (sizeMul > 1 ? 1.12 : 1));
+      haloAlphas.setX(node._halo, typeOn ? node._haloBaseAlpha * dim : 0);
+    }
   }
   colors.needsUpdate = true;
   sizes.needsUpdate = true;
   alphas.needsUpdate = true;
+  if (haloSizes) {
+    haloSizes.needsUpdate = true;
+    haloAlphas.needsUpdate = true;
+  }
 }
 
 // per-frame pulse: touches only the pulsing star's size, never rebuilds edges
@@ -1320,6 +1512,7 @@ function resize() {
   camera.updateProjectionMatrix();
   renderer.setSize(w, h, false);
   starMaterial.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio || 1, 2);
+  haloMaterial.uniforms.uPixelRatio.value = starMaterial.uniforms.uPixelRatio.value;
 }
 
 function frame(now) {
@@ -1351,7 +1544,13 @@ function frame(now) {
   }
   controls.update();
   tickParticles(dt);
-  starMaterial.uniforms.uTime.value = now * 0.001;
+  var tSec = now * 0.001;
+  starMaterial.uniforms.uTime.value = tSec;
+  haloMaterial.uniforms.uTime.value = tSec;
+  for (var f = 0; f < fogSprites.length; f++) {
+    var fs = fogSprites[f];
+    fs.mat.opacity = fs.base * (0.8 + 0.2 * Math.sin(tSec * fs.speed + fs.phase));
+  }
   updatePulse(now);
   renderer.render(scene, camera);
   raf = requestAnimationFrame(frame);

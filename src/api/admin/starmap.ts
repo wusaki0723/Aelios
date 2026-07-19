@@ -214,7 +214,7 @@ export const STARMAP_HTML = String.raw`<!doctype html>
     border-radius: 12px; padding: 8px 10px; margin-bottom: 6px;
     color: var(--text); font-size: 12px;
   }
-  .edge-item:hover { border-color: var(--coral); }
+  .edge-item:hover { border-color: rgba(232, 200, 138, .6); }
   .edge-rel {
     flex-shrink: 0; font-size: 10px; padding: 2px 6px; border-radius: 999px;
     border: 1px solid var(--panel-border); color: var(--muted);

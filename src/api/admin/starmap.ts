@@ -456,17 +456,18 @@ function makeRiverRibbon(curve, width, colorHex, opacity) {
     if (side.lengthSq() < 1e-8) side.set(1, 0, 0);
     else side.normalize();
     var w = width * (0.55 + 0.45 * Math.sin(t * Math.PI));
-    var fade = opacity * (0.4 + 0.6 * (1 - t * 0.2));
+    var fade = 0.4 + 0.6 * (1 - t * 0.2);
     var a = p.clone().addScaledVector(side, w);
     var b = p.clone().addScaledVector(side, -w);
     a.y -= 0.4;
     b.y -= 0.4;
     positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
-    colors.push(col.r, col.g, col.b, fade, col.r, col.g, col.b, fade);
+    // RGB only; overall opacity via material (Three vertexColors is 3-comp)
+    colors.push(col.r * fade, col.g * fade, col.b * fade, col.r * fade, col.g * fade, col.b * fade);
   }
   var geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 4));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
   var idx = [];
   for (var s = 0; s < pts.length - 1; s++) {
     var i0 = s * 2, i1 = s * 2 + 1, i2 = (s + 1) * 2, i3 = (s + 1) * 2 + 1;
@@ -476,6 +477,7 @@ function makeRiverRibbon(curve, width, colorHex, opacity) {
   var mat = new THREE.MeshBasicMaterial({
     vertexColors: true,
     transparent: true,
+    opacity: opacity,
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending
@@ -831,7 +833,8 @@ function rebuildAdj() {
 
 function clearEdges() {
   while (edgesGroup.children.length) {
-    var ch = edgesGroup.children.pop();
+    var ch = edgesGroup.children[0];
+    edgesGroup.remove(ch);
     if (ch.geometry) ch.geometry.dispose();
     if (ch.material) ch.material.dispose();
   }
@@ -1185,7 +1188,9 @@ async function loadGraph() {
     applyFocusVisual();
     updateCount();
     var realCount = rawNodes.length;
+    emptyBanner.textContent = '江还在流，星等你来';
     emptyBanner.hidden = realCount > 0;
+    // keep / restart intro so first paint always pushes from downstream
     if (!introActive) startIntro();
     else {
       introT0 = performance.now();

@@ -29,6 +29,7 @@ import { filterAndCompressMemories } from "../filter";
 import { createEmbedding } from "../embedding";
 import { shapeRecallQuery } from "../queryShape";
 import { expandRecallByRelations, isRelationExpansionEnabled } from "../relations";
+import { fetchTriggeredRecords, isTriggerRecallEnabled, recallByTriggers } from "../triggers";
 import type { RelationExpansionMeta } from "../relations";
 import { loadSpontaneousForBoot } from "../perception";
 import { getYesterdayDateLabel } from "../dreamDates";
@@ -433,7 +434,35 @@ export async function runRecall(env: Env, input: RecallInput): Promise<RecallRes
     grounded: input.grounded !== false,
     skipRecallMark: input.skip_inject_mark === true || input.grounded === false
   });
-  const rawMemories: MemoryApiRecordWithProvenance[] = searchResult.records;
+  // 复制一份：下面触发器通道会往池子里 push，不要改到 searchResult 自己的数组。
+  const rawMemories: MemoryApiRecordWithProvenance[] = [...searchResult.records];
+
+  // 2.25 触发器通道 (入口扩展，默认 off)。
+  // 与 4.5 的 relation 扩展分工：那边从已召回的种子往外走，是出口扩展，种子为空时
+  // 它什么也做不了；这边把本来进不了候选池的记忆送进来——问题和记忆语义相关但几乎
+  // 不共享词汇的那一类，主检索第一跳就空了，触发器是唯一还能把它捞回来的路。
+  //
+  // 只 union，不改已有命中的分和顺序。新进来的记忆和别的候选一样，要过 2.5 的
+  // reranker 和闸四才算数——这条通道负责"让它有机会被看见"，不负责"让它赢"。
+  if (isTriggerRecallEnabled(env)) {
+    try {
+      const outcome = await recallByTriggers(env, {
+        namespace: input.namespace,
+        query: shaped.embeddingQuery
+      });
+      if (outcome.triggered) {
+        const extra = await fetchTriggeredRecords(env, {
+          namespace: input.namespace,
+          outcome,
+          existingIds: new Set(rawMemories.map((m) => m.id)),
+          includeHistory: input.include_history === true
+        });
+        rawMemories.push(...extra);
+      }
+    } catch (error) {
+      console.error("trigger recall failed; using seed pool", error);
+    }
+  }
   // 严格模式下 (RECALL_REQUIRE_D1_BACKING=true) 已经在 search 层丢弃的孤儿向量命中数。
   const unbackedDropped = searchResult.unbacked_dropped;
 

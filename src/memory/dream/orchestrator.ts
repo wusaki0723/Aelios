@@ -22,6 +22,8 @@ import { runPerceptionPickPhase } from "../perception";
 import type { PerceptionPickStats } from "../perception";
 import { runRelationBuildPhase, runZAuditPhase } from "../relations";
 import type { RelationBuildStats, ZAuditStats } from "../relations";
+import { runTriggerBuildPhase } from "../triggers";
+import type { TriggerBuildStats } from "../triggers";
 import { listVectorMemories } from "../vectorStore";
 import { isV2Enabled } from "../v2/recall";
 import { runExtractPhase } from "./extractPhase";
@@ -325,6 +327,23 @@ export async function runDailyMemoryDigest(
     });
   }
 
+  // 触发器建期。和上面的 relation-build 一样单独隔离：这一步烧模型调用，
+  // 失败不该把整夜的整理一起拖掉。TRIGGER_BUILD 默认 off，关着时它立刻返回。
+  let triggerBuild: TriggerBuildStats | undefined;
+  try {
+    triggerBuild = await runTriggerBuildPhase(env, {
+      namespace,
+      startIso,
+      endIso
+    });
+  } catch (error) {
+    console.error("dream: trigger-build phase failed", {
+      namespace,
+      date: dateLabel,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
   let zAudit: ZAuditStats | undefined;
   try {
     zAudit = await runZAuditPhase(env, {
@@ -391,7 +410,10 @@ export async function runDailyMemoryDigest(
   // LMC-5 phase report is additive audit data — never stuff into dream_runs.error
   // (legacy shape is JSON array of apply errors, or null). Persist via memory_events.
   const hasLmc5Report =
-    relationBuild !== undefined || zAudit !== undefined || perception !== undefined;
+    relationBuild !== undefined ||
+    zAudit !== undefined ||
+    perception !== undefined ||
+    triggerBuild !== undefined;
   if (hasLmc5Report) {
     try {
       await env.DB
@@ -406,6 +428,7 @@ export async function runDailyMemoryDigest(
           JSON.stringify({
             date: dateLabel,
             relation_build: relationBuild ?? null,
+            trigger_build: triggerBuild ?? null,
             z_audit_pairs: zAudit?.pairs ?? [],
             z_audit: zAudit
               ? {

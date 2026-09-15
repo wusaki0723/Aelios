@@ -7,6 +7,7 @@
 // 同步用 embedding.ts 的 upsertMemoryEmbedding / deleteMemoryEmbedding (已带 kind:"memory")。
 
 export * from "./v2/relations";
+export * from "./v2/triggers";
 export * from "./v2/digest";
 export * from "./v2/precious";
 export * from "./v2/glossary";

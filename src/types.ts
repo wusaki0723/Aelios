@@ -45,6 +45,12 @@ export interface Env {
   // LMC-5 Y 轴: 2-hop relation expansion. Default off (undefined/"off"/"false") = recall identical to pre-LMC5.
   // Set "on" or "true" to enable hop1/hop2 expansion after vector seed hits.
   RELATION_EXPANSION?: string;
+  // Trigger 召回通道 (migration 0016)。默认全 off；gate 调低会往候选池灌噪音。
+  TRIGGER_RECALL?: string;
+  TRIGGER_RECALL_GATE?: string;
+  TRIGGER_RECALL_TOP_K?: string;
+  TRIGGER_BUILD?: string;
+  TRIGGER_BUILD_MODEL?: string;
   ENABLE_DAILY_MEMORY_DIGEST?: string;
   DREAM_NAMESPACE?: string;
   DREAM_MAX_MESSAGES?: string;

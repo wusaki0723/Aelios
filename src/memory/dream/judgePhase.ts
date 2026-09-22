@@ -13,23 +13,34 @@ import {
   resolveWorldFactTarget
 } from "./helpers";
 
+// 记忆 id 的字面形状：newId("mem") 产出 mem_ + 32 位小写十六进制，库里 418 条无一例外。
+// 梦里的模型会写出截断或臆造的 target_id (线上出现过 target_id="mem_ce6ba992")，
+// 那种候选人工 approve 时找不到目标，会掉进 target_gone_fallback 新建一条重复记忆，
+// 而不是取代原来那条。形状不对的在进队列之前就丢掉。
+const MEMORY_ID_RE = /^mem_[0-9a-f]{32}$/;
+
+export function isMemoryId(value: string | null | undefined): boolean {
+  return typeof value === "string" && MEMORY_ID_RE.test(value);
+}
+
 export function sanitizeDreamDigestLists(
   updates: DigestMemoryUpdate[],
   deletes: DigestMemoryDelete[]
 ): { updates: DigestMemoryUpdate[]; deletes: DigestMemoryDelete[] } {
-  const deleteIds = new Set((deletes ?? []).map((item) => item.target_id));
+  const cleanedDeletes = (deletes ?? []).filter((item) => isMemoryId(item.target_id));
+  const deleteIds = new Set(cleanedDeletes.map((item) => item.target_id));
   const seenUpdateIds = new Set<string>();
   const cleanedUpdates: DigestMemoryUpdate[] = [];
 
   for (const item of updates ?? []) {
-    if (!item.target_id) continue;
+    if (!isMemoryId(item.target_id)) continue;
     if (deleteIds.has(item.target_id)) continue;
     if (seenUpdateIds.has(item.target_id)) continue;
     seenUpdateIds.add(item.target_id);
     cleanedUpdates.push(item);
   }
 
-  return { updates: cleanedUpdates, deletes: deletes ?? [] };
+  return { updates: cleanedUpdates, deletes: cleanedDeletes };
 }
 
 export async function recordDreamReviewProposal(

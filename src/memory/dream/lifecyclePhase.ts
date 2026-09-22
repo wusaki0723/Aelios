@@ -4,6 +4,7 @@ import {
   supersedeMemory,
   upsertDailyLog
 } from "../../db/v2";
+import { getMemoryById } from "../../db/memories";
 import type { Env, MessageRecord } from "../../types";
 import { readString } from "../../utils/parse";
 import type { ExtractedMemory } from "../extract";
@@ -111,6 +112,14 @@ export async function applyDreamV2(
       }
 
       if (!item.content) continue;
+      // 删除路径早就先确认目标还在 (getVectorMemory + requireD1Backing)，更新路径没有。
+      // 目标不存在还照样排队，人工 approve 时 target 找不到就退化成新建一条重复记忆。
+      const target = await getMemoryById(env.DB, { namespace, id: item.target_id });
+      if (!target || target.status !== "active") {
+        console.warn("dream: update target missing", { namespace, target_id: item.target_id });
+        errors.push({ target_id: item.target_id, reason: "target_not_found" });
+        continue;
+      }
       const inheritedFactKey = await resolveMemoryFactKey(env, item.target_id, namespace);
       await createMemoryCandidate(env.DB, {
         namespace,

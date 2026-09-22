@@ -130,7 +130,10 @@ export function decideJudge(
   }
 
   if (result.score >= thresholds.approveMin && result.grounded && result.durable) return "approve";
-  if (result.score <= thresholds.discardMax || !result.grounded || !result.durable) return "discard";
+  // durable === false 只说明"这件事会过期"，不说明它是假的。会过期的事实（一次会议、
+  // 一次检查、一个当下的状态）照样值得记，只是该由人来定要不要留——所以它落到 keep，
+  // 不再直接 discard。真正该 discard 的是没有依据 (!grounded) 或分数本来就低的。
+  if (result.score <= thresholds.discardMax || !result.grounded) return "discard";
   return "keep";
 }
 

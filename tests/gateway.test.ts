@@ -1015,3 +1015,30 @@ test("Workers AI failure continues the chat with a lexical fallback", async () =
   const trace=JSON.parse((await run("/api/gateway/recalls?identity=partner")).text).items[0];
   assert.equal(trace.selection.status,"lexical");assert.equal(trace.selection.reason,"reranker_failed");assert.equal(queue.length,1);
 });
+test("keeping a candidate back to pending does not wipe its target memory link", async () => {
+  const { updateMemoryCandidateStatus } = await import("../src/db/v2/candidates");
+  sqlite.prepare(`INSERT INTO memory_candidates
+    (id, namespace, type, content, confidence, importance, source, status, target_memory_id, decision_note, created_at, updated_at)
+    VALUES (?, ?, 'fact', '调试暗号换成芝麻关门', 0.6, 0.6, 'dream_update', 'pending', ?, ?, ?, ?)`)
+    .run("cand_keep", "partner-a", "mem_old", "extracted", "2026-09-06", "2026-09-06");
+
+  // judge 的 keep 分支只传 status 和 decisionNote，不传 targetMemoryId。
+  const kept = await updateMemoryCandidateStatus(db, {
+    namespace: "partner-a",
+    id: "cand_keep",
+    status: "pending",
+    decisionNote: "judge: 说不准，留给人工"
+  });
+  assert.equal(kept?.target_memory_id, "mem_old");
+  assert.equal(kept?.decision_note, "judge: 说不准，留给人工");
+
+  // 显式传 null 仍然是清空。
+  const cleared = await updateMemoryCandidateStatus(db, {
+    namespace: "partner-a",
+    id: "cand_keep",
+    status: "pending",
+    targetMemoryId: null
+  });
+  assert.equal(cleared?.target_memory_id, null);
+  assert.equal(cleared?.decision_note, "judge: 说不准，留给人工");
+});

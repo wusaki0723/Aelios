@@ -631,6 +631,17 @@ test("judge does not archive a still-valid fact and rejects string booleans", ()
   };
   assert.equal(decideJudge("delete", goodFact, thresholds), "discard");
   assert.equal(decideJudge("add", goodFact, thresholds), "approve");
+
+  // 会过期但有据的事实交给人工，不再直接扔掉。
+  const datedFact = { ...goodFact, durable: false, reason: "对话里说了，但这是一次性的安排。" };
+  assert.equal(decideJudge("add", datedFact, thresholds), "keep");
+  assert.equal(decideJudge("update", datedFact, thresholds), "keep");
+  // 没有依据、或者分数本来就低的，照旧 discard。
+  assert.equal(decideJudge("add", { ...datedFact, grounded: false }, thresholds), "discard");
+  assert.equal(decideJudge("add", { ...datedFact, score: 0.2 }, thresholds), "discard");
+  // delete 侧不受影响：durable 在那边是"这条还好好的，别归档"的证据。
+  assert.equal(decideJudge("delete", { ...datedFact, shouldDelete: null }, thresholds), "keep");
+
   assert.equal(decideJudge("delete", { ...goodFact, shouldDelete: false, score: 0.99 }, thresholds), "discard");
   assert.equal(decideJudge("delete", {
     score: 0.91,

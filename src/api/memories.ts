@@ -1033,6 +1033,7 @@ async function handlePatchMemory(
 }
 
 async function handleDeleteMemory(
+  request: Request,
   env: Env,
   profile: KeyProfile,
   id: string
@@ -1040,25 +1041,27 @@ async function handleDeleteMemory(
   const scopeError = requireScope(profile, "memory:write");
   if (scopeError) return scopeError;
 
-  const existing = await getMemoryById(env.DB, { namespace: profile.namespace, id });
-  if (!existing || existing.namespace !== profile.namespace) {
+  const namespace = resolveNamespace(profile, new URL(request.url).searchParams.get("namespace"));
+  const existing = await getMemoryById(env.DB, { namespace, id });
+  if (!existing || existing.namespace !== namespace) {
     const deletedLegacyVector = await deleteVectorMemory(env, id);
     if (deletedLegacyVector) return json({ data: { id, deleted: true, source: "legacy_vectorize" } });
     return openAiError("Memory not found", 404);
   }
 
-  const deleted = await softDeleteMemory(env.DB, { namespace: profile.namespace, id });
+  const deleted = await softDeleteMemory(env.DB, { namespace, id });
   if (deleted) await deleteMemoryEmbeddingBestEffort(env, deleted);
   return json({ data: { id: existing.id, vector_id: existing.vector_id, deleted: true } });
 }
 
-async function handleGetMemory(env: Env, profile: KeyProfile, id: string): Promise<Response> {
+async function handleGetMemory(request: Request, env: Env, profile: KeyProfile, id: string): Promise<Response> {
   const scopeError = requireScope(profile, "memory:read");
   if (scopeError) return scopeError;
 
-  const memory = await getMemoryById(env.DB, { namespace: profile.namespace, id });
+  const namespace = resolveNamespace(profile, new URL(request.url).searchParams.get("namespace"));
+  const memory = await getMemoryById(env.DB, { namespace, id });
 
-  if (!memory || memory.namespace !== profile.namespace) return openAiError("Memory not found", 404);
+  if (!memory || memory.namespace !== namespace) return openAiError("Memory not found", 404);
   return json({ data: toMemoryApiRecord(memory) });
 }
 
@@ -1100,9 +1103,9 @@ export async function handleMemories(request: Request, env: Env, ctx: ExecutionC
 
   if (tail.length === 1) {
     const id = tail[0];
-    if (request.method === "GET") return handleGetMemory(env, auth.profile, id);
+    if (request.method === "GET") return handleGetMemory(request, env, auth.profile, id);
     if (request.method === "PATCH") return handlePatchMemory(request, env, auth.profile, id);
-    if (request.method === "DELETE") return handleDeleteMemory(env, auth.profile, id);
+    if (request.method === "DELETE") return handleDeleteMemory(request, env, auth.profile, id);
   }
 
   return openAiError("Not found", 404);

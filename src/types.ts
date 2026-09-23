@@ -135,6 +135,8 @@ export interface KeyProfile {
   scopes: Scope[];
   allowModelPassthrough: boolean;
   debug: boolean;
+  /** Owner keys may address any namespace via ?namespace= / body.namespace; others stay pinned. */
+  chooseNamespace: boolean;
 }
 
 export interface AuthResult {

@@ -641,10 +641,12 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
 
         <div x-show="moreView === 'maintenance'" class="space-y-3">
           <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
-            <div class="grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
+            <div class="grid gap-3 md:grid-cols-[1fr_auto_auto_auto_auto_auto]">
               <div class="self-center text-sm text-zinc-400">当前空间：<span x-text="namespace"></span></div>
               <button type="button" @click="runHealth()" class="tap rounded-2xl border border-zinc-800 px-4 text-sm hover:border-coral">vector_health</button>
               <button type="button" @click="runReindex(true)" class="tap rounded-2xl border border-zinc-800 px-4 text-sm hover:border-coral">reindex dry</button>
+              <button type="button" @click="runBackfill(true)" class="tap rounded-2xl border border-zinc-800 px-4 text-sm hover:border-coral">查缺向量</button>
+              <button type="button" @click="runBackfill(false)" class="tap rounded-2xl border border-zinc-800 px-4 text-sm hover:border-coral">补缺向量</button>
               <button type="button" @click="runDream()" class="tap rounded-2xl bg-coral px-4 text-sm font-semibold text-zinc-950">dream force</button>
             </div>
           </article>
@@ -1909,6 +1911,17 @@ function memoryAdmin() {
     async runReindex(dryRun) {
       try {
         const data = await this.request('/v1/debug/vector_reindex', {
+          method: 'POST',
+          body: JSON.stringify({ namespace: this.namespace, limit: 50, dry_run: dryRun })
+        });
+        this.debugOutput = JSON.stringify(data, null, 2);
+      } catch (error) {
+        this.debugOutput = error.message;
+      }
+    },
+    async runBackfill(dryRun) {
+      try {
+        const data = await this.request('/v1/vector-backfill', {
           method: 'POST',
           body: JSON.stringify({ namespace: this.namespace, limit: 50, dry_run: dryRun })
         });

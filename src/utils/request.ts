@@ -50,7 +50,7 @@ export function readNonNegativeInt(value: unknown, fallback: number, max: number
 
 export function resolveNamespace(profile: KeyProfile, requested: unknown): string {
   const namespace = readString(requested);
-  return profile.debug && namespace ? namespace : profile.namespace;
+  return profile.chooseNamespace && namespace ? namespace : profile.namespace;
 }
 
 export function readMessages(value: unknown): OpenAIChatMessage[] {

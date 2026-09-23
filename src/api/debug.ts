@@ -10,6 +10,7 @@ import {
   updateVectorMemory,
   vectorMetadataToMemoryRecord
 } from "../memory/vectorStore";
+import { runVectorBackfill } from "../memory/vectorBackfill";
 import { runVectorDoctor } from "../memory/vectorDoctor";
 import { json, openAiError } from "../utils/json";
 import type { Env, KeyProfile, MemoryApiRecord } from "../types";
@@ -379,6 +380,32 @@ export async function handleVectorDoctor(request: Request, env: Env): Promise<Re
   try {
     const report = await runVectorDoctor(env, { namespace, cleanup, limit });
     return json({ ok: true, data: report });
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  }
+}
+
+// 反方向的一致性检查：从 D1 的 active 记忆出发，找出 Vectorize 里缺向量 / 向量过期的，
+// dry_run=false 时补上 (只写 Vectorize，不动 D1)。详见 memory/vectorBackfill.ts 头注释。
+// dry_run 默认 true，auth 跟 handleVectorDoctor 一致。
+export async function handleVectorBackfill(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return openAiError("Unauthorized", 401, "authentication_error");
+  if (!auth.profile.scopes.includes("memory:write")) {
+    return openAiError("Missing required scope: memory:write", 403);
+  }
+
+  const body = await readJsonObject(request);
+  if (!body) return openAiError("Request body must be a JSON object", 400);
+
+  const namespace = readString(body.namespace) || auth.profile.namespace;
+  const limit = readPositiveInt(body.limit, 20, 200);
+  const dryRun = readBoolean(body.dry_run, true);
+
+  try {
+    const report = await runVectorBackfill(env, { namespace, dryRun, limit });
+    const failed = report.repair?.failed_count ?? 0;
+    return json({ ok: failed === 0 && report.errors.length === 0, data: report });
   } catch (error) {
     return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

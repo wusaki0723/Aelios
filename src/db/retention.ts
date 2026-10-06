@@ -105,16 +105,23 @@ export async function expireOldMemories(
 ): Promise<{ count: number; expired: ExpiredMemoryRef[] }> {
   const now = nowIso();
 
-  // First, select the records that will be expired
+  // First, select the records that will be expired. A memory counts as in use
+  // when it was last rewritten, recalled (last_injected_at) or seen again
+  // (last_seen_at), whichever is latest; recall only writes the lifecycle row.
   const toExpire = await db
     .prepare(
-      `SELECT id, vector_id
-       FROM memories
-       WHERE namespace = ?
-         AND status = 'active'
-         AND pinned = 0
-         AND type NOT IN ('identity', 'persona')
-         AND updated_at < ?`
+      `SELECT m.id, m.vector_id
+       FROM memories m
+       LEFT JOIN memory_lifecycle lc ON lc.memory_id = m.id
+       WHERE m.namespace = ?
+         AND m.status = 'active'
+         AND m.pinned = 0
+         AND m.type NOT IN ('identity', 'persona')
+         AND MAX(
+           m.updated_at,
+           COALESCE(lc.last_injected_at, m.updated_at),
+           COALESCE(lc.last_seen_at, m.updated_at)
+         ) < ?`
     )
     .bind(namespace, cutoff)
     .all<ExpiredMemoryRef>();
@@ -122,19 +129,24 @@ export async function expireOldMemories(
   const expired = toExpire.results ?? [];
   if (expired.length === 0) return { count: 0, expired: [] };
 
-  // Then mark them expired
-  await db
-    .prepare(
-      `UPDATE memories
-       SET status = 'expired', updated_at = ?
-       WHERE namespace = ?
-         AND status = 'active'
-         AND pinned = 0
-         AND type NOT IN ('identity', 'persona')
-         AND updated_at < ?`
-    )
-    .bind(now, namespace, cutoff)
-    .run();
+  // Then mark exactly those expired, so the caller's FTS/Vectorize cleanup
+  // matches what changed.
+  const ids = expired.map((m) => m.id);
+  const statements: D1PreparedStatement[] = [];
+  for (let i = 0; i < ids.length; i += RETENTION_BATCH_SIZE) {
+    const batch = ids.slice(i, i + RETENTION_BATCH_SIZE);
+    const placeholders = batch.map(() => "?").join(", ");
+    statements.push(
+      db
+        .prepare(
+          `UPDATE memories
+           SET status = 'expired', updated_at = ?
+           WHERE namespace = ? AND status = 'active' AND id IN (${placeholders})`
+        )
+        .bind(now, namespace, ...batch)
+    );
+  }
+  await db.batch(statements);
 
   return { count: expired.length, expired };
 }

@@ -182,7 +182,7 @@ Everything except `/health` and `/admin` requires `Authorization: Bearer <key>`.
 
 **Recall:** your latest message → vector search + lexical match → batch rerank of original passages + rules → the clean original text is tucked onto the end of the current message. No generative LLM by default: at most one memory on a normal turn, two when answering about the past; low scores are never padded in. Rerank failures fall back to lexical. Scores and trade-offs are visible in `/admin → Settings`. Transport envelopes, hashes, and message IDs never enter the daily prompt; two adjacent messages within 90 seconds in one session are merged. Active search still returns full records and IDs. Diaries are not auto-injected.
 
-**Cleanup:** messages live ~7 days; expired memories are flagged at 180 days and hard-deleted 30 days later.
+**Cleanup:** messages live ~7 days; a memory not rewritten, recalled or seen again for 180 days is flagged expired (pinned, identity and persona never are), and expired records are hard-deleted 30 days later.
 
 ### Local verification
 

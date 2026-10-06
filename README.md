@@ -80,7 +80,7 @@ Open `/admin`. The bottom tabs:
 | Tab | What it's for |
 |---|---|
 | **Today** | What you talked about today |
-| **Review queue** | Candidate memories consolidated overnight. Each assistant decides its own first; the week's decisions are listed here with an undo. Turn on the daily clef review in settings and nothing waits for you |
+| **Review queue** | Candidate memories consolidated overnight. Cloudflare's clef reviews them every night by default; the week's decisions are listed here with an undo. With clef switched off they wait here, or the assistant reviews them itself over MCP |
 | **Important memories** | Browse, search, edit, delete |
 | **More** | Precious originals, glossary, maintenance tools |
 | **Settings** | Upstream, assistants, environment parameters |
@@ -174,11 +174,11 @@ Everything except `/health` and `/admin` requires `Authorization: Bearer <key>`.
 
 ### MCP tools
 
-`memory_search` `memory_list` `memory_get` `memory_delete` `memory_ingest` `memory_boot` `memory_recall` `memory_upsert` `memory_supersede` `memory_archive` `memory_pin` `glossary_set` `diary_get` `memory_export`
+`memory_search` `memory_list` `memory_get` `memory_delete` `memory_ingest` `memory_boot` `memory_recall` `memory_upsert` `memory_supersede` `memory_archive` `memory_pin` `glossary_set` `diary_get` `memory_export` `memory_candidates` `memory_review`
 
 ### How memory flows
 
-**Writes:** assistants write directly via `memory_upsert`; a nightly cron (`10 20 * * *`) extracts facts from the day's conversations → each candidate is judged remember-or-let-go by its space's own assistant, using the main model it last chatted with (falling back to `JUDGE_MODEL`, which leaves unsure ones for you; an assistant can be switched off main-model judging in its settings to save quota; turning on `CLEF_AUTO_REVIEW` hands every candidate to Cloudflare's clef decision model instead, with nothing left for you), and writes diary / weekly / monthly entries.
+**Writes:** assistants write directly via `memory_upsert`; a nightly cron (`10 20 * * *`) extracts facts from the day's conversations → each candidate is judged remember-or-let-go by Cloudflare's clef decision model (`CLEF_AUTO_REVIEW`, on by default; switched off, candidates wait for you, or the assistant reviews them itself with the MCP tools `memory_candidates` and `memory_review`), and writes diary / weekly / monthly entries.
 
 **Recall:** your latest message → vector search + lexical match → batch rerank of original passages + rules → the clean original text is tucked onto the end of the current message. No generative LLM by default: at most one memory on a normal turn, two when answering about the past; low scores are never padded in. Rerank failures fall back to lexical. Scores and trade-offs are visible in `/admin → Settings`. Transport envelopes, hashes, and message IDs never enter the daily prompt; two adjacent messages within 90 seconds in one session are merged. Active search still returns full records and IDs. Diaries are not auto-injected.
 

@@ -45,8 +45,7 @@ export const SETTINGS: SettingSpec[] = [
   { group: "Dream 与日记", name: "DREAM_MAX_TOKENS", label: "单轮输出上限" },
   { group: "Dream 与日记", name: "DEDUP_COSINE", label: "记忆去重相似度", hint: "越高越容易判成新记忆，越低越容易被合并" },
   { group: "Dream 与日记", name: "WEEKLY_ROLLUP_DELETE_DAILIES", label: "周记落成后自动删日志", hint: "默认关，周记落成后日志留给人工审阅；打开就一条龙自动删", kind: "switch", defaultOn: false },
-  { group: "Dream 与日记", name: "CLEF_AUTO_REVIEW", label: "每天用 clef 自动审候选", hint: "默认关。打开后每天夜整完，由 Cloudflare 的 clef 把待审候选一次审完，只分记住和放下，不再留给人工批；不管下面那项和助手自己的模型。审核页能逐条撤回。走 Workers AI 计费，一条几百 token", kind: "switch", defaultOn: false, common: true },
-  { group: "Dream 与日记", name: "CANDIDATE_JUDGE_ENABLED", label: "Dream 之后自动审核候选", hint: "默认开，由每个助手用自己最近聊天的主模型审自己那份，只分记住和放下，审核页能撤回。关掉回到全部人工批准（clef 自动审开着时照样由 clef 审）", kind: "switch", defaultOn: true, common: true },
+  { group: "Dream 与日记", name: "CLEF_AUTO_REVIEW", label: "每天用 clef 自动审候选", hint: "默认开。每天夜整完，由 Cloudflare 的 clef 把待审候选一次审完，只分记住和放下，审核页能逐条撤回。走 Workers AI 计费，一条几百 token。关掉就全部留着：在审核页手动批，或者让助手用 MCP 的 memory_candidates 和 memory_review 自己审", kind: "switch", defaultOn: true, common: true },
   { group: "Dream 与日记", name: "DREAM_STRATEGY", label: "新记忆写入策略", hint: "默认 upsert，直接改写。填 review 改成先进候选队列等人批" },
   { group: "Dream 与日记", name: "DREAM_NAMESPACE", label: "夜整写进哪个记忆空间", hint: "默认 default" },
   { group: "Dream 与日记", name: "ENABLE_DIARY_WRITER", label: "夜整后写叙事日记", hint: "默认开。关掉不写日记", kind: "switch", defaultOn: true, common: true },
@@ -54,12 +53,9 @@ export const SETTINGS: SettingSpec[] = [
   { group: "Dream 与日记", name: "SUMMARY_MODEL", label: "摘要模型的最后兜底", hint: "DREAM_MODEL 和旧名 DAILY_DIGEST_MODEL 都没填时，摘要链路用它" },
   { group: "Dream 与日记", name: "ENABLE_WEEKLY_ROLLUP", label: "周记汇总", hint: "默认开。关掉不生成 weekly_log，命中也就没有周块可附", kind: "switch", defaultOn: true },
   { group: "Dream 与日记", name: "ENABLE_MONTHLY_ROLLUP", label: "月记汇总", hint: "默认开。关掉不生成 monthly_log", kind: "switch", defaultOn: true },
-  { group: "Dream 与日记", name: "JUDGE_MODEL", label: "代审模型", hint: "只在认不出助手自己的模型时用（聊天原文保留期内没通过网关聊过，助手设置里也没填审核模型）。留空回落 DREAM_MODEL；两者都空就把这些候选留给人工" },
   { group: "Dream 与日记", name: "TRIGGER_BUILD", label: "夜里给新记忆建触发器", hint: "默认关。打开后夜批给当天新记忆生成检索触发器。成本是每条记忆一次模型调用加三次向量化，只建增量，已有触发器的记忆跳过", kind: "switch", defaultOn: false },
   { group: "Dream 与日记", name: "TRIGGER_BUILD_MODEL", label: "建触发器用哪个模型", hint: "留空回落 DREAM_MODEL。触发器质量直接决定这条通道有没有用，别用太小的模型" },
-  { group: "Dream 与日记", name: "JUDGE_MAX_CANDIDATES", label: "一轮最多审几条候选", hint: "默认 20（开了 clef 自动审时默认 100），上限 100" },
-  { group: "Dream 与日记", name: "JUDGE_APPROVE_MIN", label: "代审自动入库阈值", hint: "默认 0.8。只管代审：评分不低于它自动入库。助手自己判时不看这个" },
-  { group: "Dream 与日记", name: "JUDGE_DISCARD_MAX", label: "代审自动丢弃阈值", hint: "默认 0.3。只管代审：评分不高于它自动丢弃，中间留人工。助手自己判时不看这个" },
+  { group: "Dream 与日记", name: "JUDGE_MAX_CANDIDATES", label: "clef 一晚最多审几条候选", hint: "默认 100，也是上限。没审到的留到第二晚" },
   { group: "Dream 与日记", name: "EMPTY_MEMORY_MIN_CHARS", label: "空记忆最短字符数", hint: "默认 4。短于这个长度的抽取结果当空记忆丢掉" },
 
   { group: "数据留存", name: "MESSAGES_RETENTION_DAYS", label: "原始对话保留天数", hint: "Dream 抽完记忆后，原文留几天", common: true },
@@ -81,7 +77,11 @@ export const SETTINGS: SettingSpec[] = [
   { group: "高级 · 改了要重建向量库", name: "VECTORIZE_INDEX_NAME", label: "Vectorize 索引名" }
 ];
 export const SETTING_NAMES = new Set(SETTINGS.map(s => s.name));
-const RETIRED_SETTINGS = new Set(["RECALL_SELECTOR_MODEL", "RECALL_SELECTOR_TIMEOUT_MS"]);
+// 已经下线的设置：存过的值读的时候丢掉，不报 Unknown setting。主模型/代审自动审 (10-07) 拆了，只剩 clef。
+const RETIRED_SETTINGS = new Set([
+  "RECALL_SELECTOR_MODEL", "RECALL_SELECTOR_TIMEOUT_MS",
+  "CANDIDATE_JUDGE_ENABLED", "JUDGE_MODEL", "JUDGE_APPROVE_MIN", "JUDGE_DISCARD_MAX"
+]);
 
 // Credentials stay Worker Secrets; the page only reports whether they exist.
 export const SECRET_SPECS: { name: string; label: string }[] = [

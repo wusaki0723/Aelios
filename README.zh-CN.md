@@ -76,7 +76,7 @@ API Key 一律填 `CHATBOX_API_KEY`。模型名写成 `厂商/模型`，比如 `
 | 标签 | 干什么 |
 |---|---|
 | **今日** | 今天聊了什么 |
-| **审核队列** | 夜间整理出来的候选记忆。助手先自己判记不记，这周它定下的都列在这里，不对就撤回。设置里打开「每天用 clef 自动审候选」就不用再一条条批 |
+| **审核队列** | 夜间整理出来的候选记忆。默认每晚由 Cloudflare 的 clef 审完，这周定下的都列在这里，不对就撤回。设置里关掉 clef 后候选留在这里等你批，也可以让助手用 MCP 自己审 |
 | **重要记忆** | 浏览、搜索、改、删 |
 | **更多** | 珍贵原文、术语表、维护工具 |
 | **设置** | 上游、助手、环境参数 |
@@ -181,11 +181,11 @@ CF 上游：chat 走 compat（全厂商，BYOK）；messages / responses 走各�
 
 ### MCP 工具
 
-`memory_search` `memory_list` `memory_get` `memory_delete` `memory_ingest` `memory_boot` `memory_recall` `memory_upsert` `memory_supersede` `memory_archive` `memory_pin` `glossary_set` `diary_get` `memory_export`
+`memory_search` `memory_list` `memory_get` `memory_delete` `memory_ingest` `memory_boot` `memory_recall` `memory_upsert` `memory_supersede` `memory_archive` `memory_pin` `glossary_set` `diary_get` `memory_export` `memory_candidates` `memory_review`
 
 ### 记忆怎么走
 
-写入：助手直写 `memory_upsert`；夜里 cron（`10 20 * * *`）从当天对话抽事实 → 候选由该空间的助手用自己最近聊天的主模型判记住或放下（认不出时交给 `JUDGE_MODEL` 代审，拿不准的留人工；每个助手的设置里可以关掉用主模型审，省额度；设置里打开 `CLEF_AUTO_REVIEW` 则全部交给 Cloudflare 的 clef 判，不留人工），并写日记 / 周记 / 月记。
+写入：助手直写 `memory_upsert`；夜里 cron（`10 20 * * *`）从当天对话抽事实 → 候选由 Cloudflare 的 clef 判记住或放下（`CLEF_AUTO_REVIEW`，默认开；关掉后候选留给人工，或让助手用 MCP 的 `memory_candidates`、`memory_review` 自己审），并写日记 / 周记 / 月记。
 
 召回：最后一句用户话 → 向量搜索 + 词面 → 原文片段批量重排 + 规则 → 把干净原文贴到当前消息末尾。默认不调用生成式 LLM，日常最多一条，回答旧事最多两条；低分不凑数，重排失败回落词面。分数与取舍可在 `/admin → 设置` 查看。传输信封、哈希和消息 ID 不进入日常提示，同一会话里直接相邻且 90 秒内的两句会合并；主动搜索仍返回完整记录和 ID。日记不自动注入。
 

@@ -1,7 +1,7 @@
 import { authenticate } from "../auth/apiKey";
 import { getOrCreateConversation } from "../db/conversations";
 import { fetchMemoriesByIds, getMemoryById, listMemoriesPage } from "../db/memories";
-import { saveIngestMessages } from "../db/messages";
+import { getMessagesByIds, saveIngestMessages } from "../db/messages";
 import {
   archiveMemory,
   createPrecious,
@@ -9,13 +9,24 @@ import {
   fetchMemoryLifecycleRows,
   getDailyLog,
   getWeeklyLog,
+  getMemoryCandidateById,
   getPreciousById,
+  listMemoryCandidates,
   markPreciousInjected,
   supersedeMemory,
+  updateMemoryCandidateStatus,
   upsertGlossary,
   upsertMemoryByFactKey
 } from "../db/v2";
+import {
+  approveCandidate,
+  judgeKindFor,
+  judgeNotePrefix,
+  loadOldMemoryForCandidate,
+  parseJsonArray
+} from "../memory/candidateJudge";
 import { exportMemories } from "../memory/export";
+import { formatSpeakerTranscript, loadSpeakersForNamespace } from "../memory/speakers";
 import { buildBootPackage, isV2Enabled, runRecall } from "../memory/v2/recall";
 import { readDreamTimeZoneFromEnv } from "../memory/dailyDigest";
 import { withImpressionDisclaimer } from "../memory/impression";
@@ -492,6 +503,50 @@ function getTools(): Array<Record<string, unknown>> {
       }
     },
     {
+      name: "memory_candidates",
+      description:
+        "List memory candidates waiting for review in this space: proposals the nightly dream pass pulled out of " +
+        "conversations, each one to add a memory, update an existing one (old_memory is the current text), or " +
+        "archive one (old_memory is the memory that would be archived). transcript holds the conversation lines " +
+        "it came from, so you can check the proposal against what was actually said. Decide each with " +
+        "memory_review. While the daily clef review is on these are decided automatically every night; when it " +
+        "is off they wait for the person or for you. Returns { data: [...], pending }.",
+      annotations: { title: "List memory candidates", ...READ_ONLY },
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "How many to return, least confident first (default 20, max 50)." },
+          namespace: NAMESPACE_PARAM
+        }
+      }
+    },
+    {
+      name: "memory_review",
+      description:
+        "Decide one candidate from memory_candidates. approve carries out the proposal: adds the memory, replaces " +
+        "the old version while keeping its history, or archives the target of an archive proposal. discard drops " +
+        "the proposal and leaves memories as they are. Write reason as one sentence in your own voice; the person " +
+        "sees it on the review page, where any decision can be undone. Candidates held back because a memory zone " +
+        "is full cannot be approved here. Returns { data: { id, status, memory_id } }.",
+      annotations: {
+        title: "Review memory candidate",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false
+      },
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Candidate id from memory_candidates." },
+          decision: { type: "string", enum: ["approve", "discard"], description: "approve carries the proposal out; discard drops it." },
+          reason: { type: "string", description: "One sentence on why, shown on the review page." },
+          namespace: NAMESPACE_PARAM
+        },
+        required: ["id", "decision"]
+      }
+    },
+    {
       name: "diary_get",
       description:
         "Read daily_log diary entries. These are impressions, not verified facts. " +
@@ -840,6 +895,70 @@ async function callTool(
     return toolError(
       "memory_extract_dryrun is deprecated in v3; extraction runs via the dream nightly pipeline. Use dream dry_run endpoints instead."
     );
+  }
+
+  // 候选审核：clef 自动审关着时，助手自己用这两个工具审。决定记成 judge[助手名]，审核页能撤回。
+  if (params.name === "memory_candidates") {
+    if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
+    const namespace = resolveNamespace(profile, args.namespace);
+    const limit = readPositiveInt(args.limit, 20, 50);
+    // zone_full 是区满了被挡下的，这里批不了，不列。
+    const pending = (await listMemoryCandidates(env.DB, { namespace, status: "pending", limit: 200 }))
+      .filter((candidate) => candidate.source !== "zone_full");
+    const speakers = await loadSpeakersForNamespace(env, namespace);
+    const data = [];
+    for (const candidate of pending.slice(0, limit)) {
+      const ids = parseJsonArray(candidate.source_message_ids);
+      const messages = ids.length > 0 ? await getMessagesByIds(env.DB, { namespace, ids }) : [];
+      data.push({
+        id: candidate.id,
+        action: judgeKindFor(candidate.source),
+        type: candidate.type,
+        content: candidate.content,
+        fact_key: candidate.fact_key,
+        old_memory: await loadOldMemoryForCandidate(env, namespace, candidate),
+        transcript: messages.length > 0 ? formatSpeakerTranscript(messages, speakers, 600) : null,
+        created_at: candidate.created_at
+      });
+    }
+    return textToolResult({ data, pending: pending.length });
+  }
+
+  if (params.name === "memory_review") {
+    if (!hasScope(profile, "memory:write")) return toolError("Missing memory:write scope");
+    const namespace = resolveNamespace(profile, args.namespace);
+    const id = readString(args.id);
+    const decision = readString(args.decision);
+    if (!id) return toolError("id is required");
+    if (decision !== "approve" && decision !== "discard") return toolError("decision must be approve or discard");
+    const candidate = await getMemoryCandidateById(env.DB, { namespace, id });
+    if (!candidate) return toolError("Candidate not found");
+    if (candidate.status !== "pending") return toolError(`Candidate was already decided (${candidate.status})`);
+    if (decision === "approve" && candidate.source === "zone_full") {
+      return toolError("This candidate is held back because its memory zone is full; leave it for the person");
+    }
+    const speakers = await loadSpeakersForNamespace(env, namespace);
+    const reviewer = (speakers?.assistantName ?? "").replace(/[\]\r\n]/g, "").trim().slice(0, 32) || "助手";
+    const reason = (readString(args.reason) ?? "").replace(/\s+/g, " ").trim().slice(0, 300)
+      || (decision === "approve" ? "我决定记住。" : "我决定放下。");
+    const decisionNote = `${judgeNotePrefix(reviewer)}${reason}`;
+    try {
+      if (decision === "discard") {
+        await updateMemoryCandidateStatus(env.DB, { namespace, id, status: "discarded", decisionNote });
+        return textToolResult({ data: { id, status: "discarded", memory_id: null } });
+      }
+      const memoryId = await approveCandidate(
+        env,
+        namespace,
+        candidate,
+        parseJsonArray(candidate.tags),
+        parseJsonArray(candidate.source_message_ids)
+      );
+      await updateMemoryCandidateStatus(env.DB, { namespace, id, status: "approved", targetMemoryId: memoryId, decisionNote });
+      return textToolResult({ data: { id, status: "approved", memory_id: memoryId } });
+    } catch (error) {
+      return toolError(error instanceof Error ? error.message : "memory_review failed");
+    }
   }
 
   if (params.name === "diary_get") {

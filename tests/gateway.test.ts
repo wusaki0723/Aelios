@@ -792,6 +792,42 @@ test("settings edited in the admin page override deployment vars everywhere", as
   assert.throws(() => validateConfig({ ...config(), settings: { DB: "hijacked" } }), /Unknown setting/);
 });
 
+test("settings page saves one item at a time without touching the rest of the config", async () => {
+  const start = { ...config(), upstream: { address: "https://keep.test/v1" }, settings: { CHAT_MODEL: "kept", DREAM_MODEL: "old-dream" } };
+  assert.equal((await worker.fetch(request("/api/gateway/config", start, {}, "PUT"), env, ctx)).status, 200);
+  // One switch flipped: only that key changes; "" drops a key back to the deployed value.
+  const patched = await worker.fetch(request("/api/gateway/config", { settings: { CLEF_AUTO_REVIEW: "true", DREAM_MODEL: "" } }, {}, "PATCH"), env, ctx);
+  assert.equal(patched.status, 200);
+  assert.deepEqual((await patched.json() as any).settings, { CHAT_MODEL: "kept", CLEF_AUTO_REVIEW: "true" });
+  let saved = JSON.parse((await run("/api/gateway/config")).text);
+  assert.deepEqual(saved.settings, { CHAT_MODEL: "kept", CLEF_AUTO_REVIEW: "true" });
+  assert.equal(saved.upstream.address, "https://keep.test/v1");
+  assert.equal(saved.identities[0].slug, "partner");
+  // Saving the assistants leaves every setting alone; upstream: null removes it.
+  const renamed = [{ ...identity(), userName: "小南" }];
+  assert.equal((await worker.fetch(request("/api/gateway/config", { identities: renamed, upstream: null }, {}, "PATCH"), env, ctx)).status, 200);
+  saved = JSON.parse((await run("/api/gateway/config")).text);
+  assert.deepEqual(saved.settings, { CHAT_MODEL: "kept", CLEF_AUTO_REVIEW: "true" });
+  assert.equal(saved.identities[0].userName, "小南");
+  assert.equal(saved.upstream, undefined);
+  // Bad patches are refused whole and change nothing.
+  for (const bad of [{ settings: { DB: "hijacked" } }, { identities: "nope" }, [1]]) {
+    assert.equal((await worker.fetch(request("/api/gateway/config", bad, {}, "PATCH"), env, ctx)).status, 400);
+  }
+  assert.deepEqual(JSON.parse((await run("/api/gateway/config")).text).settings, { CHAT_MODEL: "kept", CLEF_AUTO_REVIEW: "true" });
+  assert.equal((await worker.fetch(request("/api/gateway/config", { settings: {} }, { authorization: "Bearer im-key" }, "PATCH"), env, ctx)).status, 401);
+  // The env report tells the page which items are switches, their code default, and which are everyday ones.
+  invalidateSettingsCache();
+  const items = JSON.parse((await run("/api/gateway/env")).text).groups.flatMap((g: any) => g.items);
+  const clef = items.find((i: any) => i.name === "CLEF_AUTO_REVIEW");
+  assert.equal(clef.kind, "switch");
+  assert.equal(clef.defaultOn, false);
+  assert.equal(clef.common, true);
+  assert.equal(clef.value, "true");
+  assert.equal(items.find((i: any) => i.name === "ENABLE_DREAM").defaultOn, true);
+  assert.equal(items.find((i: any) => i.name === "CHAT_MODEL").kind, undefined);
+});
+
 test("read-space configuration is backwards compatible, bounded, explicit and round-trips via admin", async () => {
   assert.equal(identityNamespace(identity() as any), "partner-a");
   assert.deepEqual(identityReadNamespaces(identity() as any), ["partner-a"]);

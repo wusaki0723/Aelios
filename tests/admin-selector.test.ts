@@ -99,9 +99,9 @@ test('gateway editor round-trips speaker names for dream writing', async () => {
   const { app } = panel();
   const saved: any[] = [];
   app.request = async (path: string, options: any = {}) => {
-    if (path === '/api/gateway/config' && options.method === 'PUT') {
+    if (path === '/api/gateway/config' && options.method === 'PATCH') {
       saved.push(JSON.parse(options.body));
-      return { identities: 1 };
+      return { ok: true, settings: {} };
     }
     if (path === '/api/gateway/config') {
       return {
@@ -117,6 +117,7 @@ test('gateway editor round-trips speaker names for dream writing', async () => {
   await app.gwSave();
   assert.equal(saved[0].identities[0].userName, '小南');
   assert.equal(saved[0].identities[0].assistantName, '小北');
+  assert.equal(saved[0].settings, undefined); // Settings save one by one; the assistant save never rewrites them.
   assert.match(ADMIN_HTML, /用户叫什么,如 小南/);
 });
 
@@ -125,9 +126,9 @@ test('top identity picker saves speaker names without wiping the rest of gateway
   await app.init();
   const saved: any[] = [];
   app.request = async (path: string, options: any = {}) => {
-    if (path === '/api/gateway/config' && options.method === 'PUT') {
+    if (path === '/api/gateway/config' && options.method === 'PATCH') {
       saved.push(JSON.parse(options.body));
-      return { identities: 2 };
+      return { ok: true, settings: {} };
     }
     if (path === '/api/gateway/config') {
       return {
@@ -145,7 +146,9 @@ test('top identity picker saves speaker names without wiping the rest of gateway
   app.speakerUserName = '小南';
   app.speakerAssistantName = '小北';
   await app.saveSpeakers();
-  assert.equal(saved[0].upstream.address, 'https://keep.test/v1');
+  // Only the assistants travel; upstream and settings stay as they are on the server.
+  assert.equal(saved[0].upstream, undefined);
+  assert.equal(saved[0].settings, undefined);
   assert.equal(saved[0].identities[0].userName, '小南');
   assert.equal(saved[0].identities[0].assistantName, '小北');
   assert.equal(saved[0].identities[0].models[0], '*opus*');
@@ -195,4 +198,148 @@ test('late recall results and failures cannot cross an A-B-A identity switch', a
     assert.equal(app.recallHistoryError, '');
     assert.equal(app.recallHistoryLoading, false);
   }
+});
+
+function settingsPanel(fail = () => false) {
+  const { app } = panel();
+  const sent: any[] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const stored: Record<string, string> = { WEEKLY_ROLLUP_DELETE_DAILIES: '' };
+  app.request = async (path: string, options: any = {}) => {
+    if (path === '/api/gateway/config' && options.method === 'PATCH') {
+      const body = JSON.parse(options.body);
+      sent.push(body);
+      inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(resolve => setImmediate(resolve));
+      inFlight -= 1;
+      if (fail()) throw new Error('网断了');
+      for (const [name, value] of Object.entries(body.settings || {})) {
+        if (value) stored[name] = value as string; else delete stored[name];
+      }
+      return { ok: true, settings: { ...stored } };
+    }
+    if (path === '/api/gateway/config') {
+      return { version: 3, identities: [{ slug: 'danjiu', namespace: 'default', keys: ['CHATBOX_API_KEY'], models: ['*opus*'] }] };
+    }
+    if (path === '/api/gateway/env') {
+      return {
+        groups: [
+          { group: '记忆召回', items: [
+            { name: 'MEMORY_FILTER_MAX_OUTPUT', label: '每次注入几条记忆', value: '', deployed: '2', common: true },
+            { name: 'RELATION_EXPANSION', label: '顺着关系边再扩一跳', value: '', deployed: '', kind: 'switch', defaultOn: false }
+          ] },
+          { group: 'Dream 与日记', items: [
+            { name: 'ENABLE_DREAM', label: '夜整总闸', value: '', deployed: '', kind: 'switch', defaultOn: true, common: true },
+            { name: 'DIARY_MODEL', label: '日记和月记用的模型', hint: '留空回落 DREAM_MODEL', value: 'old/diary', deployed: '' },
+            { name: 'WEEKLY_ROLLUP_DELETE_DAILIES', label: '周记落成后自动删日志', value: '', deployed: 'true', kind: 'switch', defaultOn: false },
+            { name: 'CLEF_AUTO_REVIEW', label: '每天用 clef 自动审候选', value: '', deployed: '', kind: 'switch', defaultOn: false, common: true }
+          ] }
+        ],
+        secrets: []
+      };
+    }
+    return { data: [] };
+  };
+  return { app, sent, stored, maxInFlight: () => maxInFlight };
+}
+const item = (app: any, name: string) => app.gwItems().find((i: any) => i.name === name);
+
+test('a switch saves the moment it is flipped, sending only that one setting', async () => {
+  const { app, sent } = settingsPanel();
+  await app.gwLoad();
+  const clef = item(app, 'CLEF_AUTO_REVIEW');
+  assert.equal(app.settingOn(clef), false);
+  await app.toggleSetting(clef);
+  assert.equal(JSON.stringify(sent[0]), '{"settings":{"CLEF_AUTO_REVIEW":"true"}}');
+  assert.equal(app.settingOn(clef), true);
+  assert.equal(clef.saved, 'true');
+  assert.match(app.toast, /已打开「每天用 clef 自动审候选」/);
+  // Flipping back to the default clears the override instead of storing "false".
+  await app.toggleSetting(clef);
+  assert.equal(JSON.stringify(sent[1]), '{"settings":{"CLEF_AUTO_REVIEW":""}}');
+  assert.equal(app.settingOn(clef), false);
+  assert.equal(clef.saved, '');
+  assert.match(app.toast, /已关闭「每天用 clef 自动审候选」/);
+  // Default-on switches store "false"; a deployed "true" counts as the baseline too.
+  await app.toggleSetting(item(app, 'ENABLE_DREAM'));
+  assert.equal(JSON.stringify(sent[2]), '{"settings":{"ENABLE_DREAM":"false"}}');
+  const purge = item(app, 'WEEKLY_ROLLUP_DELETE_DAILIES');
+  assert.equal(app.settingOn(purge), true);
+  await app.toggleSetting(purge);
+  assert.equal(JSON.stringify(sent[3]), '{"settings":{"WEEKLY_ROLLUP_DELETE_DAILIES":"false"}}');
+  assert.equal(app.settingOn(purge), false);
+});
+
+test('text settings save on change, skip no-op edits, and restore defaults', async () => {
+  const { app, sent } = settingsPanel();
+  await app.gwLoad();
+  const diary = item(app, 'DIARY_MODEL');
+  await app.saveSetting(diary, 'old/diary ');
+  assert.equal(sent.length, 0);
+  await app.saveSetting(diary, ' new/diary ');
+  assert.equal(JSON.stringify(sent[0]), '{"settings":{"DIARY_MODEL":"new/diary"}}');
+  assert.equal(diary.saved, 'new/diary');
+  await app.saveSetting(diary, '');
+  assert.equal(JSON.stringify(sent[1]), '{"settings":{"DIARY_MODEL":""}}');
+  assert.equal(diary.value, '');
+  assert.match(app.toast, /「日记和月记用的模型」已恢复默认/);
+});
+
+test('a failed save puts the old value back and says so', async () => {
+  const { app } = settingsPanel(() => true);
+  await app.gwLoad();
+  const clef = item(app, 'CLEF_AUTO_REVIEW');
+  await app.toggleSetting(clef);
+  assert.equal(app.settingOn(clef), false);
+  assert.equal(clef.busy, false);
+  const diary = item(app, 'DIARY_MODEL');
+  await app.saveSetting(diary, 'new/diary');
+  assert.equal(diary.value, 'old/diary');
+  assert.match(app.toast, /没存上：网断了/);
+});
+
+test('quick taps on two switches save one after another so neither is lost', async () => {
+  const { app, stored, maxInFlight } = settingsPanel();
+  await app.gwLoad();
+  await Promise.all([app.toggleSetting(item(app, 'CLEF_AUTO_REVIEW')), app.toggleSetting(item(app, 'RELATION_EXPANSION'))]);
+  assert.equal(maxInFlight(), 1);
+  assert.equal(stored.CLEF_AUTO_REVIEW, 'true');
+  assert.equal(stored.RELATION_EXPANSION, 'true');
+});
+
+test('everyday settings sit on top; the rest stay folded until searched', async () => {
+  const { app } = settingsPanel();
+  await app.gwLoad();
+  assert.equal(JSON.stringify(app.gwCommon().map((i: any) => i.name)), '["ENABLE_DREAM","CLEF_AUTO_REVIEW","MEMORY_FILTER_MAX_OUTPUT"]');
+  const names = () => JSON.stringify(app.gwSections().map((s: any) => [s.group, s.items.map((i: any) => i.name)]));
+  assert.equal(names(), '[["记忆召回",["RELATION_EXPANSION"]],["Dream 与日记",["DIARY_MODEL","WEEKLY_ROLLUP_DELETE_DAILIES"]]]');
+  assert.equal(app.gwGroupOpen('记忆召回'), false);
+  assert.equal(app.gwChangedCount(), 1);
+  app.gwQuery = 'dream';
+  assert.equal(names(), '[["Dream 与日记",["ENABLE_DREAM","DIARY_MODEL","WEEKLY_ROLLUP_DELETE_DAILIES","CLEF_AUTO_REVIEW"]]]');
+  assert.equal(app.gwGroupOpen('Dream 与日记'), true);
+  assert.match(ADMIN_HTML, /x-for="item in gwCommon\(\)"/);
+});
+
+test('assistant edits raise the save bar until saved or discarded', async () => {
+  const { app, sent } = settingsPanel();
+  await app.gwLoad();
+  assert.equal(app.gwDirty(), false);
+  assert.match(app.gwIdentitySummary(app.gwIdentities[0]), /\/danjiu · \*opus\* · 写入 default/);
+  app.gwIdentities[0]._open = true; // Folding a card is not an edit.
+  assert.equal(app.gwDirty(), false);
+  app.gwIdentities[0].modelsText = '*opus*, *fable*';
+  assert.equal(app.gwDirty(), true);
+  await app.gwDiscard();
+  assert.equal(app.gwIdentities[0].modelsText, '*opus*');
+  assert.equal(app.gwDirty(), false);
+  app.gwAddress = 'https://new.test/v1';
+  assert.equal(app.gwDirty(), true);
+  await app.gwSave();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].upstream.address, 'https://new.test/v1');
+  assert.equal(sent[0].identities[0].slug, 'danjiu');
+  assert.equal(sent[0].settings, undefined);
+  assert.equal(app.gwDirty(), false);
 });

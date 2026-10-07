@@ -1038,56 +1038,6 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
         </div>
         <p x-show="gwError" class="text-xs text-coral" x-text="gwError"></p>
 
-        <article x-show="savedApiKey.trim() && !gwQuery.trim()" class="rounded-2xl border border-zinc-800 bg-zinc-900 px-4 pb-1 pt-4 shadow-sm">
-          <h2 class="text-sm font-semibold text-zinc-100">常用</h2>
-          <p x-show="gwBusy && !gwGroups.length" class="py-3 text-xs text-zinc-400">读取中…</p>
-          <div class="mt-2">
-            <template x-for="item in gwCommon()" :key="item.name">${SETTING_ROW}</template>
-          </div>
-        </article>
-
-        <article x-show="savedApiKey.trim() && gwGroups.length" class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
-          <div class="flex items-center justify-between gap-3">
-            <h2 class="text-sm font-semibold text-zinc-100">全部设置</h2>
-            <span class="text-[11px] text-zinc-500" x-text="gwChangedCount() ? '改过 ' + gwChangedCount() + ' 项，其余用默认' : '全部是默认值'"></span>
-          </div>
-          <div class="relative mt-3">
-            <i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500"></i>
-            <input x-model="gwQuery" type="search" aria-label="搜设置" class="h-10 w-full rounded-xl border border-zinc-800 bg-[#0a0a0b] pl-9 pr-3 text-sm text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral" placeholder="搜设置，如 模型、日记、召回">
-          </div>
-          <template x-for="s in gwSections()" :key="s.group">
-            <div class="mt-2 rounded-xl border border-zinc-800">
-              <button type="button" @click="gwToggle(s.group)" :aria-expanded="gwGroupOpen(s.group) ? 'true' : 'false'" class="tap flex w-full items-center justify-between gap-3 px-3 text-left">
-                <span class="text-sm text-zinc-100" x-text="s.group"></span>
-                <span class="flex shrink-0 items-center gap-2 text-[11px] text-zinc-500">
-                  <span x-show="s.changed" class="chip" x-text="'改过 ' + s.changed"></span>
-                  <span x-text="s.items.length + ' 项'"></span>
-                  <span class="chev" :class="gwGroupOpen(s.group) ? 'is-open' : ''">${CHEVRON}</span>
-                </span>
-              </button>
-              <div x-show="gwGroupOpen(s.group)" class="px-3">
-                <template x-for="item in s.items" :key="item.name">${SETTING_ROW}</template>
-              </div>
-            </div>
-          </template>
-          <p x-show="gwQuery.trim() && !gwSections().length" class="mt-3 text-xs text-zinc-500">没有找到相关设置。</p>
-          <div x-show="gwSecrets.length && !gwQuery.trim()" class="mt-2 rounded-xl border border-zinc-800">
-            <button type="button" @click="gwToggle('密钥')" :aria-expanded="gwIsOpen('密钥') ? 'true' : 'false'" class="tap flex w-full items-center justify-between gap-3 px-3 text-left">
-              <span class="text-sm text-zinc-100">密钥</span>
-              <span class="flex shrink-0 items-center gap-2 text-[11px] text-zinc-500">
-                <span x-text="gwSecrets.filter(s => s.present).length + ' / ' + gwSecrets.length + ' 已设'"></span>
-                <span class="chev" :class="gwIsOpen('密钥') ? 'is-open' : ''">${CHEVRON}</span>
-              </span>
-            </button>
-            <div x-show="gwIsOpen('密钥')" class="border-t border-zinc-800 px-3 py-3">
-              <p class="text-[11px] leading-5 text-zinc-500">密钥不在这里改，去 Cloudflare 的 Worker 设置 → Secrets 里加。</p>
-              <template x-for="s in gwSecrets" :key="s.label">
-                <p class="mt-1.5 text-xs" :class="s.present ? 'text-zinc-100' : 'text-zinc-500'" x-text="(s.present ? '✓ ' : '— ') + s.label"></p>
-              </template>
-            </div>
-          </div>
-        </article>
-
         <article x-show="savedApiKey.trim()" class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
           <div class="flex items-center justify-between gap-3">
             <div>
@@ -1172,6 +1122,56 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
             <div x-show="gwIsOpen('上游')" class="border-t border-zinc-800 p-3">
               <input x-model="gwAddress" aria-label="上游地址" class="h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="CF 账号 ID(32 位),或完整地址,如 new-api 的 https://…/v1">
               <p class="mt-1 text-[11px] leading-5 text-zinc-500">chat 走 compat,全 provider;messages / responses 走各 provider 原生端点,模型名带 provider/ 前缀;模型列表走 compat 目录。BYOK 钥匙在 AI Gateway 仪表盘;CF 令牌去 Worker Secrets 加 CLOUDFLARE_API_TOKEN。Gateway ID 在「全部设置 → 模型与线路」里,默认 default。</p>
+            </div>
+          </div>
+        </article>
+
+        <article x-show="savedApiKey.trim() && !gwQuery.trim()" class="rounded-2xl border border-zinc-800 bg-zinc-900 px-4 pb-1 pt-4 shadow-sm">
+          <h2 class="text-sm font-semibold text-zinc-100">常用</h2>
+          <p x-show="gwBusy && !gwGroups.length" class="py-3 text-xs text-zinc-400">读取中…</p>
+          <div class="mt-2">
+            <template x-for="item in gwCommon()" :key="item.name">${SETTING_ROW}</template>
+          </div>
+        </article>
+
+        <article x-show="savedApiKey.trim() && gwGroups.length" class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="text-sm font-semibold text-zinc-100">全部设置</h2>
+            <span class="text-[11px] text-zinc-500" x-text="gwChangedCount() ? '改过 ' + gwChangedCount() + ' 项，其余用默认' : '全部是默认值'"></span>
+          </div>
+          <div class="relative mt-3">
+            <i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500"></i>
+            <input x-model="gwQuery" type="search" aria-label="搜设置" class="h-10 w-full rounded-xl border border-zinc-800 bg-[#0a0a0b] pl-9 pr-3 text-sm text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral" placeholder="搜设置，如 模型、日记、召回">
+          </div>
+          <template x-for="s in gwSections()" :key="s.group">
+            <div class="mt-2 rounded-xl border border-zinc-800">
+              <button type="button" @click="gwToggle(s.group)" :aria-expanded="gwGroupOpen(s.group) ? 'true' : 'false'" class="tap flex w-full items-center justify-between gap-3 px-3 text-left">
+                <span class="text-sm text-zinc-100" x-text="s.group"></span>
+                <span class="flex shrink-0 items-center gap-2 text-[11px] text-zinc-500">
+                  <span x-show="s.changed" class="chip" x-text="'改过 ' + s.changed"></span>
+                  <span x-text="s.items.length + ' 项'"></span>
+                  <span class="chev" :class="gwGroupOpen(s.group) ? 'is-open' : ''">${CHEVRON}</span>
+                </span>
+              </button>
+              <div x-show="gwGroupOpen(s.group)" class="px-3">
+                <template x-for="item in s.items" :key="item.name">${SETTING_ROW}</template>
+              </div>
+            </div>
+          </template>
+          <p x-show="gwQuery.trim() && !gwSections().length" class="mt-3 text-xs text-zinc-500">没有找到相关设置。</p>
+          <div x-show="gwSecrets.length && !gwQuery.trim()" class="mt-2 rounded-xl border border-zinc-800">
+            <button type="button" @click="gwToggle('密钥')" :aria-expanded="gwIsOpen('密钥') ? 'true' : 'false'" class="tap flex w-full items-center justify-between gap-3 px-3 text-left">
+              <span class="text-sm text-zinc-100">密钥</span>
+              <span class="flex shrink-0 items-center gap-2 text-[11px] text-zinc-500">
+                <span x-text="gwSecrets.filter(s => s.present).length + ' / ' + gwSecrets.length + ' 已设'"></span>
+                <span class="chev" :class="gwIsOpen('密钥') ? 'is-open' : ''">${CHEVRON}</span>
+              </span>
+            </button>
+            <div x-show="gwIsOpen('密钥')" class="border-t border-zinc-800 px-3 py-3">
+              <p class="text-[11px] leading-5 text-zinc-500">密钥不在这里改，去 Cloudflare 的 Worker 设置 → Secrets 里加。</p>
+              <template x-for="s in gwSecrets" :key="s.label">
+                <p class="mt-1.5 text-xs" :class="s.present ? 'text-zinc-100' : 'text-zinc-500'" x-text="(s.present ? '✓ ' : '— ') + s.label"></p>
+              </template>
             </div>
           </div>
         </article>

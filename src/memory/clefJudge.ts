@@ -1,6 +1,6 @@
-// 用 Cloudflare 的 clef 审候选 (CLEF_AUTO_REVIEW 开关，默认关)。
+// 用 Cloudflare 的 clef 审候选 (CLEF_AUTO_REVIEW 开关，默认开；填 false/off 关掉)。
 // clef 是 decision 模型：只答选择题、回每个选项的概率，不生成文字，也就不会吐坏 JSON。
-// 开了以后每天夜整完由它把待审候选全部定掉，只分记住和放下，不再留给人工批；
+// 开着时每天夜整完由它把待审候选全部定掉，只分记住和放下，不再留给人工批；
 // 定下的照样进审核页「这周自动定下的」，能逐条撤回。按 Workers AI 用量计费 (输入 token，输出不收)。
 
 import type { Env, MessageRecord } from "../types";
@@ -13,8 +13,8 @@ export const CLEF_MODEL = "@cf/cloudflare/clef";
 export const CLEF_JUDGE_NAME = "clef";
 
 export function isClefReviewOn(env: Env): boolean {
-  const raw = (env.CLEF_AUTO_REVIEW ?? "off").trim().toLowerCase();
-  return raw === "on" || raw === "true" || raw === "1";
+  const raw = (env.CLEF_AUTO_REVIEW ?? "").trim().toLowerCase();
+  return !["off", "false", "0", "no"].includes(raw);
 }
 
 type Noul = { type: "noul"; instructions: string; criteria: { true: string; false: string } };

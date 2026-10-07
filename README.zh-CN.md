@@ -12,11 +12,11 @@
 
 ### 1. 部署
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wusaki0723/Aelios)
+先 Fork 本仓库，再部署你的 Fork。这样以后每次更新都只要点一下（见[更新到最新版](#更新到最新版)）。
 
-点按钮，登录 Cloudflare。表单里**只必填** `CHATBOX_API_KEY`：自己编一个密码，比如 `sk-my-aelios`。其余可以空着。
-
-Vectorize 那栏照抄：Dimensions `1024`，Metric `cosine`。构建命令 `npm ci`，部署命令 `npm run deploy`。
+1. 点本页右上角的 **Fork**。
+2. 在 Cloudflare 后台进 **Workers & Pages → Create → Import a repository**，连上 GitHub，选你的 Fork。项目名保持 `companion-memory-proxy`，构建命令 `npm ci`，部署命令 `npm run deploy`。部署命令会自己建好 D1 数据库、Vectorize 索引和队列。
+3. 部署好以后，进 Worker 的 **Settings → Variables and Secrets**，加 Secret `CHATBOX_API_KEY`：自己编一个密码，比如 `sk-my-aelios`。只有这一个必填，其余可选的钥匙见 [SECRETS.md](SECRETS.md)。
 
 部署完会得到一个地址，类似：
 
@@ -24,7 +24,11 @@ Vectorize 那栏照抄：Dimensions `1024`，Metric `cosine`。构建命令 `npm
 https://companion-memory-proxy.<你的子域>.workers.dev
 ```
 
-想自己掌控每一步的话：Fork 本仓库 → Cloudflare Workers 连上 GitHub → 构建 `npm ci`、部署 `npm run deploy` → 在 Worker Settings 里加 Secret `CHATBOX_API_KEY`。不要用裸 `wrangler deploy`，那样不会建库。
+不要用裸 `wrangler deploy`，那样不会建库。
+
+**不推荐：一键部署按钮。** [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wusaki0723/Aelios)
+
+按钮能用，但 Cloudflare 是把本仓库复制一份到你账号里的新仓库，不是 Fork。复制品在 GitHub 上没有 Sync fork，以后每次更新都得手动把新代码拉过去。实在要用的话：表单里只必填 `CHATBOX_API_KEY`；Vectorize 那栏照抄 Dimensions `1024`、Metric `cosine`；构建命令 `npm ci`，部署命令 `npm run deploy`。已经用按钮装好了？看[用按钮装的怎么办](#用按钮装的怎么办)。
 
 ### 2. 加一个助手
 
@@ -69,6 +73,28 @@ API Key 一律填 `CHATBOX_API_KEY`。模型名写成 `厂商/模型`，比如 `
 
 试一句：「请记住：我的测试暗号是苹果星星-0428。」过一会儿再问：「我的测试暗号是什么？」答出来就通了。
 
+## 更新到最新版
+
+GitHub 不会自己更新 Fork。有新版本时：
+
+1. 在 GitHub 打开你的 Fork，点 **Sync fork → Update branch**。
+2. Cloudflare 看到新提交会自己构建、部署，进度在 Worker 的 **Deployments** 里看得到。
+
+记忆、设置、助手和钥匙都存在你的 Cloudflare 账号里，不在仓库里，同步不会丢。改设置请在 `/admin` 里改，别去改 Fork 里的文件，这样 Sync fork 一直是点一下就好，不会冲突。
+
+想让它自动同步？[Pull](https://github.com/apps/pull) 这个 App 能定时帮 Fork 同步。但那样每个新版本都会不经你看就直接上线，包括数据库迁移；而且 Pull 默认把你的 Fork 硬重置成本仓库，你自己的提交会被丢掉。推荐手动点同步。
+
+### 用按钮装的怎么办
+
+按钮装出来的是复制品，不是 Fork，没有 Sync fork。把 Worker 换到 Fork 上就好，记忆和设置都在 Cloudflare 里，不会动。
+
+1. Fork 本仓库。
+2. 如果你当时在按钮的设置页改过 D1 数据库或 Vectorize 索引的名字：进 Worker 的 **Settings → Build → Build Variables and Secrets**，加 `CMP_D1_NAME` 和 `CMP_VECTORIZE_NAME`，填你改过的名字。不加的话，构建会新建两个空的，记忆看起来像没了（其实还在旧库里）。
+3. 在 **Settings → Build** 点 **Disconnect**，再点 **Connect** 选你的 Fork，构建命令 `npm ci`，部署命令 `npm run deploy`。
+4. 如果 Cloudflare 往你的 Fork 提了一个修 Worker 名字的 PR，合掉它。
+
+之后 Cloudflare 会在你的 Fork 有变化时从它构建，所以下次点 Sync fork 就更新上来了。在那之前 Worker 继续跑现在的版本。
+
 ## 平时怎么管
 
 打开 `/admin`，底部几个标签：
@@ -76,7 +102,7 @@ API Key 一律填 `CHATBOX_API_KEY`。模型名写成 `厂商/模型`，比如 `
 | 标签 | 干什么 |
 |---|---|
 | **今日** | 今天聊了什么 |
-| **审核队列** | 夜间整理出来的候选记忆。助手先自己判记不记，这周它定下的都列在这里，不对就撤回。设置里打开「每天用 clef 自动审候选」就不用再一条条批 |
+| **审核队列** | 夜间整理出来的候选记忆。默认每晚由 Cloudflare 的 clef 审完，这周定下的都列在这里，不对就撤回。设置里关掉 clef 后候选留在这里等你批，也可以让助手用 MCP 自己审 |
 | **重要记忆** | 浏览、搜索、改、删 |
 | **更多** | 珍贵原文、术语表、维护工具 |
 | **设置** | 上游、助手、环境参数 |
@@ -105,11 +131,21 @@ API Key 一律填 `CHATBOX_API_KEY`。模型名写成 `厂商/模型`，比如 `
 
 不配这些，记忆召回和夜间整理也能跑（走 Workers AI）。
 
-**给 Claude Code / Codex 加 MCP 记忆**
+**在 Claude 官方 App（网页、手机）、Claude Code、Codex 里用 MCP 记忆**
 
 ```
 https://<Worker 地址>/mcp?token=<CHATBOX_API_KEY>
 ```
+
+- Claude 官方 App：在连接器页面（claude.ai/customize/connectors）添加自定义连接器，填上面的地址。网页上加好，手机 App 里也有。工具权限里把只读那一组设成「总是允许」，不然每次想起来都要点一下。
+- 官方 App 不读 MCP 服务器自带的使用说明。想让它记得用，在个人偏好或项目说明里贴这段：
+
+```
+我给你接了 Aelios 记忆连接器，那是你对我的长期记忆。每个新对话先调 wake_up 再回我；我提到以前的人和事，或者你要猜我的事之前，先 recall；我说了新的事、改了主意、许了约定，当场 remember；聊得差不多了调 log_conversation。
+```
+
+- 官方 App 的对话不经过 Aelios，夜里的日记和候选靠助手调 `log_conversation` 交过来；走网关的客户端不用调。
+- 默认只列 9 个常用工具；要 `memory_get`、`memory_export` 这类维护工具，地址后面加 `&tools=all`。
 
 想让 Claude Code 每条消息自动召回、批量写回，用仓库里的 Hook：[`integrations/claude-code/`](./integrations/claude-code/README.md)。
 
@@ -181,11 +217,13 @@ CF 上游：chat 走 compat（全厂商，BYOK）；messages / responses 走各�
 
 ### MCP 工具
 
-`memory_search` `memory_list` `memory_get` `memory_delete` `memory_ingest` `memory_boot` `memory_recall` `memory_upsert` `memory_supersede` `memory_archive` `memory_pin` `glossary_set` `diary_get` `memory_export`
+`wake_up` `recall` `remember` `keep_moment` `forget` `learn_word` `read_diary` `log_conversation` `list_memories`
+
+clef 自动审关着时多列 `memory_candidates` `memory_review`；地址加 `&tools=all` 再多列 `memory_get` `memory_export`。旧名字（`memory_boot`、`memory_recall`、`memory_search`、`memory_upsert`、`memory_supersede`、`memory_archive`、`memory_delete`、`memory_ingest`、`memory_pin`、`glossary_set`、`diary_get`、`memory_list`）不再列出，按旧名调用照样能用。
 
 ### 记忆怎么走
 
-写入：助手直写 `memory_upsert`；夜里 cron（`10 20 * * *`）从当天对话抽事实 → 候选由该空间的助手用自己最近聊天的主模型判记住或放下（认不出时交给 `JUDGE_MODEL` 代审，拿不准的留人工；每个助手的设置里可以关掉用主模型审，省额度；设置里打开 `CLEF_AUTO_REVIEW` 则全部交给 Cloudflare 的 clef 判，不留人工），并写日记 / 周记 / 月记。
+写入：助手直写 `remember`；夜里 cron（`10 20 * * *`）从当天对话抽事实 → 候选由 Cloudflare 的 clef 判记住或放下（`CLEF_AUTO_REVIEW`，默认开；关掉后候选留给人工，或让助手用 MCP 的 `memory_candidates`、`memory_review` 自己审），并写日记 / 周记 / 月记。
 
 召回：最后一句用户话 → 向量搜索 + 词面 → 原文片段批量重排 + 规则 → 把干净原文贴到当前消息末尾。默认不调用生成式 LLM，日常最多一条，回答旧事最多两条；低分不凑数，重排失败回落词面。分数与取舍可在 `/admin → 设置` 查看。传输信封、哈希和消息 ID 不进入日常提示，同一会话里直接相邻且 90 秒内的两句会合并；主动搜索仍返回完整记录和 ID。日记不自动注入。
 

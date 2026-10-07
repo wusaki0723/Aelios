@@ -24,13 +24,8 @@ import { excerptAroundMatch, formatQuote, keepUncoveredQuotes, quoteOverlaps, se
 import { isEvidenceQuery, isTemporalQuery, tokenizeForIndex } from "../src/memory/queryShape";
 import { searchMemoriesByText } from "../src/db/memories";
 import { backfillFts, rebuildFts, toFtsBody } from "../src/memory/fts";
-import {
-  decideJudge,
-  parseJudgeBoolean,
-  parseJudgeModelResult,
-  judgeKindFor,
-  buildJudgePrompt
-} from "../src/memory/candidateJudge";
+import { decideClef, judgeKindFor } from "../src/memory/candidateJudge";
+import { clefVerdict } from "../src/memory/clefJudge";
 import { classifyTurn, recentHumanTexts } from "../src/gateway/protocol";
 import type { MemoryCandidateRow } from "../src/db/v2/candidates";
 import { cleanMessageText } from "../src/utils/sanitize";
@@ -605,95 +600,31 @@ function memoriesSchema(sqlite: DatabaseSync): void {
   )`);
 }
 
-test("judge does not archive a still-valid fact and rejects string booleans", () => {
-  const thresholds = { approveMin: 0.8, discardMax: 0.3 };
+test("clef only archives on a clear yes and only remembers what is grounded", () => {
   assert.equal(judgeKindFor("dream_delete"), "delete");
   assert.equal(judgeKindFor("dream_update"), "update");
   assert.equal(judgeKindFor("dream_add"), "add");
-  assert.equal(parseJudgeBoolean("false"), false);
-  assert.equal(parseJudgeBoolean("true"), true);
-  assert.equal(parseJudgeBoolean(false), false);
-  assert.equal(parseJudgeBoolean("maybe"), null);
-  assert.equal(parseJudgeModelResult({
-    score: 0.95,
-    grounded: "false",
-    durable: true,
-    reason: "string false must not coerce to true"
-  })?.grounded, false);
-  assert.equal(parseJudgeModelResult({ score: 0.9, grounded: "nope", durable: true }), null);
-
-  const goodFact = {
-    score: 0.94,
-    grounded: true,
-    durable: true,
-    shouldDelete: null,
-    reason: "对话里用户明确说过这件事，且是长期稳定的事实。"
+  const noul = (value: number) => ({ type: "noul", noul: value });
+  const verdict = (kind: "add" | "update" | "delete", answers: Record<string, unknown>) => {
+    const result = clefVerdict(kind, answers);
+    assert.ok(result);
+    return result;
   };
-  assert.equal(decideJudge("delete", goodFact, thresholds), "discard");
-  assert.equal(decideJudge("add", goodFact, thresholds), "approve");
 
-  // 会过期但有据的事实交给人工，不再直接扔掉。
-  const datedFact = { ...goodFact, durable: false, reason: "对话里说了，但这是一次性的安排。" };
-  assert.equal(decideJudge("add", datedFact, thresholds), "keep");
-  assert.equal(decideJudge("update", datedFact, thresholds), "keep");
-  // 没有依据、或者分数本来就低的，照旧 discard。
-  assert.equal(decideJudge("add", { ...datedFact, grounded: false }, thresholds), "discard");
-  assert.equal(decideJudge("add", { ...datedFact, score: 0.2 }, thresholds), "discard");
-  // delete 侧不受影响：durable 在那边是"这条还好好的，别归档"的证据。
-  assert.equal(decideJudge("delete", { ...datedFact, shouldDelete: null }, thresholds), "keep");
+  // An archive proposal on a fact that still holds stays a "keep".
+  const stillTrue = verdict("delete", { archive: noul(0.12) });
+  assert.equal(stillTrue.shouldDelete, false);
+  assert.equal(decideClef("delete", stillTrue), "discard");
+  assert.equal(decideClef("delete", verdict("delete", { archive: noul(0.91) })), "approve");
 
-  assert.equal(decideJudge("delete", { ...goodFact, shouldDelete: false, score: 0.99 }, thresholds), "discard");
-  assert.equal(decideJudge("delete", {
-    score: 0.91,
-    grounded: false,
-    durable: false,
-    shouldDelete: true,
-    reason: "已被用户否定，应该归档。"
-  }, thresholds), "approve");
+  // Worth remembering but not found in the conversation: let go.
+  assert.equal(decideClef("add", verdict("add", { grounded: noul(0.3), worth: noul(0.95) })), "discard");
+  assert.equal(decideClef("add", verdict("add", { grounded: noul(0.9), worth: noul(0.2) })), "discard");
+  assert.equal(decideClef("update", verdict("update", { grounded: noul(0.9), worth: noul(0.8) })), "approve");
 
-  const deletePrompt = buildJudgePrompt({
-    id: "cand_1",
-    namespace: "ns",
-    type: "fact",
-    content: "调试暗号是芝麻开门",
-    fact_key: "fact:pass",
-    confidence: 0.9,
-    importance: 0.9,
-    tags: "[]",
-    source_message_ids: "[]",
-    source: "dream_delete",
-    status: "pending",
-    target_memory_id: "mem_1",
-    decision_note: null,
-    created_at: "2026-09-06",
-    updated_at: "2026-09-06"
-  } as MemoryCandidateRow, []);
-  assert.match(deletePrompt, /归档提案|应不应该删/);
-  assert.doesNotMatch(deletePrompt, /score 高 = 值得新增/);
-
-  const named = buildJudgePrompt({
-    id: "cand_2",
-    namespace: "ns",
-    type: "fact",
-    content: "调试暗号是芝麻开门",
-    fact_key: "fact:pass",
-    confidence: 0.9,
-    importance: 0.9,
-    tags: "[]",
-    source_message_ids: "[]",
-    source: "dream_update",
-    status: "pending",
-    target_memory_id: "mem_1",
-    decision_note: null,
-    created_at: "2026-09-06",
-    updated_at: "2026-09-06"
-  } as MemoryCandidateRow, [{
-    id: "msg_1", conversation_id: "c", namespace: "ns", role: "user",
-    content: "改成这样", source: "test", created_at: "2026-09-06T00:00:00.000Z"
-  }], { userName: "小南", assistantName: "小北" });
-  assert.match(named, /用户是小南，助手是小北/);
-  assert.match(named, /\[msg_1\].*\[小南\]/);
-  assert.match(named, /小南用新内容明确修正了旧事实/);
+  // A missing answer is no verdict at all; out-of-range probabilities are clamped.
+  assert.equal(clefVerdict("add", { grounded: noul(0.9) }), null);
+  assert.equal(clefVerdict("add", { grounded: noul(1.7), worth: noul(-0.4) })?.score, 0);
 });
 
 test("FTS id hits keep SQL binds aligned and still find the rows", async () => {

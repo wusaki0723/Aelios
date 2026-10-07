@@ -27,10 +27,6 @@ export interface Identity {
   userName?: string;
   /** 助手显示名。Dream / 日记 / 周月卷 / 审核写事实时用这个名字，不要写 assistant/助手。空则回退到 slug。 */
   assistantName?: string;
-  /** 助手审自己记忆候选时用的模型（author/model，走 chat）。空则用它最近真正说话的主模型。 */
-  judgeModel?: string;
-  /** false：不用聊天主模型审自己的候选 (省额度)。填了 judgeModel 照样用它，否则交给代审。默认 true。 */
-  judgeWithMainModel?: boolean;
 }
 export interface GatewayConfig {
   version: 3;
@@ -89,11 +85,9 @@ export function validateConfig(value: unknown): GatewayConfig {
       `${where}: userName must be text (max 32 characters)`);
     check(identity.assistantName === undefined || text(identity.assistantName) && identity.assistantName.trim().length <= 32 && !/[\r\n]/.test(identity.assistantName),
       `${where}: assistantName must be text (max 32 characters)`);
-    check(identity.judgeModel === undefined || text(identity.judgeModel) && identity.judgeModel.length <= 200 &&
-      /^[^/\s]+\/\S+$/.test(identity.judgeModel.trim()),
-      `${where}: judgeModel must be an author/model name (max 200 characters)`);
-    check(identity.judgeWithMainModel === undefined || typeof identity.judgeWithMainModel === "boolean",
-      `${where}: judgeWithMainModel must be true or false`);
+    // 主模型自己审候选这条路拆了 (只剩 clef 和 MCP)，旧配置里的这两项下次保存时顺手清掉。
+    delete identity.judgeModel;
+    delete identity.judgeWithMainModel;
   }
   return value as unknown as GatewayConfig;
 }

@@ -69,8 +69,6 @@ DREAM_MAX_MESSAGES = "40"
 DREAM_MEMORY_CONTEXT_LIMIT = "40"
 DREAM_MAX_RUNS = "10"
 DREAM_MAX_TOKENS = "8000"
-# Dream 抽完候选后自动评审：靠谱的入库，没据的丢掉。设 false 才回到全人工。
-CANDIDATE_JUDGE_ENABLED = "true"
 # GitHub daily archive pull（可选，默认禁用）。要用：去 Dashboard 手动加变量
 # GITHUB_DAILY_REPO（owner/repo）和 Secret GITHUB_DAILY_TOKEN（fine-grained PAT，
 # 只读目标仓库 Contents）；代码内默认路径 archive/daily，可用 GITHUB_DAILY_PATH 覆盖。

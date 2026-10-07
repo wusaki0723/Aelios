@@ -52,11 +52,3 @@ export function rollupSpeakerRule(speakers: DreamSpeakers | null): string {
   }
   return `- 说话人：用户是${speakers.userName}，助手是${speakers.assistantName}。${nameOnlyRule(speakers)}`;
 }
-
-export function judgeSpeakerRules(speakers: DreamSpeakers | null): string[] {
-  if (!speakers) return [];
-  return [
-    `- 说话人：用户是${speakers.userName}，助手是${speakers.assistantName}。transcript 已用这两个名字标注。`,
-    "- reason 里也只用这两个名字，不要写用户/助手。"
-  ];
-}

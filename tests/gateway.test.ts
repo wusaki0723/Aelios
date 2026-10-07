@@ -821,7 +821,7 @@ test("settings page saves one item at a time without touching the rest of the co
   const items = JSON.parse((await run("/api/gateway/env")).text).groups.flatMap((g: any) => g.items);
   const clef = items.find((i: any) => i.name === "CLEF_AUTO_REVIEW");
   assert.equal(clef.kind, "switch");
-  assert.equal(clef.defaultOn, false);
+  assert.equal(clef.defaultOn, true);
   assert.equal(clef.common, true);
   assert.equal(clef.value, "true");
   assert.equal(items.find((i: any) => i.name === "ENABLE_DREAM").defaultOn, true);

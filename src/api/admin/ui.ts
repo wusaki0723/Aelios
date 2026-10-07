@@ -414,7 +414,7 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
             <h1 class="text-2xl font-semibold">审核队列</h1>
             <p class="mt-1 text-sm text-zinc-400">低置信候选先过手，再进入长期记忆。</p>
             <p x-show="autoReview === 'clef'" class="mt-1 text-xs leading-6 text-zinc-500">clef 每天夜里自动审，队列里这些下一轮会被定掉，不用一条条批。</p>
-            <p x-show="autoReview !== 'clef'" class="mt-1 text-xs leading-6 text-zinc-500">嫌一条条批累：<button type="button" @click="go('settings')" class="text-coral underline-offset-2 hover:underline">去设置</button>打开「每天用 clef 自动审候选」。</p>
+            <p x-show="autoReview !== 'clef'" class="mt-1 text-xs leading-6 text-zinc-500">clef 自动审关着，这些等你批，也可以让助手用 MCP 的 memory_review 自己审。嫌一条条批累：<button type="button" @click="go('settings')" class="text-coral underline-offset-2 hover:underline">去设置</button>打开「每天用 clef 自动审候选」。</p>
           </div>
           <span class="rounded-full bg-coral px-3 py-1 text-sm font-semibold text-zinc-950" x-text="pendingCount"></span>
         </div>
@@ -475,7 +475,7 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
 
         <div class="pt-4">
           <h2 class="text-lg font-semibold">这周自动定下的</h2>
-          <p class="mt-1 text-sm text-zinc-400">助手自己判的和 clef 审的只分记住和放下，不进上面的队列。觉得不对就撤回：记住的收回，放下的补记。</p>
+          <p class="mt-1 text-sm text-zinc-400">clef 审的和助手用 MCP 自己审的只分记住和放下，不进上面的队列。觉得不对就撤回：记住的收回，放下的补记。</p>
         </div>
         <template x-if="judgeDecisions.length === 0">
           <div class="text-keep w-full rounded-2xl border border-zinc-800 bg-zinc-900 p-6 text-sm text-zinc-400">这 7 天没有自动决定。</div>
@@ -1131,7 +1131,7 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
                   </div>
                 </div>
                 <details>
-                  <summary class="cursor-pointer text-xs text-zinc-500">记忆空间、思考块、审核模型</summary>
+                  <summary class="cursor-pointer text-xs text-zinc-500">记忆空间、思考块</summary>
                   <label class="mt-2 block text-xs text-zinc-400">写入空间
                     <input x-model="idn.namespace" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="留空与名字同名">
                   </label>
@@ -1148,12 +1148,6 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
                   <label class="mt-2 block text-xs text-zinc-400">单次记忆字数上限
                     <input x-model="idn.maxMemoryChars" type="number" min="256" max="24000" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="留空默认 6000">
                   </label>
-                  <label class="mt-3 flex items-center gap-1.5 text-xs text-zinc-400"><input type="checkbox" x-model="idn.judgeWithMainModel" class="h-4 w-4 accent-[#f4a07c]"><span>用聊天主模型审自己的记忆候选</span></label>
-                  <p class="mt-1 text-[11px] leading-5 text-zinc-500">关掉省主模型额度:下面填了审核模型就用它,没填交给环境设置里的代审模型。</p>
-                  <label class="mt-2 block text-xs text-zinc-400">审自己记忆用的模型
-                    <input x-model="idn.judgeModel" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="留空用它最近聊天的主模型,如 anthropic/claude-opus-5">
-                  </label>
-                  <p class="mt-1 text-[11px] leading-5 text-zinc-500">主模型太贵或太慢时填一个 author/model,走 chat。聊天原文保留期内没聊过又没填时,交给环境设置里的代审模型。</p>
                 </details>
                 <div class="flex justify-end">
                   <button type="button" @click="gwIdentities.splice(i, 1)" class="tap rounded-xl border border-zinc-800 px-3 text-xs text-zinc-500 transition hover:border-coral hover:text-zinc-100">移除这个助手</button>
@@ -1744,8 +1738,6 @@ function memoryAdmin() {
             keys: idn.keys && idn.keys.length ? idn.keys.slice() : ['CHATBOX_API_KEY'],
             anthropicThinking: idn.anthropicThinking || 'passthrough',
             maxMemoryChars: idn.maxMemoryChars || '',
-            judgeModel: idn.judgeModel || '',
-            judgeWithMainModel: idn.judgeWithMainModel !== false,
             _open: false
           };
         });
@@ -1769,7 +1761,7 @@ function memoryAdmin() {
       return this.gwLoad(true);
     },
     gwAdd() {
-      this.gwIdentities.push({ slug: '', userName: '', assistantName: '', modelsText: '', namespace: '', readNamespacesText: '', keys: ['CHATBOX_API_KEY'], anthropicThinking: 'passthrough', maxMemoryChars: '', judgeModel: '', judgeWithMainModel: true, _open: true });
+      this.gwIdentities.push({ slug: '', userName: '', assistantName: '', modelsText: '', namespace: '', readNamespacesText: '', keys: ['CHATBOX_API_KEY'], anthropicThinking: 'passthrough', maxMemoryChars: '', _open: true });
     },
     // 助手和上游要一起改好再存，所以跟线上比一比，有没存的就在底部浮出保存条。
     gwMark() { this.gwSnapshot = JSON.stringify(this.gwPayload()); },
@@ -1793,8 +1785,6 @@ function memoryAdmin() {
         if (idn.anthropicThinking && idn.anthropicThinking !== 'passthrough') out.anthropicThinking = idn.anthropicThinking;
         const budget = parseInt(idn.maxMemoryChars, 10);
         if (budget) out.maxMemoryChars = budget;
-        if ((idn.judgeModel || '').trim()) out.judgeModel = idn.judgeModel.trim();
-        if (idn.judgeWithMainModel === false) out.judgeWithMainModel = false;
         return out;
       });
       return { identities: identities, upstream: this.gwAddress.trim() ? { address: this.gwAddress.trim() } : null };

@@ -72,15 +72,10 @@ export interface Env {
   ENABLE_DIARY_WRITER?: string;
   DIARY_MODEL?: string;
   DEDUP_COSINE?: string;
-  // 候选队列自动评审（judge），默认开启；设 "false" 关闭
-  CANDIDATE_JUDGE_ENABLED?: string;
-  // on/true = 每天夜整完用 Cloudflare 的 clef 审候选，只分记住和放下，盖过自审和代审。默认关。
+  // 每天夜整完用 Cloudflare 的 clef 审候选，只分记住和放下。默认开，off/false 关。
   CLEF_AUTO_REVIEW?: string;
-  JUDGE_MODEL?: string;
+  // clef 一晚最多审几条候选，默认 100。
   JUDGE_MAX_CANDIDATES?: string;
-  // judge 评分阈值：>= APPROVE_MIN 自动入库，<= DISCARD_MAX 自动丢弃，中间留人工
-  JUDGE_APPROVE_MIN?: string;
-  JUDGE_DISCARD_MAX?: string;
   DAILY_DIGEST_MAX_MESSAGES?: string;
   DAILY_DIGEST_MAX_RUNS?: string;
   DAILY_DIGEST_MAX_TOKENS?: string;

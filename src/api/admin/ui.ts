@@ -749,7 +749,7 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
                 <span x-text="fmt(entry.updated_at)"></span>
               </div>
               <h3 class="text-base font-semibold text-zinc-100" x-text="entry.title"></h3>
-              <p class="mt-1 text-xs text-zinc-500" x-show="entry.source_message_ids && entry.source_message_ids.length" x-text="(entry.source_message_ids || []).length + ' 条原文可溯源'"></p>
+              <p class="mt-1 text-xs text-zinc-500" x-show="entry.source_message_ids && entry.source_message_ids.length" x-text="entry.sources_kept ? entry.sources_kept + ' 条原文还在，可溯源' : '原文已过保留期清理，只剩这篇日记'"></p>
               <p class="mt-2 whitespace-pre-wrap text-sm leading-7 text-zinc-300" :class="isDiaryExpanded('daily:' + entry.date) ? '' : 'line-clamp-4'" x-text="entry.summary"></p>
               <button type="button" @click="toggleDiaryExpand('daily:' + entry.date)" class="tap mt-2 text-xs text-coral transition duration-150 ease-in-out hover:underline" x-text="isDiaryExpanded('daily:' + entry.date) ? '收起' : '展开全文'"></button>
             </article>

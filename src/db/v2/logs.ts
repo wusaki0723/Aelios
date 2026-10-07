@@ -95,6 +95,25 @@ export async function listDailyLogsInRange(
   return (result.results ?? []).map(mapDailyLog);
 }
 
+// 每篇日记挂的原文里还有几条没被保留期清掉，按日期返回。后台用它说清"能溯源"还是"原文已清理"。
+export async function countKeptDiarySources(
+  db: D1Database,
+  input: { namespace: string; startDate: string; endDate: string }
+): Promise<Map<string, number>> {
+  const result = await db
+    .prepare(
+      `SELECT d.date AS date, COUNT(m.id) AS kept
+       FROM daily_log d,
+         json_each(CASE WHEN json_valid(d.source_message_ids) THEN d.source_message_ids ELSE '[]' END) j
+       JOIN messages m ON m.namespace = d.namespace AND m.id = j.value
+       WHERE d.namespace = ? AND d.date >= ? AND d.date <= ?
+       GROUP BY d.date`
+    )
+    .bind(input.namespace, input.startDate, input.endDate)
+    .all<{ date: string; kept: number }>();
+  return new Map((result.results ?? []).map((row) => [row.date, Number(row.kept) || 0]));
+}
+
 export async function listRecentDailyLogs(
   db: D1Database,
   input: { namespace: string; limit: number }

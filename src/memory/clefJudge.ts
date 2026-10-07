@@ -6,9 +6,12 @@
 import type { Env, MessageRecord } from "../types";
 import type { MemoryCandidateRow } from "../db/v2";
 import type { JudgeKind, JudgeModelResult } from "./candidateJudge";
-import { formatSpeakerTranscript, type DreamSpeakers } from "./speakers";
+import { formatChatLines } from "./chatMaterial";
+import { speakerLabel, type DreamSpeakers } from "./speakers";
 
 export const CLEF_MODEL = "@cf/cloudflare/clef";
+// 一条候选挂的原文通常就几条；clef 有 64K 上下文，这个量只在贴了大段文字时才会压。
+const CLEF_TRANSCRIPT_BUDGET_CHARS = 12_000;
 /** 写进 decision_note 的 judge[...] 前缀，审核页显示成「clef · 记住了」。 */
 export const CLEF_JUDGE_NAME = "clef";
 
@@ -116,7 +119,11 @@ export function buildClefInput(
       ...(speakers ? { speakers: { user: speakers.userName, assistant: speakers.assistantName } } : {}),
       candidate: { action: kind, type: candidate.type, content: candidate.content, fact_key: candidate.fact_key },
       ...(oldMemory ? { old_memory: oldMemory } : {}),
-      transcript: formatSpeakerTranscript(messages, speakers, 900)
+      // 抽取现在看得到长消息的后半截，审核也得看得到，不然后半截里的事永远"没有依据"。
+      transcript: formatChatLines(messages, (role) => speakerLabel(role, speakers), {
+        floor: 900,
+        budget: CLEF_TRANSCRIPT_BUDGET_CHARS
+      })
     },
     questions: QUESTIONS[kind]
   };

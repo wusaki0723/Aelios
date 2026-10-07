@@ -1,10 +1,13 @@
-import { listActiveFactKeys } from "../db/v2";
+import { listActiveFactKeys, listDailyLogsInRange } from "../db/v2";
 import { loadConfig, speakersForNamespace, type DreamSpeakers } from "../gateway/config";
 import { callOpenAICompat } from "../proxy/openaiAdapter";
 import type { Env, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../types";
 import { clampScore, extractJsonObject, readString, readStringArray } from "../utils/parse";
-import { cleanMessageText } from "../utils/sanitize";
+import { CHAT_MATERIAL_RULES, clipMiddle, escapeChatTags, formatChatMaterial } from "./chatMaterial";
+import { addDaysToDateLabel } from "./dreamDates";
+import { readDreamTimeZoneFromEnv } from "./dreamEnv";
 import { clampMemoryType } from "./canonicalTypes";
+import { speakerLabel } from "./speakers";
 import type { ExtractedMemory } from "./extract";
 
 const DEFAULT_DREAM_EXTRACT_MAX_TOKENS = 1200;
@@ -60,14 +63,7 @@ function parseExtractModelOutput(text: string): ExtractedMemory[] | null {
 }
 
 function formatTranscript(messages: MessageRecord[], speakers: DreamSpeakers | null): string {
-  return messages
-    .map((message) => {
-      const role = message.role === "assistant"
-        ? (speakers?.assistantName ?? "我(助手)")
-        : (speakers?.userName ?? "用户");
-      return `[${message.id}][${message.created_at}][${role}] ${cleanMessageText(message.content).slice(0, 900)}`;
-    })
-    .join("\n\n");
+  return formatChatMaterial(messages, (role) => speakerLabel(role, speakers), { floor: 900 });
 }
 
 function speakerWritingRules(speakers: DreamSpeakers | null): string[] {
@@ -92,10 +88,32 @@ function exampleMemoryContent(speakers: DreamSpeakers | null): string {
   return `${speakers.userName}确定了九月按原计划卖掉那台车：买之前就约定只玩一年，这是${speakers.userName}给自己签的合同，不需要外人劝留。`;
 }
 
+export interface DiaryBackground {
+  date: string;
+  title: string;
+  summary: string;
+}
+
+// 前几天的日记当背景：抽取器只看当晚这批原文时，「那件事」「上次说的」指什么它看不懂。
+const DIARY_BACKGROUND_DAYS = 7;
+const DIARY_BACKGROUND_MAX_CHARS = 500;
+
+function backgroundSection(background: DiaryBackground[]): string[] {
+  if (background.length === 0) return [];
+  return [
+    "",
+    "前几天的日记（只是背景：用来看懂「那件事」「上次说的」指什么、前因后果是什么。不要从背景里抽新记忆，source_message_ids 只能来自 <chat> 里的消息）：",
+    ...background.map((entry) =>
+      `- ${entry.date}｜${escapeChatTags(entry.title)}：${escapeChatTags(clipMiddle(entry.summary, DIARY_BACKGROUND_MAX_CHARS))}`
+    )
+  ];
+}
+
 export function buildDreamExtractPrompt(
   messages: MessageRecord[],
   existingFactKeys: string[] = [],
-  speakers: DreamSpeakers | null = null
+  speakers: DreamSpeakers | null = null,
+  background: DiaryBackground[] = []
 ): string {
   const factKeySection = existingFactKeys.length > 0
     ? [
@@ -127,6 +145,7 @@ export function buildDreamExtractPrompt(
     "- type 只能从这 8 个里选：fact、event、preference、relationship、boundary、habit、decision、note。绝不输出 project、world_fact、commitment 等其他值；项目进展归 fact，承诺/决定归 decision，习惯归 habit。",
     "- 稳定事实必须尽量给 fact_key，格式为小写 ASCII，例如 preference:answer-style、boundary:no-system-records、decision:sell-car-2026-09。",
     "- 临时计划和意图不是稳定事实：要么提炼成背后的持久事实，要么直接跳过。",
+    ...CHAT_MATERIAL_RULES,
     "",
     "亲密 session（强制，不准跳过）：",
     "- 如果这批对话里出现了成段的亲密/性内容，除按普通规则抽取外，必须额外出 1 条 type=event 的「玩法记录」：清单式、不煽情，只记事实——玩法/动作/道具/角色框架/新开的边界/偏好或身体状态变化。",
@@ -156,6 +175,7 @@ export function buildDreamExtractPrompt(
     "",
     "如果没有值得长期保留的稳定事实，输出：",
     JSON.stringify({ memories: [] }),
+    ...backgroundSection(background),
     "",
     "对话：",
     formatTranscript(messages, speakers)
@@ -166,7 +186,8 @@ async function callDreamExtractModel(
   env: Env,
   messages: MessageRecord[],
   existingFactKeys: string[],
-  speakers: DreamSpeakers | null
+  speakers: DreamSpeakers | null,
+  background: DiaryBackground[]
 ): Promise<DreamExtractModelResult> {
   const model = readDreamExtractModel(env);
   if (!model) return { memories: [], reason: "missing_model" };
@@ -175,7 +196,7 @@ async function callDreamExtractModel(
     model,
     messages: [
       { role: "system", content: "你是严格的 JSON 生成器。你只输出 JSON。" },
-      { role: "user", content: buildDreamExtractPrompt(messages, existingFactKeys, speakers) }
+      { role: "user", content: buildDreamExtractPrompt(messages, existingFactKeys, speakers, background) }
     ],
     temperature: 0,
     max_tokens: readPositiveInt(env.DREAM_MAX_TOKENS, DEFAULT_DREAM_EXTRACT_MAX_TOKENS, 4000),
@@ -199,13 +220,31 @@ async function callDreamExtractModel(
   }
 }
 
+async function loadDiaryBackground(env: Env, namespace: string, dateLabel: string): Promise<DiaryBackground[]> {
+  try {
+    const timeZone = readDreamTimeZoneFromEnv(env);
+    const rows = await listDailyLogsInRange(env.DB, {
+      namespace,
+      startDate: addDaysToDateLabel(dateLabel, -DIARY_BACKGROUND_DAYS, timeZone),
+      endDate: addDaysToDateLabel(dateLabel, -1, timeZone)
+    });
+    return rows.map((row) => ({ date: row.date, title: row.title, summary: row.summary }));
+  } catch (error) {
+    console.error("dream extract: failed to load diary background", { namespace, dateLabel, error });
+    return [];
+  }
+}
+
 export async function extractDreamMemoriesFromMessages(
   env: Env,
-  input: { namespace: string; messages: MessageRecord[]; speakers?: DreamSpeakers | null }
+  input: { namespace: string; messages: MessageRecord[]; speakers?: DreamSpeakers | null; dateLabel?: string }
 ): Promise<DreamExtractModelResult> {
-  const existingFactKeys = await listActiveFactKeys(env.DB, { namespace: input.namespace });
+  const [existingFactKeys, background] = await Promise.all([
+    listActiveFactKeys(env.DB, { namespace: input.namespace }),
+    input.dateLabel ? loadDiaryBackground(env, input.namespace, input.dateLabel) : Promise.resolve([])
+  ]);
   const speakers = input.speakers !== undefined
     ? input.speakers
     : speakersForNamespace(await loadConfig(env), input.namespace);
-  return callDreamExtractModel(env, input.messages, existingFactKeys, speakers);
+  return callDreamExtractModel(env, input.messages, existingFactKeys, speakers, background);
 }

@@ -63,14 +63,18 @@ async function findDiaryDateBySources(db: D1Database, namespace: string, ids: st
 }
 
 // 夜间整理产出的候选落在某一晚的 dream_runs 时间窗里，那一晚整理的是哪天的聊天就是 date_label。
-async function findDreamNightDate(db: D1Database, namespace: string, memory: MemoryRecord): Promise<string | null> {
+// 只认挂着同一批原文的候选：挂着这些原文，就是读过这些原文的那一晚产出的。
+// 不按 target_memory_id 找，那上面还有后来针对这条记忆的更新、去重候选，日期会对不上。
+async function findDreamNightDate(db: D1Database, namespace: string, ids: string[]): Promise<string | null> {
+  const placeholders = ids.map(() => "?").join(", ");
   const candidate = await db
     .prepare(
-      `SELECT created_at FROM memory_candidates
-       WHERE namespace = ? AND (target_memory_id = ? OR source_message_ids = ?)
-       ORDER BY created_at ASC LIMIT 1`
+      `SELECT c.created_at AS created_at FROM memory_candidates c
+       WHERE c.namespace = ?
+         AND EXISTS (SELECT 1 FROM json_each(${sqlJsonArray("c.source_message_ids")}) j WHERE j.value IN (${placeholders}))
+       ORDER BY c.created_at ASC LIMIT 1`
     )
-    .bind(namespace, memory.id, memory.source_message_ids ?? "")
+    .bind(namespace, ...ids)
     .first<{ created_at: string }>();
   if (!candidate) return null;
   const run = await db
@@ -93,7 +97,7 @@ async function findSourceDate(
   try {
     const byDiary = await findDiaryDateBySources(db, namespace, ids);
     if (byDiary) return { date: byDiary, matched_by: "diary_sources" };
-    const byNight = await findDreamNightDate(db, namespace, memory);
+    const byNight = await findDreamNightDate(db, namespace, ids);
     if (byNight) return { date: byNight, matched_by: "dream_night" };
   } catch (error) {
     console.error("memory source: date lookup failed", { namespace, memory_id: memory.id, error });

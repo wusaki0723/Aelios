@@ -103,9 +103,11 @@ function backgroundSection(background: DiaryBackground[]): string[] {
   return [
     "",
     "前几天的日记（只是背景：用来看懂「那件事」「上次说的」指什么、前因后果是什么。不要从背景里抽新记忆，source_message_ids 只能来自 <chat> 里的消息）：",
+    "<background>",
     ...background.map((entry) =>
       `- ${entry.date}｜${escapeChatTags(entry.title)}：${escapeChatTags(clipMiddle(entry.summary, DIARY_BACKGROUND_MAX_CHARS))}`
-    )
+    ),
+    "</background>"
   ];
 }
 

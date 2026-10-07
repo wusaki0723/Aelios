@@ -52,10 +52,10 @@ function diary(date: string, summary: string, sources: string[] = []) {
   sqlite.prepare(`INSERT INTO daily_log (namespace, date, title, summary, source_message_ids, updated_at)
     VALUES ('default', ?, ?, ?, ?, '2026-10-01T00:00:00.000Z')`).run(date, `${date} 的日记`, summary, JSON.stringify(sources));
 }
-function candidate(id: string, memoryId: string, createdAt: string) {
+function candidate(id: string, sources: string[], createdAt: string, target: string | null = null, source = "dream_extract") {
   sqlite.prepare(`INSERT INTO memory_candidates (id, namespace, type, content, source_message_ids, source, status,
     target_memory_id, created_at, updated_at)
-    VALUES (?, 'default', 'fact', '候选', '[]', 'dream_extract', 'approved', ?, ?, ?)`).run(id, memoryId, createdAt, createdAt);
+    VALUES (?, 'default', 'fact', '候选', ?, ?, 'approved', ?, ?, ?)`).run(id, JSON.stringify(sources), source, target, createdAt, createdAt);
 }
 function dreamRun(dateLabel: string, startedAt: string, finishedAt: string) {
   sqlite.prepare(`INSERT INTO dream_runs (id, namespace, date_label, started_at, finished_at, status, trigger)
@@ -111,7 +111,7 @@ test("without a citing diary, the night that produced the memory names the day",
   // 9-21 晚上整理的是 9-19 的聊天，记忆的创建日期和候选日期都不是那一天。
   dreamRun("2026-09-19", "2026-09-21T20:10:15.000Z", "2026-09-21T20:12:26.000Z");
   dreamRun("2026-09-21", "2026-09-22T20:10:00.000Z", "2026-09-22T20:12:00.000Z");
-  candidate("c1", "m1", "2026-09-21T20:12:12.000Z");
+  candidate("c1", ["msg_gone"], "2026-09-21T20:12:12.000Z", "m1");
   diary("2026-09-19", "她那天很累，但还是把题刷完了。", ["msg_other"]);
   diary("2026-09-21", "不是这天。");
   memory("m1", "她累了也会把当天的题刷完。", ["msg_gone"], "2026-09-23T03:00:00.000Z");
@@ -122,9 +122,29 @@ test("without a citing diary, the night that produced the memory names the day",
   assert.equal(source.matched_by, "dream_night");
 });
 
+test("a later update aimed at the memory does not move its source day", async () => {
+  // 9-10 晚整理 9-10 的聊天产出这条记忆；10-01 晚又有一条更新候选指着它，但读的是别的原文。
+  dreamRun("2026-09-10", "2026-09-10T20:10:00.000Z", "2026-09-10T20:18:00.000Z");
+  dreamRun("2026-10-01", "2026-10-01T20:10:00.000Z", "2026-10-01T20:15:00.000Z");
+  candidate("c-update", ["msg_new"], "2026-10-01T20:12:00.000Z", "m1", "dream_update");
+  candidate("c-create", ["msg_a", "msg_b"], "2026-09-10T20:12:00.000Z", "m1");
+  diary("2026-09-10", "九月十号的日记。");
+  diary("2026-10-01", "十月一号的日记。");
+  memory("m1", "九月十号说的事。", ["msg_b"]);
+
+  const { source } = (await readSource("m1")).structuredContent.data;
+  assert.equal(source.date, "2026-09-10");
+  assert.equal(source.summary, "九月十号的日记。");
+
+  // 只有后来那条更新候选、没有当初产出它的候选：宁可说找不到，也不报错日子。
+  memory("m2", "当初的候选已经找不到的事。", ["msg_old"]);
+  candidate("c-update-2", ["msg_new"], "2026-10-01T20:13:00.000Z", "m2", "dream_update");
+  assert.deepEqual((await readSource("m2")).structuredContent.data.source, { kind: "none", reason: "sources_gone" });
+});
+
 test("a day already rolled into its week falls back to the weekly entry", async () => {
   dreamRun("2026-09-16", "2026-09-16T20:11:00.000Z", "2026-09-16T20:14:00.000Z");
-  candidate("c1", "m1", "2026-09-16T20:13:55.000Z");
+  candidate("c1", ["msg_gone"], "2026-09-16T20:13:55.000Z", "m1");
   sqlite.prepare(`INSERT INTO weekly_log (namespace, week, start_date, end_date, title, summary, source_days, updated_at)
     VALUES ('default', '2026-W38', '2026-09-14', '2026-09-20', '搬家那周', '这周一直在收拾新家。', 5, '2026-09-21T00:00:00.000Z')`).run();
   memory("m1", "她九月中在收拾新家。", ["msg_gone"]);
@@ -180,4 +200,18 @@ test("the admin diary list says how many cited originals are still kept", async 
   const { dailies } = (await response.json() as any).data;
   assert.deepEqual(dailies.map((d: any) => [d.date, d.sources_kept]),
     [["2026-10-06", 1], ["2026-09-02", 0], ["2026-09-01", 0]]);
+});
+
+test("if the kept count fails, the admin list leaves it out instead of saying originals are gone", async () => {
+  diary("2026-10-06", "最近的日记。", ["msg_kept"]);
+  const prepare = db.prepare;
+  db.prepare = (sql: string) => {
+    if (sql.includes("COUNT(m.id)")) throw new Error("D1 blip");
+    return prepare(sql);
+  };
+  const response = await worker.fetch(new Request("https://aelios.test/admin/diary?limit=30", {
+    headers: { authorization: "Bearer owner-key" } }), env, { waitUntil() {} } as any);
+  const { dailies } = (await response.json() as any).data;
+  assert.equal(dailies.length, 1);
+  assert.equal("sources_kept" in dailies[0], false);
 });

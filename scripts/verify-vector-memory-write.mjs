@@ -143,7 +143,7 @@ assert.match(dreamExtractSource, /export function buildDreamExtractPrompt/);
 assert.match(dreamExtractSource, /export async function extractDreamMemoriesFromMessages/);
 assert.match(digestSource, /source: "dream_extract"/);
 assert.match(digestSource, /buildDreamRoutingPlan/);
-assert.match(mcpSource, /name: "diary_get"/);
+assert.match(mcpSource, /name: "read_diary"/);
 assert.match(mcpSource, /is deprecated in v3; digest lives in the client system prompt/);
 assert.match(dbV2Source, /await db\.batch\(\[ensureLifecycle, markSeen\]\);/);
 assert.match(dbV2Source, /export async function fetchLongtailByIds/);

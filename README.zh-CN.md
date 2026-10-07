@@ -131,11 +131,21 @@ GitHub 不会自己更新 Fork。有新版本时：
 
 不配这些，记忆召回和夜间整理也能跑（走 Workers AI）。
 
-**给 Claude Code / Codex 加 MCP 记忆**
+**在 Claude 官方 App（网页、手机）、Claude Code、Codex 里用 MCP 记忆**
 
 ```
 https://<Worker 地址>/mcp?token=<CHATBOX_API_KEY>
 ```
+
+- Claude 官方 App：在连接器页面（claude.ai/customize/connectors）添加自定义连接器，填上面的地址。网页上加好，手机 App 里也有。工具权限里把只读那一组设成「总是允许」，不然每次想起来都要点一下。
+- 官方 App 不读 MCP 服务器自带的使用说明。想让它记得用，在个人偏好或项目说明里贴这段：
+
+```
+我给你接了 Aelios 记忆连接器，那是你对我的长期记忆。每个新对话先调 wake_up 再回我；我提到以前的人和事，或者你要猜我的事之前，先 recall；我说了新的事、改了主意、许了约定，当场 remember；聊得差不多了调 log_conversation。
+```
+
+- 官方 App 的对话不经过 Aelios，夜里的日记和候选靠助手调 `log_conversation` 交过来；走网关的客户端不用调。
+- 默认只列 9 个常用工具；要 `memory_get`、`memory_export` 这类维护工具，地址后面加 `&tools=all`。
 
 想让 Claude Code 每条消息自动召回、批量写回，用仓库里的 Hook：[`integrations/claude-code/`](./integrations/claude-code/README.md)。
 
@@ -207,11 +217,13 @@ CF 上游：chat 走 compat（全厂商，BYOK）；messages / responses 走各�
 
 ### MCP 工具
 
-`memory_search` `memory_list` `memory_get` `memory_delete` `memory_ingest` `memory_boot` `memory_recall` `memory_upsert` `memory_supersede` `memory_archive` `memory_pin` `glossary_set` `diary_get` `memory_export` `memory_candidates` `memory_review`
+`wake_up` `recall` `remember` `keep_moment` `forget` `learn_word` `read_diary` `log_conversation` `list_memories`
+
+clef 自动审关着时多列 `memory_candidates` `memory_review`；地址加 `&tools=all` 再多列 `memory_get` `memory_export`。旧名字（`memory_boot`、`memory_recall`、`memory_search`、`memory_upsert`、`memory_supersede`、`memory_archive`、`memory_delete`、`memory_ingest`、`memory_pin`、`glossary_set`、`diary_get`、`memory_list`）不再列出，按旧名调用照样能用。
 
 ### 记忆怎么走
 
-写入：助手直写 `memory_upsert`；夜里 cron（`10 20 * * *`）从当天对话抽事实 → 候选由 Cloudflare 的 clef 判记住或放下（`CLEF_AUTO_REVIEW`，默认开；关掉后候选留给人工，或让助手用 MCP 的 `memory_candidates`、`memory_review` 自己审），并写日记 / 周记 / 月记。
+写入：助手直写 `remember`；夜里 cron（`10 20 * * *`）从当天对话抽事实 → 候选由 Cloudflare 的 clef 判记住或放下（`CLEF_AUTO_REVIEW`，默认开；关掉后候选留给人工，或让助手用 MCP 的 `memory_candidates`、`memory_review` 自己审），并写日记 / 周记 / 月记。
 
 召回：最后一句用户话 → 向量搜索 + 词面 → 原文片段批量重排 + 规则 → 把干净原文贴到当前消息末尾。默认不调用生成式 LLM，日常最多一条，回答旧事最多两条；低分不凑数，重排失败回落词面。分数与取舍可在 `/admin → 设置` 查看。传输信封、哈希和消息 ID 不进入日常提示，同一会话里直接相邻且 90 秒内的两句会合并；主动搜索仍返回完整记录和 ID。日记不自动注入。
 

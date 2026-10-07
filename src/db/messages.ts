@@ -271,6 +271,27 @@ export async function listMessagesByNamespaceInRange(
   return result.results ?? [];
 }
 
+// log_conversation 去重：同一对话里已经存过的 (role, 正文) 不再存第二遍，同一批里重复的也只留一条。
+// 正文按 saveIngestMessages 落库时的同一套清洗比较，空白差异不算不同。
+export async function filterUnsavedMessages(
+  db: D1Database,
+  input: { namespace: string; conversationId: string; messages: OpenAIChatMessage[] }
+): Promise<OpenAIChatMessage[]> {
+  const stored = await db
+    .prepare("SELECT role, content FROM messages WHERE namespace = ? AND conversation_id = ?")
+    .bind(input.namespace, input.conversationId)
+    .all<{ role: string; content: string }>();
+  const seen = new Set((stored.results ?? []).map((row) => `${row.role}\n${normalizeContent(row.content)}`));
+  const fresh: OpenAIChatMessage[] = [];
+  for (const message of input.messages) {
+    const key = `${message.role}\n${normalizeContent(cleanMessageText(contentToText(message.content)))}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fresh.push(message);
+  }
+  return fresh;
+}
+
 export async function saveIngestMessages(
   db: D1Database,
   input: {

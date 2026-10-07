@@ -131,11 +131,21 @@ One assistant can write to one space and read from several. A fresh conversation
 
 Skip all of that and memory recall + the overnight Dream still work (via Workers AI).
 
-**MCP memory for Claude Code / Codex**:
+**MCP memory for the Claude app (web and mobile), Claude Code and Codex**:
 
 ```text
 https://<Worker address>/mcp?token=<CHATBOX_API_KEY>
 ```
+
+- Claude app: add a custom connector on the connectors page (claude.ai/customize/connectors) with the address above. Once it is added on the web it shows up in the mobile app too. Under tool permissions, set the read-only group to "Always allow", or every recall asks first.
+- The Claude app does not read the usage notes an MCP server sends. To make it remember to use the memory, paste this into your personal preferences or project instructions:
+
+```text
+You have the Aelios memory connector: it is your long-term memory of me. In every new conversation, call wake_up before you reply. Before answering anything about my past or the people in my life, or before guessing something about me, call recall. When I tell you something new, change my mind or make a promise, call remember right away. When the conversation winds down, call log_conversation.
+```
+
+- Conversations in the Claude app do not pass through Aelios, so the nightly diary and candidates only see what the assistant hands over with `log_conversation`. Clients that go through the gateway don't need it.
+- Only the nine everyday tools are listed by default. For maintenance tools such as `memory_get` and `memory_export`, add `&tools=all` to the address.
 
 For automatic per-message recall and batch write-back in Claude Code, use the Hook in this repo: [`integrations/claude-code/`](integrations/claude-code/README.md).
 
@@ -200,11 +210,13 @@ Everything except `/health` and `/admin` requires `Authorization: Bearer <key>`.
 
 ### MCP tools
 
-`memory_search` `memory_list` `memory_get` `memory_delete` `memory_ingest` `memory_boot` `memory_recall` `memory_upsert` `memory_supersede` `memory_archive` `memory_pin` `glossary_set` `diary_get` `memory_export` `memory_candidates` `memory_review`
+`wake_up` `recall` `remember` `keep_moment` `forget` `learn_word` `read_diary` `log_conversation` `list_memories`
+
+With the clef review switched off, `memory_candidates` and `memory_review` are listed too; `&tools=all` on the address adds `memory_get` and `memory_export`. The old names (`memory_boot`, `memory_recall`, `memory_search`, `memory_upsert`, `memory_supersede`, `memory_archive`, `memory_delete`, `memory_ingest`, `memory_pin`, `glossary_set`, `diary_get`, `memory_list`) are no longer listed but still work when called.
 
 ### How memory flows
 
-**Writes:** assistants write directly via `memory_upsert`; a nightly cron (`10 20 * * *`) extracts facts from the day's conversations → each candidate is judged remember-or-let-go by Cloudflare's clef decision model (`CLEF_AUTO_REVIEW`, on by default; switched off, candidates wait for you, or the assistant reviews them itself with the MCP tools `memory_candidates` and `memory_review`), and writes diary / weekly / monthly entries.
+**Writes:** assistants write directly via `remember`; a nightly cron (`10 20 * * *`) extracts facts from the day's conversations → each candidate is judged remember-or-let-go by Cloudflare's clef decision model (`CLEF_AUTO_REVIEW`, on by default; switched off, candidates wait for you, or the assistant reviews them itself with the MCP tools `memory_candidates` and `memory_review`), and writes diary / weekly / monthly entries.
 
 **Recall:** your latest message → vector search + lexical match → batch rerank of original passages + rules → the clean original text is tucked onto the end of the current message. No generative LLM by default: at most one memory on a normal turn, two when answering about the past; low scores are never padded in. Rerank failures fall back to lexical. Scores and trade-offs are visible in `/admin → Settings`. Transport envelopes, hashes, and message IDs never enter the daily prompt; two adjacent messages within 90 seconds in one session are merged. Active search still returns full records and IDs. Diaries are not auto-injected.
 

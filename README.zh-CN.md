@@ -12,11 +12,11 @@
 
 ### 1. 部署
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wusaki0723/Aelios)
+先 Fork 本仓库，再部署你的 Fork。这样以后每次更新都只要点一下（见[更新到最新版](#更新到最新版)）。
 
-点按钮，登录 Cloudflare。表单里**只必填** `CHATBOX_API_KEY`：自己编一个密码，比如 `sk-my-aelios`。其余可以空着。
-
-Vectorize 那栏照抄：Dimensions `1024`，Metric `cosine`。构建命令 `npm ci`，部署命令 `npm run deploy`。
+1. 点本页右上角的 **Fork**。
+2. 在 Cloudflare 后台进 **Workers & Pages → Create → Import a repository**，连上 GitHub，选你的 Fork。项目名保持 `companion-memory-proxy`，构建命令 `npm ci`，部署命令 `npm run deploy`。部署命令会自己建好 D1 数据库、Vectorize 索引和队列。
+3. 部署好以后，进 Worker 的 **Settings → Variables and Secrets**，加 Secret `CHATBOX_API_KEY`：自己编一个密码，比如 `sk-my-aelios`。只有这一个必填，其余可选的钥匙见 [SECRETS.md](SECRETS.md)。
 
 部署完会得到一个地址，类似：
 
@@ -24,7 +24,11 @@ Vectorize 那栏照抄：Dimensions `1024`，Metric `cosine`。构建命令 `npm
 https://companion-memory-proxy.<你的子域>.workers.dev
 ```
 
-想自己掌控每一步的话：Fork 本仓库 → Cloudflare Workers 连上 GitHub → 构建 `npm ci`、部署 `npm run deploy` → 在 Worker Settings 里加 Secret `CHATBOX_API_KEY`。不要用裸 `wrangler deploy`，那样不会建库。
+不要用裸 `wrangler deploy`，那样不会建库。
+
+**不推荐：一键部署按钮。** [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wusaki0723/Aelios)
+
+按钮能用，但 Cloudflare 是把本仓库复制一份到你账号里的新仓库，不是 Fork。复制品在 GitHub 上没有 Sync fork，以后每次更新都得手动把新代码拉过去。实在要用的话：表单里只必填 `CHATBOX_API_KEY`；Vectorize 那栏照抄 Dimensions `1024`、Metric `cosine`；构建命令 `npm ci`，部署命令 `npm run deploy`。已经用按钮装好了？看[用按钮装的怎么办](#用按钮装的怎么办)。
 
 ### 2. 加一个助手
 
@@ -68,6 +72,28 @@ API Key 一律填 `CHATBOX_API_KEY`。模型名写成 `厂商/模型`，比如 `
 不带助手名的 `/v1` 会走这把钥匙的第一个助手。
 
 试一句：「请记住：我的测试暗号是苹果星星-0428。」过一会儿再问：「我的测试暗号是什么？」答出来就通了。
+
+## 更新到最新版
+
+GitHub 不会自己更新 Fork。有新版本时：
+
+1. 在 GitHub 打开你的 Fork，点 **Sync fork → Update branch**。
+2. Cloudflare 看到新提交会自己构建、部署，进度在 Worker 的 **Deployments** 里看得到。
+
+记忆、设置、助手和钥匙都存在你的 Cloudflare 账号里，不在仓库里，同步不会丢。改设置请在 `/admin` 里改，别去改 Fork 里的文件，这样 Sync fork 一直是点一下就好，不会冲突。
+
+想让它自动同步？[Pull](https://github.com/apps/pull) 这个 App 能定时帮 Fork 同步。但那样每个新版本都会不经你看就直接上线，包括数据库迁移；而且 Pull 默认把你的 Fork 硬重置成本仓库，你自己的提交会被丢掉。推荐手动点同步。
+
+### 用按钮装的怎么办
+
+按钮装出来的是复制品，不是 Fork，没有 Sync fork。把 Worker 换到 Fork 上就好，记忆和设置都在 Cloudflare 里，不会动。
+
+1. Fork 本仓库。
+2. 如果你当时在按钮的设置页改过 D1 数据库或 Vectorize 索引的名字：进 Worker 的 **Settings → Build → Build Variables and Secrets**，加 `CMP_D1_NAME` 和 `CMP_VECTORIZE_NAME`，填你改过的名字。不加的话，构建会新建两个空的，记忆看起来像没了（其实还在旧库里）。
+3. 在 **Settings → Build** 点 **Disconnect**，再点 **Connect** 选你的 Fork，构建命令 `npm ci`，部署命令 `npm run deploy`。
+4. 如果 Cloudflare 往你的 Fork 提了一个修 Worker 名字的 PR，合掉它。
+
+之后 Cloudflare 会在你的 Fork 有变化时从它构建，所以下次点 Sync fork 就更新上来了。在那之前 Worker 继续跑现在的版本。
 
 ## 平时怎么管
 

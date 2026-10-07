@@ -1105,6 +1105,10 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
                 </span>
                 <span class="chev" :class="idn._open ? 'is-open' : ''">${CHEVRON}</span>
               </button>
+              <div x-show="gwSpaceHint(idn)" class="flex items-center justify-between gap-3 border-t border-zinc-800 px-3 py-2">
+                <p class="min-w-0 text-[11px] leading-5 text-zinc-400" x-text="gwSpaceHint(idn) && gwSpaceHint(idn).text"></p>
+                <button type="button" @click="gwUseSpace(idn)" class="tap shrink-0 rounded-xl border border-coral px-3 text-xs text-coral transition hover:bg-coral hover:text-zinc-950" x-text="gwSpaceHint(idn) && ('改用 ' + gwSpaceHint(idn).space)"></button>
+              </div>
               <div x-show="idn._open" class="space-y-3 border-t border-zinc-800 p-3">
                 <label class="block text-xs text-zinc-400">名字（接入地址里的路径）
                   <input x-model="idn.slug" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="如 coder">
@@ -1122,6 +1126,10 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
                   <input x-model="idn.modelsText" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="如 anthropic/claude-opus-5, *fable*">
                 </label>
                 <p class="-mt-1 text-[11px] leading-5 text-zinc-500">只有主模型的对话有记忆、进 Dream。</p>
+                <label class="block text-xs text-zinc-400">记忆存在哪个空间
+                  <input x-model="idn.namespace" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="留空就用名字">
+                </label>
+                <p class="-mt-1 text-[11px] leading-5 text-zinc-500">MCP 和 Claude Code 钩子没指定时都用 default。想和它们共用一份记忆，就填 default。</p>
                 <div>
                   <p class="text-xs text-zinc-400">能用哪些钥匙接入</p>
                   <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-2">
@@ -1131,10 +1139,7 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
                   </div>
                 </div>
                 <details>
-                  <summary class="cursor-pointer text-xs text-zinc-500">记忆空间、思考块</summary>
-                  <label class="mt-2 block text-xs text-zinc-400">写入空间
-                    <input x-model="idn.namespace" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="留空与名字同名">
-                  </label>
+                  <summary class="cursor-pointer text-xs text-zinc-500">召回空间、思考块</summary>
                   <label class="mt-2 block text-xs text-zinc-400">召回空间
                     <input x-model="idn.readNamespacesText" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="逗号分隔;留空只读写入空间;[] 不召回">
                   </label>
@@ -1341,6 +1346,7 @@ function memoryAdmin() {
     ],
     gwAddress: '',
     gwIdentities: [],
+    gwSpaces: [],
     gwGroups: [],
     gwSecrets: [],
     gwBusy: false,
@@ -1491,6 +1497,24 @@ function memoryAdmin() {
     gwGroupOpen(group) { return !!this.gwQuery.trim() || !!this.gwOpen[group]; },
     gwIdentityTitle(idn) {
       return (idn.assistantName || '').trim() || (idn.slug || '').trim() || '新助手';
+    },
+    // 这个助手的写入空间还没有记忆，而别的空间（没被其他助手占着的）有，就提醒一句，点一下改过去。
+    gwSpaceHint(idn) {
+      const write = (idn.namespace || '').trim() || (idn.slug || '').trim();
+      if (!write || !this.gwSpaces.length) return null;
+      if (this.gwSpaces.some(function(space) { return space.namespace === write && space.memories > 0; })) return null;
+      const others = this.gwIdentities.filter(function(other) { return other !== idn; }).map(function(other) {
+        return (other.namespace || '').trim() || (other.slug || '').trim();
+      });
+      const free = this.gwSpaces.find(function(space) {
+        return space.memories > 0 && space.namespace !== write && !others.includes(space.namespace);
+      });
+      if (!free) return null;
+      return { space: free.namespace, text: '「' + write + '」里还没有记忆，' + free.namespace + ' 里有 ' + free.memories + ' 条。' };
+    },
+    gwUseSpace(idn) {
+      const hint = this.gwSpaceHint(idn);
+      if (hint) idn.namespace = hint.space;
     },
     gwIdentitySummary(idn) {
       const slug = (idn.slug || '').trim();
@@ -1741,6 +1765,8 @@ function memoryAdmin() {
             _open: false
           };
         });
+        // 各空间的记忆条数只用来提醒，读不到不影响别的。
+        try { this.gwSpaces = (await this.request('/api/gateway/spaces')).spaces || []; } catch { this.gwSpaces = []; }
         const envData = await this.request('/api/gateway/env');
         (envData.groups || []).forEach(function(g) {
           g.items.forEach(function(item) { item.value = item.value || ''; item.saved = item.value; item.busy = false; });
@@ -1761,7 +1787,9 @@ function memoryAdmin() {
       return this.gwLoad(true);
     },
     gwAdd() {
-      this.gwIdentities.push({ slug: '', userName: '', assistantName: '', modelsText: '', namespace: '', readNamespacesText: '', keys: ['CHATBOX_API_KEY'], anthropicThinking: 'passthrough', maxMemoryChars: '', _open: true });
+      // 第一个助手默认跟 MCP、Claude Code 钩子用同一个 default 空间，不然先用过 MCP 的人记忆会分成两份。
+      const namespace = this.gwIdentities.length ? '' : 'default';
+      this.gwIdentities.push({ slug: '', userName: '', assistantName: '', modelsText: '', namespace: namespace, readNamespacesText: '', keys: ['CHATBOX_API_KEY'], anthropicThinking: 'passthrough', maxMemoryChars: '', _open: true });
     },
     // 助手和上游要一起改好再存，所以跟线上比一比，有没存的就在底部浮出保存条。
     gwMark() { this.gwSnapshot = JSON.stringify(this.gwPayload()); },

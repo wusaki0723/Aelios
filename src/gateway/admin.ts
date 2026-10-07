@@ -48,6 +48,17 @@ export async function handleGatewayAdmin(request: Request, env: Env): Promise<Re
     return Response.json({ ok: true, identities: config.identities.length, settings: Object.keys(config.settings || {}).length });
   } catch { return Response.json({ error: "Configuration store unavailable. Apply D1 migrations first." }, { status: 503 }); }
 }
+/**
+ * 每个空间有多少条在用的记忆。设置页拿它提醒：新助手的写入空间还是空的，记忆其实在 default 等别的空间里。
+ */
+export async function handleGatewaySpaces(request: Request, env: Env): Promise<Response> {
+  if (!await ownerOnly(request, env)) return Response.json({ error: "Owner key required" }, { status: 401 });
+  const rows = await env.DB.prepare(`SELECT namespace, COUNT(*) AS memories FROM memories
+    WHERE status = 'active' GROUP BY namespace ORDER BY memories DESC, namespace LIMIT 200`)
+    .all<{ namespace: string; memories: number }>();
+  return Response.json({ spaces: (rows.results || []).map(row => ({ namespace: row.namespace, memories: Number(row.memories) })) },
+    { headers: { "cache-control": "no-store" } });
+}
 /** Read-only recall explanations for one configured identity, including empty/error decisions. */
 export async function handleRecallHistory(request: Request, env: Env): Promise<Response> {
   if (!await ownerOnly(request, env)) return Response.json({ error: "Owner key required" }, { status: 401 });

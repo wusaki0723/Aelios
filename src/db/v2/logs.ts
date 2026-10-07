@@ -102,7 +102,7 @@ export async function countKeptDiarySources(
 ): Promise<Map<string, number>> {
   const result = await db
     .prepare(
-      `SELECT d.date AS date, COUNT(m.id) AS kept
+      `SELECT d.date AS date, COUNT(DISTINCT m.id) AS kept
        FROM daily_log d,
          json_each(CASE WHEN json_valid(d.source_message_ids) THEN d.source_message_ids ELSE '[]' END) j
        JOIN messages m ON m.namespace = d.namespace AND m.id = j.value

@@ -94,6 +94,29 @@ test("a very long original is cut in the middle with a marker, keeping head and 
   assert.ok(content.length < 4100);
 });
 
+test("many kept originals share one size budget, and missing counts every cited id", async () => {
+  const ids = Array.from({ length: 120 }, (_, i) => `msg_${i}`);
+  for (const id of ids.slice(0, 10)) message(id, `${id}开头${"话".repeat(3000)}结尾`);
+  memory("m1", "一段很长的对话里的事。", ids);
+  const { source } = (await readSource("m1")).structuredContent.data;
+  assert.equal(source.messages.length, 10);
+  assert.equal(source.missing, 110);
+  const total = source.messages.reduce((sum: number, m: any) => sum + m.content.length, 0);
+  assert.ok(total <= 16_000 + 200, String(total));
+  for (const m of source.messages) assert.match(m.content, /结尾$/);
+});
+
+test("a memory in another assistant's space cannot be traced from this one", async () => {
+  sqlite.prepare(`INSERT INTO memories (id, namespace, type, content, importance, confidence, status, pinned, tags, source,
+    source_message_ids, vector_id, created_at, updated_at, version_status)
+    VALUES ('m-other', 'wangshu', 'fact', '望舒的记忆', 0.7, 0.9, 'active', 0, '[]', 'review', '["msg_w"]', 'v', 't', 't', 'current')`).run();
+  sqlite.prepare(`INSERT INTO messages (id, conversation_id, namespace, role, content, source, created_at)
+    VALUES ('msg_w', 'wangshu:default', 'wangshu', 'user', '只给望舒看的原文', 'test', '2026-10-06T10:00:00.000Z')`).run();
+  const result = await readSource("m-other");
+  assert.equal(result.isError, true);
+  assert.doesNotMatch(JSON.stringify(result), /只给望舒看的原文/);
+});
+
 test("once the originals are gone, the diary that cited them is the source", async () => {
   diary("2026-09-18", "那天她说起搬家的事。", ["msg_x", "msg_y"]);
   diary("2026-09-19", "别的一天。", ["msg_z"]);
@@ -206,7 +229,7 @@ test("if the kept count fails, the admin list leaves it out instead of saying or
   diary("2026-10-06", "最近的日记。", ["msg_kept"]);
   const prepare = db.prepare;
   db.prepare = (sql: string) => {
-    if (sql.includes("COUNT(m.id)")) throw new Error("D1 blip");
+    if (sql.includes("JOIN messages m")) throw new Error("D1 blip");
     return prepare(sql);
   };
   const response = await worker.fetch(new Request("https://aelios.test/admin/diary?limit=30", {

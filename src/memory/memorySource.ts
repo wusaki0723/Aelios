@@ -3,7 +3,7 @@ import { getDailyLog, getWeeklyLog } from "../db/v2";
 import type { MemoryRecord } from "../types";
 import { parseStringArray } from "../utils/parse";
 import { cleanMessageText } from "../utils/sanitize";
-import { clipMiddle } from "./chatMaterial";
+import { clipMiddle, fitTranscriptTexts } from "./chatMaterial";
 import { withImpressionDisclaimer } from "./impression";
 import { getIsoWeekLabelForDateLabel } from "./weeklyRollup";
 
@@ -14,6 +14,8 @@ import { getIsoWeekLabelForDateLabel } from "./weeklyRollup";
 // 原文保留期不因为这里变长：放大只是把还留着的东西找出来。
 
 const SOURCE_MESSAGE_MAX_CHARS = 4000;
+// 一次最多给这么多字原文，挂的原文多时按最长的先压，别让一次工具结果吃掉一大截上下文。
+const SOURCE_TOTAL_MAX_CHARS = 16_000;
 // D1 一条语句最多绑 100 个参数，namespace 占 1 个。
 const SOURCE_ID_LIMIT = 90;
 
@@ -110,20 +112,25 @@ export async function traceMemorySource(
   input: { namespace: string; memory: MemoryRecord; timeZone: string }
 ): Promise<MemorySource> {
   const { namespace, memory } = input;
-  const ids = [...new Set(parseStringArray(memory.source_message_ids))].slice(0, SOURCE_ID_LIMIT);
+  const allIds = [...new Set(parseStringArray(memory.source_message_ids))];
+  const ids = allIds.slice(0, SOURCE_ID_LIMIT);
   if (ids.length === 0) return { kind: "none", reason: "no_sources" };
 
   const kept = await getMessagesByIds(db, { namespace, ids });
   if (kept.length > 0) {
+    const contents = fitTranscriptTexts(
+      kept.map((message) => clipMiddle(cleanMessageText(message.content), SOURCE_MESSAGE_MAX_CHARS)),
+      { budget: SOURCE_TOTAL_MAX_CHARS, floor: 500 }
+    );
     return {
       kind: "messages",
-      messages: kept.map((message) => ({
+      messages: kept.map((message, i) => ({
         id: message.id,
         role: message.role,
         created_at: message.created_at,
-        content: clipMiddle(cleanMessageText(message.content), SOURCE_MESSAGE_MAX_CHARS)
+        content: contents[i]
       })),
-      missing: ids.length - kept.length
+      missing: allIds.length - kept.length
     };
   }
 

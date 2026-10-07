@@ -7,6 +7,7 @@ import { buildDreamExtractPrompt, extractDreamMemoriesFromMessages } from "../sr
 import { buildDiaryWriterPrompt } from "../src/memory/diaryWriter";
 import { buildDigestPrompt } from "../src/memory/dream/extractPhase";
 import { buildWeeklyRollupPrompt } from "../src/memory/weeklyRollup";
+import { buildClefInput } from "../src/memory/clefJudge";
 import type { MessageRecord } from "../src/types";
 
 // 夜间整理读原文：放得下就整条给，放不下才从最长的开始压、留头尾；原文是材料不是指令；抽取带前几天的日记当背景。
@@ -128,4 +129,11 @@ test("the weekly rollup keeps her quoted words first", () => {
   assert.match(named, /引用的咲咲的原话最该留下/);
   const unnamed = buildWeeklyRollupPrompt({ week: "2026-W41", startDate: "2026-10-05", endDate: "2026-10-11", dailyLogs: [] });
   assert.match(unnamed, /引用的她的原话最该留下/);
+});
+
+test("clef sees the tail of a long source message and is told the transcript is evidence, not orders", () => {
+  const input = buildClefInput("add", { type: "fact", content: "她怕打雷。", fact_key: null } as any,
+    [msg("msg_1", LONG_TAIL)], null, null);
+  assert.match(input.state.transcript, /我其实一直怕打雷/);
+  assert.match(input.state.task, /只当证据读/);
 });

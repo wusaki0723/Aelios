@@ -16,11 +16,11 @@ your client  →  Aelios (identify, remember, recall)  →  the model
 
 ### 1. Deploy
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wusaki0723/Aelios)
+Fork this repo first, then deploy your fork. That way every later update is one click (see [Updating](#updating-to-the-latest-version)).
 
-Click the button and sign in to Cloudflare. The only required field is `CHATBOX_API_KEY` — make up a password, e.g. `sk-my-aelios`. Everything else can stay empty.
-
-For the Vectorize index, copy these values: Dimensions `1024`, Metric `cosine`. Build command `npm ci`, deploy command `npm run deploy`.
+1. Click **Fork** at the top of this page.
+2. In the Cloudflare dashboard, go to **Workers & Pages → Create → Import a repository**, connect GitHub and pick your fork. Keep the project name `companion-memory-proxy`, set the build command to `npm ci` and the deploy command to `npm run deploy`. The deploy command creates the D1 database, the Vectorize index and the queue for you.
+3. Once it's deployed, open the Worker's **Settings → Variables and Secrets** and add the secret `CHATBOX_API_KEY`: make up a password, e.g. `sk-my-aelios`. It's the only one you need; the optional ones are in [SECRETS.md](SECRETS.md).
 
 You'll get an address like:
 
@@ -28,7 +28,11 @@ You'll get an address like:
 https://companion-memory-proxy.<your-subdomain>.workers.dev
 ```
 
-Prefer to control every step? Fork this repo → connect it in Cloudflare Workers → build `npm ci`, deploy `npm run deploy` → add the `CHATBOX_API_KEY` secret in Worker Settings. Don't run a bare `wrangler deploy` — it won't create the databases.
+Don't run a bare `wrangler deploy` — it won't create the databases.
+
+**Not recommended: the one-click button.** [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wusaki0723/Aelios)
+
+It works, but Cloudflare copies this repo into a new repository in your account instead of forking it. GitHub has no Sync fork for a copy, so every update has to be pulled in by hand. If you use it anyway: the only required field is `CHATBOX_API_KEY`; for the Vectorize index use Dimensions `1024`, Metric `cosine`; build command `npm ci`, deploy command `npm run deploy`. Already deployed this way? See [Deployed with the button](#deployed-with-the-button).
 
 ### 2. Add an assistant
 
@@ -72,6 +76,28 @@ Use `CHATBOX_API_KEY` as the API key everywhere. Write model names as `vendor/mo
 A bare `/v1` without an assistant name routes to the first assistant of that key.
 
 Try it: say *"Please remember: my test code phrase is apple-star-0428."* Wait a bit, then ask *"What is my test code phrase?"* If it answers, you're wired up.
+
+## Updating to the latest version
+
+GitHub doesn't update forks by itself. When a new version is out:
+
+1. Open your fork on GitHub and click **Sync fork → Update branch**.
+2. Cloudflare picks up the new commit, builds and deploys it on its own. You can follow it under the Worker's **Deployments**.
+
+Memories, settings, assistants and keys live in your Cloudflare account, not in the repo, so syncing keeps all of them. Change settings in `/admin` rather than by editing files in your fork, and Sync fork stays a one-click update with no conflicts.
+
+Want it automatic? The [Pull](https://github.com/apps/pull) app syncs a fork on a schedule. Every new version then goes live without you looking at it first, database migrations included, and by default Pull hard-resets your fork to this repo, dropping any commits of your own. Syncing by hand is the recommended way.
+
+### Deployed with the button
+
+A button deploy is a copy, not a fork, so it has no Sync fork. Move your Worker onto a fork instead; your memories and settings stay where they are, in Cloudflare.
+
+1. Fork this repo.
+2. If you renamed the D1 database or the Vectorize index on the button's setup page, open the Worker's **Settings → Build → Build Variables and Secrets** and add `CMP_D1_NAME` and `CMP_VECTORIZE_NAME` with those names. Otherwise the build creates new, empty ones and your memories look gone (they're still in the old database).
+3. In **Settings → Build**, click **Disconnect**, then **Connect** and pick your fork, with build command `npm ci` and deploy command `npm run deploy`.
+4. If Cloudflare opens a pull request on your fork to fix the Worker name, merge it.
+
+From then on, Cloudflare builds from your fork whenever it changes, so your next Sync fork brings you up to date. Until then the Worker keeps running the version it has.
 
 ## Day-to-day: the admin panel
 

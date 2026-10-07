@@ -11,7 +11,7 @@ import { handleHealth } from "./api/health";
 import { handleVectorBackfill, handleVectorDoctor, handleVectorHealth, handleVectorReindex } from "./api/debug";
 import { handleDreamHarvest, handleDreamRun, handleDreamStatus } from "./api/dream";
 import { handleGateway } from "./gateway/handler";
-import { handleGatewayAdmin, handleGatewayEnv, handleRecallHistory } from "./gateway/admin";
+import { handleGatewayAdmin, handleGatewayEnv, handleGatewaySpaces, handleRecallHistory } from "./gateway/admin";
 import { identityNamespace, loadConfig, loadSettings, type Protocol } from "./gateway/config";
 import { applySettings } from "./gateway/settings";
 import { handleGuideDogChatCompletions } from "./api/guideDog";
@@ -96,6 +96,7 @@ export default {
     // The admin endpoints report and edit the deployed values, so they run before the overrides.
     if (url.pathname === "/api/gateway/config") return handleGatewayAdmin(request, deployed);
     if (request.method === "GET" && url.pathname === "/api/gateway/env") return handleGatewayEnv(request, deployed);
+    if (request.method === "GET" && url.pathname === "/api/gateway/spaces") return handleGatewaySpaces(request, deployed);
 
     if (request.method === "GET" && url.pathname === "/api/gateway/recalls") return handleRecallHistory(request, deployed);
 

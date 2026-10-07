@@ -1038,6 +1038,94 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
         </div>
         <p x-show="gwError" class="text-xs text-coral" x-text="gwError"></p>
 
+        <article x-show="savedApiKey.trim()" class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="text-sm font-semibold text-zinc-100">助手和上游</h2>
+              <p class="mt-0.5 text-[11px] text-zinc-500">这块改完点底部的「保存」，一起生效。</p>
+            </div>
+            <button type="button" @click="gwAdd()" class="tap shrink-0 rounded-2xl border border-zinc-800 px-3 text-xs text-zinc-400 transition duration-150 ease-in-out hover:border-coral hover:text-zinc-100">+ 添加助手</button>
+          </div>
+          <template x-for="(idn, i) in gwIdentities" :key="i">
+            <div class="mt-2 rounded-xl border border-zinc-800 bg-[#0a0a0b]">
+              <button type="button" @click="idn._open = !idn._open" :aria-expanded="idn._open ? 'true' : 'false'" class="tap flex w-full items-center justify-between gap-3 px-3 py-2 text-left">
+                <span class="min-w-0">
+                  <span class="block truncate text-sm text-zinc-100" x-text="gwIdentityTitle(idn)"></span>
+                  <span class="block truncate text-[11px] text-zinc-500" x-text="gwIdentitySummary(idn)"></span>
+                </span>
+                <span class="chev" :class="idn._open ? 'is-open' : ''">${CHEVRON}</span>
+              </button>
+              <div x-show="gwSpaceHint(idn)" class="flex items-center justify-between gap-3 border-t border-zinc-800 px-3 py-2">
+                <p class="min-w-0 text-[11px] leading-5 text-zinc-400" x-text="gwSpaceHint(idn) && gwSpaceHint(idn).text"></p>
+                <button type="button" @click="gwUseSpace(idn)" class="tap shrink-0 rounded-xl border border-coral px-3 text-xs text-coral transition hover:bg-coral hover:text-zinc-950" x-text="gwSpaceHint(idn) && ('改用 ' + gwSpaceHint(idn).space)"></button>
+              </div>
+              <div x-show="idn._open" class="space-y-3 border-t border-zinc-800 p-3">
+                <label class="block text-xs text-zinc-400">名字（接入地址里的路径）
+                  <input x-model="idn.slug" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="如 coder">
+                </label>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="block text-xs text-zinc-400">用户叫什么
+                    <input x-model="idn.userName" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="用户叫什么,如 小南">
+                  </label>
+                  <label class="block text-xs text-zinc-400">助手叫什么
+                    <input x-model="idn.assistantName" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="助手叫什么,如 小北">
+                  </label>
+                </div>
+                <p class="-mt-1 text-[11px] leading-5 text-zinc-500">Dream、日记、周月卷、审核写记忆只用这两个名字，不写「用户/助手」。助手名留空用路径名。</p>
+                <label class="block text-xs text-zinc-400">主模型（逗号分隔，支持 * 通配）
+                  <input x-model="idn.modelsText" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="如 anthropic/claude-opus-5, *fable*">
+                </label>
+                <p class="-mt-1 text-[11px] leading-5 text-zinc-500">只有主模型的对话有记忆、进 Dream。</p>
+                <label class="block text-xs text-zinc-400">记忆存在哪个空间
+                  <input x-model="idn.namespace" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="留空就用名字">
+                </label>
+                <p class="-mt-1 text-[11px] leading-5 text-zinc-500">MCP 和 Claude Code 钩子没指定时都用 default。想和它们共用一份记忆，就填 default。</p>
+                <div>
+                  <p class="text-xs text-zinc-400">能用哪些钥匙接入</p>
+                  <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-2">
+                    <template x-for="k in gwKeyOptions" :key="k.id">
+                      <label class="flex items-center gap-1.5 text-xs text-zinc-400"><input type="checkbox" :value="k.id" x-model="idn.keys" class="h-4 w-4 accent-[#f4a07c]"><span x-text="k.label"></span></label>
+                    </template>
+                  </div>
+                </div>
+                <details>
+                  <summary class="cursor-pointer text-xs text-zinc-500">召回空间、思考块</summary>
+                  <label class="mt-2 block text-xs text-zinc-400">召回空间
+                    <input x-model="idn.readNamespacesText" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="逗号分隔;留空只读写入空间;[] 不召回">
+                  </label>
+                  <p class="mt-1 text-[11px] leading-5 text-zinc-500">最多 8 个，共用注入预算。共享时填同一空间；迁移时写新空间、召回保留旧空间。</p>
+                  <label class="mt-2 block text-xs text-zinc-400">Claude 思考块
+                    <select x-model="idn.anthropicThinking" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral">
+                      <option value="passthrough">原样透传(思考开着时跳过注入)</option>
+                      <option value="drop_block">临时记忆 + 上游丢弃失配思考(需 beta)</option>
+                    </select>
+                  </label>
+                  <label class="mt-2 block text-xs text-zinc-400">单次记忆字数上限
+                    <input x-model="idn.maxMemoryChars" type="number" min="256" max="24000" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="留空默认 6000">
+                  </label>
+                </details>
+                <div class="flex justify-end">
+                  <button type="button" @click="gwIdentities.splice(i, 1)" class="tap rounded-xl border border-zinc-800 px-3 text-xs text-zinc-500 transition hover:border-coral hover:text-zinc-100">移除这个助手</button>
+                </div>
+              </div>
+            </div>
+          </template>
+          <p x-show="!gwIdentities.length && !gwBusy" class="mt-2 text-xs text-zinc-500">还没有助手，点「添加助手」。</p>
+          <div class="mt-2 rounded-xl border border-zinc-800 bg-[#0a0a0b]">
+            <button type="button" @click="gwToggle('上游')" :aria-expanded="gwIsOpen('上游') ? 'true' : 'false'" class="tap flex w-full items-center justify-between gap-3 px-3 py-2 text-left">
+              <span class="min-w-0">
+                <span class="block text-sm text-zinc-100">上游地址</span>
+                <span class="block truncate text-[11px] text-zinc-500" x-text="gwAddress.trim() || '未设置'"></span>
+              </span>
+              <span class="chev" :class="gwIsOpen('上游') ? 'is-open' : ''">${CHEVRON}</span>
+            </button>
+            <div x-show="gwIsOpen('上游')" class="border-t border-zinc-800 p-3">
+              <input x-model="gwAddress" aria-label="上游地址" class="h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="CF 账号 ID(32 位),或完整地址,如 new-api 的 https://…/v1">
+              <p class="mt-1 text-[11px] leading-5 text-zinc-500">chat 走 compat,全 provider;messages / responses 走各 provider 原生端点,模型名带 provider/ 前缀;模型列表走 compat 目录。BYOK 钥匙在 AI Gateway 仪表盘;CF 令牌去 Worker Secrets 加 CLOUDFLARE_API_TOKEN。Gateway ID 在「全部设置 → 模型与线路」里,默认 default。</p>
+            </div>
+          </div>
+        </article>
+
         <article x-show="savedApiKey.trim() && !gwQuery.trim()" class="rounded-2xl border border-zinc-800 bg-zinc-900 px-4 pb-1 pt-4 shadow-sm">
           <h2 class="text-sm font-semibold text-zinc-100">常用</h2>
           <p x-show="gwBusy && !gwGroups.length" class="py-3 text-xs text-zinc-400">读取中…</p>
@@ -1084,89 +1172,6 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
               <template x-for="s in gwSecrets" :key="s.label">
                 <p class="mt-1.5 text-xs" :class="s.present ? 'text-zinc-100' : 'text-zinc-500'" x-text="(s.present ? '✓ ' : '— ') + s.label"></p>
               </template>
-            </div>
-          </div>
-        </article>
-
-        <article x-show="savedApiKey.trim()" class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <h2 class="text-sm font-semibold text-zinc-100">助手和上游</h2>
-              <p class="mt-0.5 text-[11px] text-zinc-500">这块改完点底部的「保存」，一起生效。</p>
-            </div>
-            <button type="button" @click="gwAdd()" class="tap shrink-0 rounded-2xl border border-zinc-800 px-3 text-xs text-zinc-400 transition duration-150 ease-in-out hover:border-coral hover:text-zinc-100">+ 添加助手</button>
-          </div>
-          <template x-for="(idn, i) in gwIdentities" :key="i">
-            <div class="mt-2 rounded-xl border border-zinc-800 bg-[#0a0a0b]">
-              <button type="button" @click="idn._open = !idn._open" :aria-expanded="idn._open ? 'true' : 'false'" class="tap flex w-full items-center justify-between gap-3 px-3 py-2 text-left">
-                <span class="min-w-0">
-                  <span class="block truncate text-sm text-zinc-100" x-text="gwIdentityTitle(idn)"></span>
-                  <span class="block truncate text-[11px] text-zinc-500" x-text="gwIdentitySummary(idn)"></span>
-                </span>
-                <span class="chev" :class="idn._open ? 'is-open' : ''">${CHEVRON}</span>
-              </button>
-              <div x-show="idn._open" class="space-y-3 border-t border-zinc-800 p-3">
-                <label class="block text-xs text-zinc-400">名字（接入地址里的路径）
-                  <input x-model="idn.slug" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="如 coder">
-                </label>
-                <div class="grid grid-cols-2 gap-2">
-                  <label class="block text-xs text-zinc-400">用户叫什么
-                    <input x-model="idn.userName" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="用户叫什么,如 小南">
-                  </label>
-                  <label class="block text-xs text-zinc-400">助手叫什么
-                    <input x-model="idn.assistantName" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="助手叫什么,如 小北">
-                  </label>
-                </div>
-                <p class="-mt-1 text-[11px] leading-5 text-zinc-500">Dream、日记、周月卷、审核写记忆只用这两个名字，不写「用户/助手」。助手名留空用路径名。</p>
-                <label class="block text-xs text-zinc-400">主模型（逗号分隔，支持 * 通配）
-                  <input x-model="idn.modelsText" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="如 anthropic/claude-opus-5, *fable*">
-                </label>
-                <p class="-mt-1 text-[11px] leading-5 text-zinc-500">只有主模型的对话有记忆、进 Dream。</p>
-                <div>
-                  <p class="text-xs text-zinc-400">能用哪些钥匙接入</p>
-                  <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-2">
-                    <template x-for="k in gwKeyOptions" :key="k.id">
-                      <label class="flex items-center gap-1.5 text-xs text-zinc-400"><input type="checkbox" :value="k.id" x-model="idn.keys" class="h-4 w-4 accent-[#f4a07c]"><span x-text="k.label"></span></label>
-                    </template>
-                  </div>
-                </div>
-                <details>
-                  <summary class="cursor-pointer text-xs text-zinc-500">记忆空间、思考块</summary>
-                  <label class="mt-2 block text-xs text-zinc-400">写入空间
-                    <input x-model="idn.namespace" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="留空与名字同名">
-                  </label>
-                  <label class="mt-2 block text-xs text-zinc-400">召回空间
-                    <input x-model="idn.readNamespacesText" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="逗号分隔;留空只读写入空间;[] 不召回">
-                  </label>
-                  <p class="mt-1 text-[11px] leading-5 text-zinc-500">最多 8 个，共用注入预算。共享时填同一空间；迁移时写新空间、召回保留旧空间。</p>
-                  <label class="mt-2 block text-xs text-zinc-400">Claude 思考块
-                    <select x-model="idn.anthropicThinking" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral">
-                      <option value="passthrough">原样透传(思考开着时跳过注入)</option>
-                      <option value="drop_block">临时记忆 + 上游丢弃失配思考(需 beta)</option>
-                    </select>
-                  </label>
-                  <label class="mt-2 block text-xs text-zinc-400">单次记忆字数上限
-                    <input x-model="idn.maxMemoryChars" type="number" min="256" max="24000" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="留空默认 6000">
-                  </label>
-                </details>
-                <div class="flex justify-end">
-                  <button type="button" @click="gwIdentities.splice(i, 1)" class="tap rounded-xl border border-zinc-800 px-3 text-xs text-zinc-500 transition hover:border-coral hover:text-zinc-100">移除这个助手</button>
-                </div>
-              </div>
-            </div>
-          </template>
-          <p x-show="!gwIdentities.length && !gwBusy" class="mt-2 text-xs text-zinc-500">还没有助手，点「添加助手」。</p>
-          <div class="mt-2 rounded-xl border border-zinc-800 bg-[#0a0a0b]">
-            <button type="button" @click="gwToggle('上游')" :aria-expanded="gwIsOpen('上游') ? 'true' : 'false'" class="tap flex w-full items-center justify-between gap-3 px-3 py-2 text-left">
-              <span class="min-w-0">
-                <span class="block text-sm text-zinc-100">上游地址</span>
-                <span class="block truncate text-[11px] text-zinc-500" x-text="gwAddress.trim() || '未设置'"></span>
-              </span>
-              <span class="chev" :class="gwIsOpen('上游') ? 'is-open' : ''">${CHEVRON}</span>
-            </button>
-            <div x-show="gwIsOpen('上游')" class="border-t border-zinc-800 p-3">
-              <input x-model="gwAddress" aria-label="上游地址" class="h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral" placeholder="CF 账号 ID(32 位),或完整地址,如 new-api 的 https://…/v1">
-              <p class="mt-1 text-[11px] leading-5 text-zinc-500">chat 走 compat,全 provider;messages / responses 走各 provider 原生端点,模型名带 provider/ 前缀;模型列表走 compat 目录。BYOK 钥匙在 AI Gateway 仪表盘;CF 令牌去 Worker Secrets 加 CLOUDFLARE_API_TOKEN。Gateway ID 在「全部设置 → 模型与线路」里,默认 default。</p>
             </div>
           </div>
         </article>
@@ -1341,6 +1346,7 @@ function memoryAdmin() {
     ],
     gwAddress: '',
     gwIdentities: [],
+    gwSpaces: [],
     gwGroups: [],
     gwSecrets: [],
     gwBusy: false,
@@ -1491,6 +1497,24 @@ function memoryAdmin() {
     gwGroupOpen(group) { return !!this.gwQuery.trim() || !!this.gwOpen[group]; },
     gwIdentityTitle(idn) {
       return (idn.assistantName || '').trim() || (idn.slug || '').trim() || '新助手';
+    },
+    // 这个助手的写入空间还没有记忆，而别的空间（没被其他助手占着的）有，就提醒一句，点一下改过去。
+    gwSpaceHint(idn) {
+      const write = (idn.namespace || '').trim() || (idn.slug || '').trim();
+      if (!write || !this.gwSpaces.length) return null;
+      if (this.gwSpaces.some(function(space) { return space.namespace === write && space.memories > 0; })) return null;
+      const others = this.gwIdentities.filter(function(other) { return other !== idn; }).map(function(other) {
+        return (other.namespace || '').trim() || (other.slug || '').trim();
+      });
+      const free = this.gwSpaces.find(function(space) {
+        return space.memories > 0 && space.namespace !== write && !others.includes(space.namespace);
+      });
+      if (!free) return null;
+      return { space: free.namespace, text: '「' + write + '」里还没有记忆，' + free.namespace + ' 里有 ' + free.memories + ' 条。' };
+    },
+    gwUseSpace(idn) {
+      const hint = this.gwSpaceHint(idn);
+      if (hint) idn.namespace = hint.space;
     },
     gwIdentitySummary(idn) {
       const slug = (idn.slug || '').trim();
@@ -1741,6 +1765,8 @@ function memoryAdmin() {
             _open: false
           };
         });
+        // 各空间的记忆条数只用来提醒，读不到不影响别的。
+        try { this.gwSpaces = (await this.request('/api/gateway/spaces')).spaces || []; } catch { this.gwSpaces = []; }
         const envData = await this.request('/api/gateway/env');
         (envData.groups || []).forEach(function(g) {
           g.items.forEach(function(item) { item.value = item.value || ''; item.saved = item.value; item.busy = false; });
@@ -1761,7 +1787,9 @@ function memoryAdmin() {
       return this.gwLoad(true);
     },
     gwAdd() {
-      this.gwIdentities.push({ slug: '', userName: '', assistantName: '', modelsText: '', namespace: '', readNamespacesText: '', keys: ['CHATBOX_API_KEY'], anthropicThinking: 'passthrough', maxMemoryChars: '', _open: true });
+      // 第一个助手默认跟 MCP、Claude Code 钩子用同一个 default 空间，不然先用过 MCP 的人记忆会分成两份。
+      const namespace = this.gwIdentities.length ? '' : 'default';
+      this.gwIdentities.push({ slug: '', userName: '', assistantName: '', modelsText: '', namespace: namespace, readNamespacesText: '', keys: ['CHATBOX_API_KEY'], anthropicThinking: 'passthrough', maxMemoryChars: '', _open: true });
     },
     // 助手和上游要一起改好再存，所以跟线上比一比，有没存的就在底部浮出保存条。
     gwMark() { this.gwSnapshot = JSON.stringify(this.gwPayload()); },

@@ -343,3 +343,42 @@ test('assistant edits raise the save bar until saved or discarded', async () => 
   assert.equal(sent[0].settings, undefined);
   assert.equal(app.gwDirty(), false);
 });
+
+test('a new assistant shares the default space unless told otherwise, and an empty space points at the memories', async () => {
+  const { app } = panel();
+  let identities: any[] = [];
+  const sent: any[] = [];
+  app.request = async (path: string, options: any = {}) => {
+    if (path === '/api/gateway/config' && options.method === 'PATCH') { sent.push(JSON.parse(options.body)); return { ok: true }; }
+    if (path === '/api/gateway/config') return { identities };
+    if (path === '/api/gateway/spaces') return { spaces: [{ namespace: 'default', memories: 312 }, { namespace: 'ning', memories: 40 }] };
+    if (path === '/api/gateway/env') return { groups: [], secrets: [] };
+    return { data: [] };
+  };
+  await app.gwLoad();
+  // The first assistant writes where MCP and the Claude Code hook write; the next one gets its own space.
+  app.gwAdd();
+  app.gwAdd();
+  assert.deepEqual(app.gwIdentities.map((idn: any) => idn.namespace), ['default', '']);
+  assert.match(ADMIN_HTML, /记忆存在哪个空间/);
+
+  // An assistant saved with its own, still empty space is pointed at the unclaimed one that has memories.
+  identities = [{ slug: 'Claude', keys: ['CHATBOX_API_KEY'], models: ['*claude*'] },
+    { slug: 'ningjiao', namespace: 'ning', keys: ['CHATBOX_API_KEY'], models: ['*'] }];
+  await app.gwLoad();
+  const [claude, ning] = app.gwIdentities;
+  assert.equal(app.gwSpaceHint(claude).text, '「Claude」里还没有记忆，default 里有 312 条。');
+  assert.equal(app.gwSpaceHint(ning), null);
+  app.gwUseSpace(claude);
+  assert.equal(claude.namespace, 'default');
+  assert.equal(app.gwSpaceHint(claude), null);
+  await app.gwSave();
+  assert.equal(sent[0].identities[0].namespace, 'default');
+
+  // A space another assistant already writes to is never suggested.
+  identities = [{ slug: 'Claude', keys: ['CHATBOX_API_KEY'], models: ['*'] },
+    { slug: 'danjiu', namespace: 'default', keys: ['CHATBOX_API_KEY'], models: ['*'] },
+    { slug: 'ningjiao', namespace: 'ning', keys: ['CHATBOX_API_KEY'], models: ['*'] }];
+  await app.gwLoad();
+  assert.equal(app.gwSpaceHint(app.gwIdentities[0]), null);
+});

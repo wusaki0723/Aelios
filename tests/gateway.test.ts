@@ -1078,3 +1078,16 @@ test("keeping a candidate back to pending does not wipe its target memory link",
   assert.equal(cleared?.target_memory_id, null);
   assert.equal(cleared?.decision_note, "judge: 说不准，留给人工");
 });
+
+test("the settings page can see how many memories each space holds", async () => {
+  const add = sqlite.prepare(`INSERT INTO memories (id, namespace, type, content, status, importance, confidence, created_at, updated_at)
+    VALUES (?, ?, 'fact', ?, ?, 1, 1, '2026-09-06', '2026-09-06')`);
+  add.run("d1", "default", "咲咲住在武汉", "active");
+  add.run("d2", "default", "咲咲喜欢越南咖啡", "active");
+  add.run("d3", "default", "旧的住址", "archived");
+  add.run("p1", "partner", "partner fact", "active");
+  const { response, text } = await run("/api/gateway/spaces");
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(text).spaces, [{ namespace: "default", memories: 2 }, { namespace: "partner", memories: 1 }]);
+  assert.equal((await worker.fetch(request("/api/gateway/spaces", undefined, { authorization: "Bearer im-key" }), env, ctx)).status, 401);
+});

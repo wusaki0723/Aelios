@@ -137,11 +137,23 @@ test("auto binds thinking only on the native Anthropic line and never switches t
     assert.equal(apply(adaptive, mode, true), "thinking-binding-controls-2026-08-01");
     assert.equal(binding(adaptive), "drop_block");
     assert.doesNotThrow(() => validateRequest(adaptive, "messages", new Headers({ "anthropic-beta": "thinking-binding-controls-2026-08-01" })));
+    const enabled: any = { ...base(), thinking: { type: "enabled", budget_tokens: 1024 }, messages: loop() };
+    apply(enabled, mode, true);
+    assert.deepEqual(enabled.thinking, { type: "enabled", budget_tokens: 1024, block_binding: { prefix_mismatch_behavior: "drop_block" } });
     // Unset thinking with signed history: the model already thinks by default, so the block needs binding.
     const unsetWithHistory: any = { ...base(), messages: loop() };
-    apply(unsetWithHistory, mode, true);
+    const headers = new Headers();
+    assert.equal(applyThinkingPolicy(unsetWithHistory, mode === undefined ? {} as any : { anthropicThinking: mode } as any, "messages", headers, true), true);
     assert.equal(unsetWithHistory.thinking.type, "adaptive");
     assert.equal(binding(unsetWithHistory), "drop_block");
+    assert.doesNotThrow(() => validateRequest(unsetWithHistory, "messages", headers));
+  }
+  // A temperature or forced tool means the client is on a model that does not think by default: no guess.
+  for (const extra of [{ temperature: 0.7 }, { tool_choice: { type: "any" }, tools: [{ name: "lookup", input_schema: { type: "object" } }] }]) {
+    const other: any = { ...base(), ...extra, messages: loop() };
+    const before = structuredClone(other);
+    assert.equal(applyThinkingPolicy(other, {} as any, "messages", new Headers(), true), false);
+    assert.deepEqual(other, before);
   }
   // Unset thinking and nothing signed yet: leave the request exactly as the client sent it.
   const fresh: any = base();

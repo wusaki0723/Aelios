@@ -137,22 +137,27 @@ function carriesThinking(body: Body): boolean {
  * Recall rides only on the newest user message, so the next request (a tool continuation, or any later
  * turn) no longer carries it and the upstream answers 400 "The block is bound to a different conversation".
  * `auto` (the default) asks that line to drop mismatched blocks instead; other lines are left alone.
+ * Returns true when auto had to guess a thinking type the client never sent.
  */
 export function applyThinkingPolicy(body: Body, identity: Identity, protocol: Protocol, headers: Headers,
-  nativeAnthropic = false): void {
+  nativeAnthropic = false): boolean {
   const mode = identity.anthropicThinking ?? "auto";
-  if (protocol !== "messages" || mode === "passthrough" || body.thinking?.type === "disabled") return;
-  if (mode === "auto" && !nativeAnthropic) return;
+  if (protocol !== "messages" || mode === "passthrough" || body.thinking?.type === "disabled") return false;
+  if (mode === "auto" && !nativeAnthropic) return false;
   // Invalid client values must reach validation, not be coerced into adaptive.
-  if (body.thinking !== undefined && (!object(body.thinking) || !["enabled", "adaptive"].includes(body.thinking.type))) return;
+  if (body.thinking !== undefined && (!object(body.thinking) || !["enabled", "adaptive"].includes(body.thinking.type))) return false;
   // Whether to think is the client's call. Left unset, only signed history shows the model already
-  // thinks by default, and only then is there a block to bind.
-  if (mode === "auto" && body.thinking === undefined && !carriesThinking(body)) return;
+  // thinks by default, and only then is there a block to bind. A non-default temperature or a forced
+  // tool works only without thinking, so that client is on another model than the one in the history.
+  const guessed = mode === "auto" && body.thinking === undefined;
+  if (guessed && (!carriesThinking(body) || body.temperature !== undefined && body.temperature !== 1 ||
+    ["any", "tool"].includes(body.tool_choice?.type))) return false;
   body.thinking = { type: "adaptive", ...body.thinking,
     block_binding: { ...body.thinking?.block_binding, prefix_mismatch_behavior: "drop_block" } };
   const betas = new Set((headers.get("anthropic-beta") || "").split(",").map(s => s.trim()).filter(Boolean));
   betas.add("thinking-binding-controls-2026-08-01");
   headers.set("anthropic-beta", [...betas].join(","));
+  return guessed;
 }
 // Fingerprints sort object keys without rewriting request payloads.
 export function canonical(value: unknown): string {

@@ -118,7 +118,10 @@ export function nativeAnthropic(route: UpstreamRoute): boolean {
 
 // One call, one upstream. Model names pass through as written (minus the provider
 // prefix on native endpoints); retries and fallback are AI Gateway's own job.
-export interface PreparedRequest { route: UpstreamRoute; headers: Headers; body: Body; removed: string[] }
+export interface PreparedRequest { route: UpstreamRoute; headers: Headers; body: Body; removed: string[];
+  /** Set when auto guessed adaptive thinking; holds the client's own anthropic-beta for the fallback. */
+  guessedThinking?: { beta: string | null };
+}
 export function prepareGatewayRequest(env: Env, config: GatewayConfig, identity: Identity,
   protocol: Protocol, original: Request, body: Body): PreparedRequest {
   const token = env.CLOUDFLARE_API_TOKEN;
@@ -138,11 +141,14 @@ export function prepareGatewayRequest(env: Env, config: GatewayConfig, identity:
   const normalized = normalizeRequest(body, protocol);
   const out = normalized.body;
   out.model = route.model;
-  if (isMainModel(identity, body.model)) applyThinkingPolicy(out, identity, protocol, headers, nativeAnthropic(route));
+  const clientBeta = headers.get("anthropic-beta");
+  const guessed = isMainModel(identity, body.model) &&
+    applyThinkingPolicy(out, identity, protocol, headers, nativeAnthropic(route));
   validateRequest(out, protocol, headers);
   sanitizeCacheControl(out, protocol);
   validateRequest(out, protocol, headers);
-  return { route, headers, body: out, removed: normalized.removed };
+  return { route, headers, body: out, removed: normalized.removed,
+    ...(guessed ? { guessedThinking: { beta: clientBeta } } : {}) };
 }
 // Isolate-scope learned capability: Vertex-backed and relay lines answer 400
 // "unrecognizedProperty=<field>" to tool-definition fields they do not know
@@ -199,6 +205,19 @@ export async function callGatewayUpstream(env: Env, protocol: Protocol, original
     rejectedToolFields.set(route.url, known);
     console.log("gateway learned upstream rejects tool fields", { url: route.url, fields: refused });
     response = await send();
+  }
+  // Signed history made auto guess the model thinks by default. A model that refuses the guess
+  // (haiku-4-5 has no adaptive, e.g. after switching models mid-chat) gets what the client sent.
+  if (response.status === 400 && prepared.guessedThinking) {
+    const detail = await response.clone().text().catch(() => "");
+    if (/thinking/i.test(detail)) {
+      delete body.thinking;
+      const { beta } = prepared.guessedThinking;
+      if (beta) headers.set("anthropic-beta", beta);
+      else headers.delete("anthropic-beta");
+      console.log("gateway upstream refused guessed thinking; resending as the client sent it", { url: route.url });
+      response = await send();
+    }
   }
   return response;
 }

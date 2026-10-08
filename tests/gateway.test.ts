@@ -6,7 +6,7 @@ import { timingSafeEqual } from "node:crypto";
 import worker from "../src/index";
 import { identityNamespace, identityReadNamespaces, invalidateSettingsCache, speakersForNamespace, validateConfig } from "../src/gateway/config";
 import { appendMemory, classifyTurn, canonical } from "../src/gateway/protocol";
-import { catalogUrl, resolveUpstream, routeFor, rejectedToolFields } from "../src/gateway/upstream";
+import { catalogUrl, nativeAnthropic, resolveUpstream, routeFor, rejectedToolFields } from "../src/gateway/upstream";
 import { OutputCollector, observeResponse, persistExchange, prepareExchange, dispatchExchange } from "../src/gateway/record";
 
 import { lexicalOverlapScore, shapeRecallQuery } from "../src/memory/queryShape";
@@ -782,6 +782,37 @@ test("default thinking mode keeps the tool loop after an injected turn working o
   await run("/v1/messages", { ...continuation, model: "partner", thinking: { type: "adaptive" } });
   assert.deepEqual(calls[2].query.thinking, { type: "adaptive" });
   assert.equal(calls[2].headers["anthropic-beta"], undefined);
+  const resolved = resolveUpstream({} as any, { version: 3, upstream: { address: "e".repeat(32) }, identities: [] });
+  assert.equal(nativeAnthropic(routeFor(resolved, "messages", "anthropic/claude-opus-5-5")), true);
+  for (const model of ["google-vertex-ai/claude-opus-5-5", "custom-navy/claude-opus-5-5", "openrouter/anthropic/claude-opus-5-5"]) {
+    assert.equal(nativeAnthropic(routeFor(resolved, "messages", model)), false, model);
+  }
+});
+
+test("a model that refuses the guessed thinking gets the request exactly as the client sent it", async () => {
+  // Opus wrote the signed history, then the chat switched to a model without adaptive thinking.
+  const plain: any = { ...identity(), models: ["*haiku*"] };
+  delete plain.anthropicThinking;
+  setConfig({ ...config([plain]), upstream: { address: "e".repeat(32) } });
+  const mock = globalThis.fetch;
+  globalThis.fetch = async (url: any, init: any) => {
+    const query = JSON.parse(init.body);
+    if (query.thinking?.type === "adaptive") {
+      calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), query });
+      return Response.json({ type: "error", error: { type: "invalid_request_error", message: "adaptive thinking is not supported on this model" } }, { status: 400 });
+    }
+    return mock(url, init);
+  };
+  const body = { model: "anthropic/claude-haiku-4-5", max_tokens: 64, messages: [{ role: "user", content: "hi" },
+    { role: "assistant", content: [{ type: "thinking", thinking: "", signature: "opus" }, { type: "text", text: "hello" }] },
+    { role: "user", content: "again" }] };
+  const { response } = await run("/v1/messages", body, { "anthropic-beta": "client-beta" });
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].query.thinking.type, "adaptive");
+  assert.equal(calls[1].query.thinking, undefined);
+  assert.equal(calls[1].headers["anthropic-beta"], "client-beta");
+  assert.deepEqual(calls[1].query.messages.slice(0, 2), body.messages.slice(0, 2));
 });
 
 test("any provider gets a native messages/responses route; prefixless models are refused before any upstream call", async () => {

@@ -27,7 +27,7 @@
 
 | 情形 | 召回/注入 | 思考历史及出站策略 |
 | --- | --- | --- |
-| 主模型、人类输入、默认 auto，原生 Anthropic 线路 | 单次注入 | 同 drop_block；thinking 未指定且历史没有思考块时不动 |
+| 主模型、人类输入、默认 auto，原生 Anthropic 线路 | 单次注入 | 客户端写了 enabled/adaptive：同 drop_block。未指定：历史有思考块且没带 temperature/强制工具才补 adaptive+绑定，上游拒了按原样重发一次；否则不动 |
 | 主模型、人类输入、auto 走其他线路或 passthrough，thinking 开启或未指定 | 单次注入 | 历史不变；补丁只进本轮 user 尾部,实测 Vertex 默认不校验前缀绑定 |
 | 主模型、显式 disabled、人类输入 | 单次注入 | 不强行启用 adaptive，不自动加 beta；已有失配历史仍可能报错 |
 | 主模型、人类输入、drop_block | 单次注入 | 保留 enabled/adaptive 参数，合并 binding 和 beta |

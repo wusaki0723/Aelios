@@ -6,7 +6,7 @@ import { timingSafeEqual } from "node:crypto";
 import worker from "../src/index";
 import { identityNamespace, identityReadNamespaces, invalidateSettingsCache, speakersForNamespace, validateConfig } from "../src/gateway/config";
 import { appendMemory, classifyTurn, canonical } from "../src/gateway/protocol";
-import { catalogUrl, resolveUpstream, routeFor, rejectedToolFields } from "../src/gateway/upstream";
+import { catalogUrl, nativeAnthropic, resolveUpstream, routeFor, rejectedToolFields } from "../src/gateway/upstream";
 import { OutputCollector, observeResponse, persistExchange, prepareExchange, dispatchExchange } from "../src/gateway/record";
 
 import { lexicalOverlapScore, shapeRecallQuery } from "../src/memory/queryShape";
@@ -755,6 +755,64 @@ test("messages on CF strips the provider prefix and carries the token as cf-aig-
   assert.equal(calls[0].headers["cf-aig-authorization"], "Bearer cf-token");
   assert.equal(calls[0].headers.authorization, undefined);
   assert.equal(calls[0].headers["anthropic-version"], "2023-06-01");
+});
+
+test("default thinking mode keeps the tool loop after an injected turn working on Anthropic's own line", async () => {
+  // 2026-10-08: remember called right after a recalled turn, the continuation came back 400
+  // "Invalid signature in thinking block. The block is bound to a different conversation".
+  precious("partner-a", "Cloudflare fan");
+  const plain: any = identity();
+  delete plain.anthropicThinking;
+  setConfig({ ...config([plain]), upstream: { address: "e".repeat(32) } });
+  const user = { role: "user", content: "Cloudflare" };
+  const body = { model: "anthropic/claude-opus-5-5", max_tokens: 2048, messages: [user] };
+  await run("/v1/messages", body);
+  assert.match(calls[0].query.messages[0].content, /Cloudflare fan/);
+  assert.equal(calls[0].query.thinking, undefined);
+  assert.equal(calls[0].headers["anthropic-beta"], undefined);
+  const generated = { role: "assistant", content: [{ type: "thinking", thinking: "", signature: "bound-to-injected-prefix" },
+    { type: "tool_use", id: "r", name: "remember", input: { content: "fact" } }] };
+  const continuation = { ...body, messages: [user, generated, { role: "user", content: [{ type: "tool_result", tool_use_id: "r", content: "saved" }] }] };
+  await run("/v1/messages", continuation);
+  assert.deepEqual(calls[1].query.messages, continuation.messages);
+  assert.deepEqual(calls[1].query.thinking, { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } });
+  assert.match(calls[1].headers["anthropic-beta"], /thinking-binding-controls-2026-08-01/);
+  // The same identity on a relay line is left as the client sent it.
+  setConfig(config([plain]));
+  await run("/v1/messages", { ...continuation, model: "partner", thinking: { type: "adaptive" } });
+  assert.deepEqual(calls[2].query.thinking, { type: "adaptive" });
+  assert.equal(calls[2].headers["anthropic-beta"], undefined);
+  const resolved = resolveUpstream({} as any, { version: 3, upstream: { address: "e".repeat(32) }, identities: [] });
+  assert.equal(nativeAnthropic(routeFor(resolved, "messages", "anthropic/claude-opus-5-5")), true);
+  for (const model of ["google-vertex-ai/claude-opus-5-5", "custom-navy/claude-opus-5-5", "openrouter/anthropic/claude-opus-5-5"]) {
+    assert.equal(nativeAnthropic(routeFor(resolved, "messages", model)), false, model);
+  }
+});
+
+test("a model that refuses the guessed thinking gets the request exactly as the client sent it", async () => {
+  // Opus wrote the signed history, then the chat switched to a model without adaptive thinking.
+  const plain: any = { ...identity(), models: ["*haiku*"] };
+  delete plain.anthropicThinking;
+  setConfig({ ...config([plain]), upstream: { address: "e".repeat(32) } });
+  const mock = globalThis.fetch;
+  globalThis.fetch = async (url: any, init: any) => {
+    const query = JSON.parse(init.body);
+    if (query.thinking?.type === "adaptive") {
+      calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), query });
+      return Response.json({ type: "error", error: { type: "invalid_request_error", message: "adaptive thinking is not supported on this model" } }, { status: 400 });
+    }
+    return mock(url, init);
+  };
+  const body = { model: "anthropic/claude-haiku-4-5", max_tokens: 64, messages: [{ role: "user", content: "hi" },
+    { role: "assistant", content: [{ type: "thinking", thinking: "", signature: "opus" }, { type: "text", text: "hello" }] },
+    { role: "user", content: "again" }] };
+  const { response } = await run("/v1/messages", body, { "anthropic-beta": "client-beta" });
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].query.thinking.type, "adaptive");
+  assert.equal(calls[1].query.thinking, undefined);
+  assert.equal(calls[1].headers["anthropic-beta"], "client-beta");
+  assert.deepEqual(calls[1].query.messages.slice(0, 2), body.messages.slice(0, 2));
 });
 
 test("any provider gets a native messages/responses route; prefixless models are refused before any upstream call", async () => {

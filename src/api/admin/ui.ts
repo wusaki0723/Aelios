@@ -1096,8 +1096,9 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
                   <p class="mt-1 text-[11px] leading-5 text-zinc-500">最多 8 个，共用注入预算。共享时填同一空间；迁移时写新空间、召回保留旧空间。</p>
                   <label class="mt-2 block text-xs text-zinc-400">Claude 思考块
                     <select x-model="idn.anthropicThinking" class="mt-1 h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-coral">
-                      <option value="passthrough">原样透传(思考开着时跳过注入)</option>
-                      <option value="drop_block">临时记忆 + 上游丢弃失配思考(需 beta)</option>
+                      <option value="auto">自动（默认）：原生 Anthropic 线路丢弃失配思考，其余透传</option>
+                      <option value="passthrough">原样透传（原生 Anthropic 线路的工具续轮会 400）</option>
+                      <option value="drop_block">总是丢弃失配思考（需 beta，Vertex 勿用）</option>
                     </select>
                   </label>
                   <label class="mt-2 block text-xs text-zinc-400">单次记忆字数上限
@@ -1760,7 +1761,7 @@ function memoryAdmin() {
             namespace: idn.namespace || '',
             readNamespacesText: idn.readNamespaces ? (idn.readNamespaces.length ? idn.readNamespaces.join(', ') : '[]') : '',
             keys: idn.keys && idn.keys.length ? idn.keys.slice() : ['CHATBOX_API_KEY'],
-            anthropicThinking: idn.anthropicThinking || 'passthrough',
+            anthropicThinking: idn.anthropicThinking || 'auto',
             maxMemoryChars: idn.maxMemoryChars || '',
             _open: false
           };
@@ -1789,7 +1790,7 @@ function memoryAdmin() {
     gwAdd() {
       // 第一个助手默认跟 MCP、Claude Code 钩子用同一个 default 空间，不然先用过 MCP 的人记忆会分成两份。
       const namespace = this.gwIdentities.length ? '' : 'default';
-      this.gwIdentities.push({ slug: '', userName: '', assistantName: '', modelsText: '', namespace: namespace, readNamespacesText: '', keys: ['CHATBOX_API_KEY'], anthropicThinking: 'passthrough', maxMemoryChars: '', _open: true });
+      this.gwIdentities.push({ slug: '', userName: '', assistantName: '', modelsText: '', namespace: namespace, readNamespacesText: '', keys: ['CHATBOX_API_KEY'], anthropicThinking: 'auto', maxMemoryChars: '', _open: true });
     },
     // 助手和上游要一起改好再存，所以跟线上比一比，有没存的就在底部浮出保存条。
     gwMark() { this.gwSnapshot = JSON.stringify(this.gwPayload()); },
@@ -1810,7 +1811,7 @@ function memoryAdmin() {
         if ((idn.namespace || '').trim()) out.namespace = idn.namespace.trim();
         const reads = (idn.readNamespacesText || '').trim();
         if (reads) out.readNamespaces = reads === '[]' ? [] : reads.split(/[,，\n]/).map(function(s) { return s.trim(); }).filter(Boolean);
-        if (idn.anthropicThinking && idn.anthropicThinking !== 'passthrough') out.anthropicThinking = idn.anthropicThinking;
+        if (idn.anthropicThinking && idn.anthropicThinking !== 'auto') out.anthropicThinking = idn.anthropicThinking;
         const budget = parseInt(idn.maxMemoryChars, 10);
         if (budget) out.maxMemoryChars = budget;
         return out;

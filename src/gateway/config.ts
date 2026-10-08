@@ -21,7 +21,8 @@ export interface Identity {
   keys: AuthResult["keyName"][];
   /** Main models: recalled and recorded. Every other model passes through quietly. */
   models: string[];
-  anthropicThinking?: "passthrough" | "drop_block";
+  /** Omitted means auto: drop_block on the native Anthropic line, passthrough elsewhere. */
+  anthropicThinking?: "auto" | "passthrough" | "drop_block";
   maxMemoryChars?: number;
   /** 用户显示名。Dream / 日记 / 周月卷 / 审核写事实时用这个名字，不要写 user/用户。 */
   userName?: string;
@@ -79,7 +80,7 @@ export function validateConfig(value: unknown): GatewayConfig {
     check(Array.isArray(identity.models) && identity.models.length <= 64 &&
       identity.models.every((m: unknown) => text(m) && (m as string).length <= 200),
       `${where}: models must be an array of at most 64 model names`);
-    check(identity.anthropicThinking === undefined || ["passthrough", "drop_block"].includes(identity.anthropicThinking), `${where}: invalid anthropicThinking`);
+    check(identity.anthropicThinking === undefined || ["auto", "passthrough", "drop_block"].includes(identity.anthropicThinking), `${where}: invalid anthropicThinking`);
     check(identity.maxMemoryChars === undefined || Number.isInteger(identity.maxMemoryChars) && identity.maxMemoryChars >= 256 && identity.maxMemoryChars <= 24000, `${where}: maxMemoryChars must be 256–24000`);
     check(identity.userName === undefined || text(identity.userName) && identity.userName.trim().length <= 32 && !/[\r\n]/.test(identity.userName),
       `${where}: userName must be text (max 32 characters)`);

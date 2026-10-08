@@ -27,10 +27,11 @@
 
 | 情形 | 召回/注入 | 思考历史及出站策略 |
 | --- | --- | --- |
-| 主模型、人类输入、默认 passthrough，thinking 开启或未指定 | 单次注入 | 历史不变；补丁只进本轮 user 尾部,实测 Vertex 默认不校验前缀绑定 |
+| 主模型、人类输入、默认 auto，原生 Anthropic 线路 | 单次注入 | 同 drop_block；thinking 未指定且历史没有思考块时不动 |
+| 主模型、人类输入、auto 走其他线路或 passthrough，thinking 开启或未指定 | 单次注入 | 历史不变；补丁只进本轮 user 尾部,实测 Vertex 默认不校验前缀绑定 |
 | 主模型、显式 disabled、人类输入 | 单次注入 | 不强行启用 adaptive，不自动加 beta；已有失配历史仍可能报错 |
 | 主模型、人类输入、drop_block | 单次注入 | 保留 enabled/adaptive 参数，合并 binding 和 beta |
-| 纯 tool_result 续轮 | 不召回、不恢复旧补丁 | drop_block 设置仍发送；历史所有块顺序不变 |
+| 纯 tool_result 续轮 | 不召回、不恢复旧补丁 | drop_block（含 auto 走原生线路）设置仍发送；历史所有块顺序不变 |
 | tool_result 后有独立用户文本 | 按新用户输入召回 | 记忆追加在结果和用户文字之后，不插到结果前 |
 | 多次工具调用、分开的连续同角色消息 | 不重排消息 | 按 Anthropic 合并后的逻辑回合校验配对 |
 | 多轮签名、空 thinking、redacted thinking | 不删除、不改写 | 本地检查必要字段；真实性及前缀绑定由上游验证 |
@@ -39,7 +40,8 @@
 
 `drop_block` 只让上游丢弃失配的块及受其影响的后续块，不是网关删除全部 thinking。
 它会牺牲部分推理连续性。用户改回 passthrough 或 disabled 后，先前已失配的历史不会自动恢复。
-如果上游强制校验前缀绑定(目前未发现默认开启的线路),该线路应改 drop_block 或显式 disabled;本版不维护注入补丁状态。
+原生 Anthropic 线路默认强制校验前缀绑定（2026-10-08 用 Opus 5.5 实测），所以默认的 auto 在这条线路上按 drop_block 处理。
+其他线路如果也开始强制校验，应改 drop_block 或显式 disabled；本版不维护注入补丁状态。
 
 ## 验证范围
 

@@ -144,11 +144,19 @@ Cron 继续维护配置的写入空间，避免只读共享关系无意触发另
 
 ### Anthropic thinking
 
-- `passthrough`（默认）：不修改 thinking，记忆照常注入。召回片段只追加在最后一轮 user 消息尾部，
-  不改历史块。实测 Vertex 线路默认不校验 thinking 的前缀绑定(补丁下轮消失,旧签名块仍 200),
-  只有客户端显式携带 `block_binding` 时前缀才进入签名范围。
+召回片段只追加在最后一轮 user 消息尾部，下一轮请求里就没有了。思考块签名如果绑定前缀，
+这一轮生成的思考块到下一轮（工具续轮、之后每一轮）就对不上。
+
+- `auto`（默认，不填即是）：走 CF 上的原生 Anthropic 线路（`anthropic/...`）时按 `drop_block` 处理，
+  其余线路按 `passthrough`。客户端没写 thinking 时，只有历史里已经有思考块才补 `adaptive` 和绑定，
+  不替客户端打开思考。2026-10-08 实测原生线路（Opus 5.5）默认校验前缀绑定：注入记忆那一轮如果调了工具，
+  续轮返回 400 `Invalid signature in thinking block. The block is bound to a different conversation`，
+  之后带着这段历史的每一轮也都 400。
+- `passthrough`：不修改 thinking，记忆照常注入。实测 Vertex 线路默认不校验前缀绑定(补丁下轮消失,旧签名块仍 200),
+  只有客户端显式携带 `block_binding` 时前缀才进入签名范围。原生 Anthropic 线路选它会遇到上面的 400。
 - `drop_block`：在每次请求（含工具续轮）合并 `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`，
-  以及 `thinking-binding-controls-2026-08-01` beta header。仅适用于支持该 beta 的线路，会牺牲部分思考连续性。
+  以及 `thinking-binding-controls-2026-08-01` beta header；客户端没写 thinking 时直接补 `adaptive`。
+  仅适用于支持该 beta 的线路，会牺牲部分思考连续性。转发到原生 Anthropic 的 `custom-*` 线路要手动选它。
 - 显式 `thinking.type: "disabled"`：直接临时注入，不添加该 beta。
 - 注意:`drop_block` 依赖上游认识 `block_binding` 字段;Vertex 线路会直接 400 `unrecognizedProperty`,勿用于 Vertex。
 - 非主模型不自动启用 thinking，不自动添加 binding 设置。

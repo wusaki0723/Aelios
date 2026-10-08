@@ -757,6 +757,33 @@ test("messages on CF strips the provider prefix and carries the token as cf-aig-
   assert.equal(calls[0].headers["anthropic-version"], "2023-06-01");
 });
 
+test("default thinking mode keeps the tool loop after an injected turn working on Anthropic's own line", async () => {
+  // 2026-10-08: remember called right after a recalled turn, the continuation came back 400
+  // "Invalid signature in thinking block. The block is bound to a different conversation".
+  precious("partner-a", "Cloudflare fan");
+  const plain: any = identity();
+  delete plain.anthropicThinking;
+  setConfig({ ...config([plain]), upstream: { address: "e".repeat(32) } });
+  const user = { role: "user", content: "Cloudflare" };
+  const body = { model: "anthropic/claude-opus-5-5", max_tokens: 2048, messages: [user] };
+  await run("/v1/messages", body);
+  assert.match(calls[0].query.messages[0].content, /Cloudflare fan/);
+  assert.equal(calls[0].query.thinking, undefined);
+  assert.equal(calls[0].headers["anthropic-beta"], undefined);
+  const generated = { role: "assistant", content: [{ type: "thinking", thinking: "", signature: "bound-to-injected-prefix" },
+    { type: "tool_use", id: "r", name: "remember", input: { content: "fact" } }] };
+  const continuation = { ...body, messages: [user, generated, { role: "user", content: [{ type: "tool_result", tool_use_id: "r", content: "saved" }] }] };
+  await run("/v1/messages", continuation);
+  assert.deepEqual(calls[1].query.messages, continuation.messages);
+  assert.deepEqual(calls[1].query.thinking, { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } });
+  assert.match(calls[1].headers["anthropic-beta"], /thinking-binding-controls-2026-08-01/);
+  // The same identity on a relay line is left as the client sent it.
+  setConfig(config([plain]));
+  await run("/v1/messages", { ...continuation, model: "partner", thinking: { type: "adaptive" } });
+  assert.deepEqual(calls[2].query.thinking, { type: "adaptive" });
+  assert.equal(calls[2].headers["anthropic-beta"], undefined);
+});
+
 test("any provider gets a native messages/responses route; prefixless models are refused before any upstream call", async () => {
   setConfig({ ...config(), upstream: { address: "d".repeat(32) } });
   await run("/v1/messages", { model: "openrouter/anthropic/claude-haiku-4.5", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] });

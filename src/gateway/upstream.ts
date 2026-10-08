@@ -111,6 +111,11 @@ export function routeFor(resolved: ResolvedUpstream, protocol: Protocol, model: 
   return { url: `${gw}/${provider}${path}`, model: native, auth: "cf-aig" };
 }
 
+/** Anthropic's own endpoint behind CF; it enforces thinking prefix bindings by default (seen 2026-10-08). */
+export function nativeAnthropic(route: UpstreamRoute): boolean {
+  return route.auth === "cf-aig" && /\/anthropic\/v1\/messages$/.test(route.url);
+}
+
 // One call, one upstream. Model names pass through as written (minus the provider
 // prefix on native endpoints); retries and fallback are AI Gateway's own job.
 export interface PreparedRequest { route: UpstreamRoute; headers: Headers; body: Body; removed: string[] }
@@ -133,7 +138,7 @@ export function prepareGatewayRequest(env: Env, config: GatewayConfig, identity:
   const normalized = normalizeRequest(body, protocol);
   const out = normalized.body;
   out.model = route.model;
-  if (isMainModel(identity, body.model)) applyThinkingPolicy(out, identity, protocol, headers);
+  if (isMainModel(identity, body.model)) applyThinkingPolicy(out, identity, protocol, headers, nativeAnthropic(route));
   validateRequest(out, protocol, headers);
   sanitizeCacheControl(out, protocol);
   validateRequest(out, protocol, headers);

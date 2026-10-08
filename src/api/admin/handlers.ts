@@ -1,5 +1,5 @@
 import { authenticate } from "../../auth/apiKey";
-import { listRecentDailyLogs, listRecentWeeklyLogs } from "../../db/v2";
+import { countKeptDiarySources, listRecentDailyLogs, listRecentWeeklyLogs } from "../../db/v2";
 import { runDiaryWriter } from "../../memory/diaryWriter";
 import { runMonthlyRollup } from "../../memory/monthlyRollup";
 import { approveWeeklyRollup, runWeeklyRollup } from "../../memory/weeklyRollup";
@@ -42,10 +42,20 @@ export async function handleDiaryAdmin(request: Request, env: Env): Promise<Resp
   const parsedLimit = Number(url.searchParams.get("limit") || 30);
   const limit = Number.isFinite(parsedLimit) ? parsedLimit : 30;
 
-  const [dailies, weeklies] = await Promise.all([
+  const [dailyRows, weeklies] = await Promise.all([
     listRecentDailyLogs(env.DB, { namespace, limit }),
     listRecentWeeklyLogs(env.DB, { namespace, limit })
   ]);
+  const dates = dailyRows.map((row) => row.date).sort();
+  // 数不出来就不给这个字段，后台退回只显示挂了几条原文，别误报"已清理"。
+  const kept = dates.length
+    ? await countKeptDiarySources(env.DB, { namespace, startDate: dates[0], endDate: dates[dates.length - 1] })
+      .catch((error) => {
+        console.error("admin diary: kept-source count failed", error);
+        return null;
+      })
+    : new Map<string, number>();
+  const dailies = dailyRows.map((row) => (kept ? { ...row, sources_kept: kept.get(row.date) ?? 0 } : row));
 
   return json({
     data: {

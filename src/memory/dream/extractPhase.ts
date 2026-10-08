@@ -1,6 +1,7 @@
 import { callOpenAICompat } from "../../proxy/openaiAdapter";
 import type { Env, MemoryApiRecord, MessageRecord, OpenAIChatRequest, OpenAIChatResponse } from "../../types";
 import { extractJsonObject } from "../../utils/parse";
+import { CHAT_MATERIAL_RULES } from "../chatMaterial";
 import { extractDreamMemoriesFromMessages } from "../dreamExtract";
 import { readDreamMaxTokens, readDreamModel } from "../dreamEnv";
 import type { ExtractedMemory } from "../extract";
@@ -62,6 +63,7 @@ export function buildDigestPrompt(input: {
     "- 旧记忆里的临时计划/意图（例如“打算下个月充值X”）如果已经过期、已经发生、或被当天新信息取代，优先更新成持久事实或直接删除，不要让过期的打算一直躺在库里。",
     speakerRule,
     "- 不要提到 D1、Vectorize、RAG、数据库、记忆系统、代理层等实现细节。",
+    ...CHAT_MATERIAL_RULES,
     "",
     "Dream 输出格式：",
     "- title 是 12 字以内标题。",
@@ -284,7 +286,8 @@ export async function runExtractPhase(
   const extractResult = await extractDreamMemoriesFromMessages(env, {
     namespace: input.namespace,
     messages,
-    speakers
+    speakers,
+    dateLabel: input.dateLabel
   });
 
   return {

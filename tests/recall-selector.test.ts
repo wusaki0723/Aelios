@@ -137,7 +137,7 @@ test("dream digest uses speaker names in transcript and writing rules", () => {
   assert.match(named, /禁止出现 user、用户、assistant、助手/);
   assert.match(named, /\[msg_1\].*\[小北\]/);
   assert.doesNotMatch(named, /我=助手/);
-  assert.equal(formatTranscript([{ id: "m", conversation_id: "c", namespace: "default", role: "user", content: "hi", source: null, created_at: "t" }], { userName: "小南", assistantName: "小北" }), "[m][t][小南] hi");
+  assert.equal(formatTranscript([{ id: "m", conversation_id: "c", namespace: "default", role: "user", content: "hi", source: null, created_at: "t" }], { userName: "小南", assistantName: "小北" }), "<chat>\n[m][t][小南] hi\n</chat>");
 });
 
 test("default ranks exact contextual snippets once and keeps speaker and conditions", async () => {

@@ -25,6 +25,8 @@ import {
 } from "../vectorStore";
 import { isV2Enabled } from "../v2/recall";
 import { cleanMessageText } from "../../utils/sanitize";
+import { formatChatMaterial } from "../chatMaterial";
+import { speakerLabel } from "../speakers";
 
 export interface DigestMemoryUpdate {
   target_id: string;
@@ -212,14 +214,7 @@ export function normalizeDigestResult(value: unknown): DailyDigestResult {
 }
 
 export function formatTranscript(messages: MessageRecord[], speakers: DreamSpeakers | null = null): string {
-  return messages
-    .map((message) => {
-      const role = message.role === "assistant"
-        ? (speakers?.assistantName ?? "我(助手)")
-        : (speakers?.userName ?? "用户");
-      return `[${message.id}][${message.created_at}][${role}] ${truncate(cleanMessageText(message.content), 700)}`;
-    })
-    .join("\n\n");
+  return formatChatMaterial(messages, (role) => speakerLabel(role, speakers), { floor: 700 });
 }
 
 export function formatExistingMemories(memories: MemoryApiRecord[]): string {

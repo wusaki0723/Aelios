@@ -12,7 +12,8 @@ import { readDreamCursorValue } from "./dailyDigest";
 import { getIsoWeekLabelForDateLabel } from "./weeklyRollup";
 import { extractJsonObject, readString, readStringArray } from "../utils/parse";
 import { groundedSourceIds } from "./impression";
-import { diarySpeakerRules, formatSpeakerTranscript, loadSpeakersForNamespace, type DreamSpeakers } from "./speakers";
+import { diarySpeakerRules, loadSpeakersForNamespace, speakerLabel, type DreamSpeakers } from "./speakers";
+import { CHAT_MATERIAL_RULES, formatChatMaterial } from "./chatMaterial";
 
 const DEFAULT_DREAM_MODEL = "workers-ai/@cf/openai/gpt-oss-120b";
 const MAX_MESSAGES = 200;
@@ -103,6 +104,7 @@ export function buildDiaryWriterPrompt(input: {
     "- summary 是一段 200-400 字的自然中文，允许口语，禁止列表、标题、emoji 堆砌。",
     "- title 是 12 字以内的日记标题，像给自己起的题目。",
     "- 禁止提及 D1、Vectorize、RAG、数据库、记忆系统、prompt、代理层等实现细节。",
+    ...CHAT_MATERIAL_RULES,
     "",
     `日期：${input.dateLabel}`,
     "",
@@ -117,7 +119,7 @@ export function buildDiaryWriterPrompt(input: {
     draftLines,
     "",
     "当天原始聊天：",
-    formatSpeakerTranscript(input.messages, speakers, 700, true) || "(无聊天记录)"
+    formatChatMaterial(input.messages, (role) => speakerLabel(role, speakers), { floor: 700 })
   ].join("\n");
 }
 

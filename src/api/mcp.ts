@@ -33,6 +33,7 @@ import { buildBootPackage, isV2Enabled, runRecall } from "../memory/v2/recall";
 import { readDreamTimeZoneFromEnv } from "../memory/dailyDigest";
 import { withImpressionDisclaimer } from "../memory/impression";
 import { getIsoWeekLabelForDateLabel } from "../memory/weeklyRollup";
+import { traceMemorySource } from "../memory/memorySource";
 import { searchMemories, toMemoryApiRecord } from "../memory/search";
 import {
   createVectorMemory,
@@ -139,6 +140,7 @@ export const MEMORY_GUIDE = [
   "- Before answering anything that touches their past, their life or the people around them: call recall instead of guessing.",
   "- As new facts, plans, preferences or corrections come up: call remember right away. Moments that matter: keep_moment. Nicknames and in-jokes: learn_word.",
   "- If they ask you to forget something: forget.",
+  "- Before leaning on the details of a memory (exact words, dates, who said what): read_diary with its memory_id shows where it came from.",
   "- If memories are not being added to your messages automatically, this app does not record conversations for Aelios: call log_conversation before the conversation ends.",
   "Use what you find naturally; there is no need to announce each lookup."
 ].join("\n");
@@ -366,6 +368,8 @@ function getTools(options: ToolListOptions): Array<Record<string, unknown>> {
         "Read your diary when the person asks what happened on a certain day or during a stretch of time (那天, 上周, " +
         "那阵子). Give date for one day or week for a week; leave both out for today and yesterday. Entries are your own " +
         "impressions written overnight, not verified facts, so check details with recall before stating them as fact. " +
+        "Give memory_id instead to see where a memory came from before you rely on its details: the original messages " +
+        "while they are still kept, otherwise the diary of that day, or its week. " +
         "Read-only. Returns { data } (null when there is no entry).",
       annotations: { title: "Read diary", ...READ_ONLY },
       inputSchema: {
@@ -373,6 +377,10 @@ function getTools(options: ToolListOptions): Array<Record<string, unknown>> {
         properties: {
           date: { type: "string", description: "YYYY-MM-DD for one day. Days already rolled into a week return that week." },
           week: { type: "string", description: "ISO week label for a week, e.g. 2026-W29." },
+          memory_id: {
+            type: "string",
+            description: "A memory id from recall or list_memories. Returns where it came from instead of a day's diary."
+          },
           namespace: NAMESPACE_PARAM
         }
       }
@@ -1030,6 +1038,13 @@ async function callTool(
     if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
     const namespace = resolveNamespace(profile, args.namespace);
     const timeZone = readDreamTimeZoneFromEnv(env);
+    const memoryId = readString(args.memory_id);
+    if (memoryId) {
+      const memory = await getMemoryById(env.DB, { namespace, id: memoryId });
+      if (!memory) return toolError("Memory not found");
+      const source = await traceMemorySource(env.DB, { namespace, memory, timeZone });
+      return textToolResult({ data: { memory_id: memory.id, memory: memory.content, source } });
+    }
     const week = readString(args.week);
     if (week && !/^\d{4}-W\d{2}$/.test(week)) {
       return toolError("week must be YYYY-Www (ISO week label)");

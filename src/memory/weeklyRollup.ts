@@ -162,6 +162,9 @@ export function buildWeeklyRollupPrompt(input: {
     "目标：",
     "- 只浓缩每日日记里已经写过的事。不要添加日记没有的具体时间、地点、引语或事件。",
     "- 日记是印象；拿不准的细节删掉，不要写实。",
+    input.speakers
+      ? `- 日记里用「」引用的${input.speakers.userName}的原话最该留下：篇幅不够时先压别的，原话尽量原样保留，别改写成转述。`
+      : "- 日记里用「」引用的她的原话最该留下：篇幅不够时先压别的，原话尽量原样保留，别改写成转述。",
     "- summary 是一段自然中文周记，300 字以内。",
     "- title 是 12 字以内的周标题。",
     rollupSpeakerRule(input.speakers ?? null),

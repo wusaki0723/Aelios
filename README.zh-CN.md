@@ -166,6 +166,10 @@ https://<Worker 地址>/mcp?token=<CHATBOX_API_KEY>
 
 导盲犬只转述图片，不写记忆。
 
+**住户的对话页**
+
+如果你还部署了 [aelios-resident](https://github.com/wusaki0723/aelios-resident)（住在 Cloudflare 上、用 Aelios 记事的伴侣，有 Telegram 门），在 `/admin` 的「设置 → 住户（可选）」填它的地址和 `WEB_KEY`，点连接。导航里「今日」后面会多一个「住户」：跟 Telegram 是同一段对话，在这里也能说；右上角「模型和人设」改它用哪个模型、它是谁。地址和钥匙只存在这台设备的浏览器里，没连就什么都不变。
+
 ## 最容易踩的坑
 
 - 部署用 `npm run deploy`，不要裸 `wrangler deploy`。

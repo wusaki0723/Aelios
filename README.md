@@ -159,6 +159,8 @@ For automatic per-message recall and batch write-back in Claude Code, use the Ho
 
 **Seeing images (guide-dog)**: add the `GUIDE_DOG_API_KEY` secret, then point your client at `https://<Worker address>/v1/guide-dog` with model `companion`. The guide-dog only describes images — it writes no memory.
 
+**The resident's chat page**: if you also run [aelios-resident](https://github.com/wusaki0723/aelios-resident) (a companion that lives on Cloudflare, keeps its memory in Aelios and has a Telegram door), open `/admin` Settings → 住户（可选）, enter its address and its `WEB_KEY`, and connect. A 住户 tab appears after Today: the same conversation as Telegram, which you can also talk in, with 模型和人设 (model and persona) in the top corner. The address and key stay in this browser only; nothing changes until you connect.
+
 ## Common pitfalls
 
 - Deploy with `npm run deploy`, never a bare `wrangler deploy`.

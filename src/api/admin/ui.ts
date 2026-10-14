@@ -238,6 +238,20 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
   .chev.is-open { transform: rotate(180deg); }
   .savebar { border-color: var(--coral) !important; background: var(--panel-bg-strong); box-shadow: var(--panel-glow); backdrop-filter: blur(12px); }
 
+  /* ===== 住户：跟 Telegram 同一段对话的聊天页 ===== */
+  .rs-row { display: flex; flex-direction: column; gap: 4px; max-width: 82%; }
+  .rs-row.is-user { align-self: flex-end; align-items: flex-end; }
+  .rs-row.is-assistant { align-self: flex-start; align-items: flex-start; }
+  .rs-bubble { padding: 8px 13px; border-radius: 18px; border: 1px solid var(--panel-border); background: var(--panel-bg);
+    box-shadow: var(--panel-glow); white-space: pre-wrap; word-break: break-word; font-size: 15px; line-height: 1.65; color: var(--text-1); }
+  .rs-row.is-user .rs-bubble { background: rgba(244, 160, 124, .16); border-color: rgba(244, 160, 124, .38); border-bottom-right-radius: 6px; }
+  .rs-row.is-assistant .rs-bubble:last-of-type { border-bottom-left-radius: 6px; }
+  .rs-typing { align-self: flex-start; display: flex; gap: 4px; padding: 12px 14px; border-radius: 18px; border: 1px solid var(--panel-border); background: var(--panel-bg); }
+  .rs-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); animation: rs-blink 1.2s infinite; }
+  .rs-typing i:nth-child(2) { animation-delay: .2s; }
+  .rs-typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes rs-blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+
   /* ===== 梦境观测台 ===== */
   .dream-stat { position: relative; }
   .dream-stat::before {
@@ -308,7 +322,7 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
       </button>
 
       <nav class="grid gap-1">
-        <template x-for="item in nav" :key="item.id">
+        <template x-for="item in navItems()" :key="item.id">
           <button type="button" @click="go(item.id)" class="tap flex items-center gap-3 rounded-2xl px-3 text-left text-sm transition duration-150 ease-in-out" :class="page === item.id ? 'bg-zinc-900 text-zinc-100 ring-1 ring-zinc-800' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'">
             <i :data-lucide="item.icon" class="h-4 w-4"></i>
             <span class="flex-1" x-text="item.label"></span>
@@ -410,6 +424,91 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
               <p class="whitespace-pre-wrap text-sm leading-7 text-zinc-100" x-text="message.content"></p>
             </article>
           </template>
+        </div>
+      </section>
+
+      <section x-show="page === 'resident'" class="flex flex-col gap-3">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <h1 class="text-2xl font-semibold" x-text="residentView === 'settings' ? '模型和人设' : '住户'"></h1>
+            <p class="mt-1 text-sm text-zinc-400" x-text="residentView === 'settings' ? '住户用哪个模型、它是谁。改完下一句就生效。' : '跟 Telegram 是同一段对话：两边说的都在这里，在这里说的在这里回。'"></p>
+          </div>
+          <button type="button" @click="residentToggleView()" class="tap shrink-0 rounded-2xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 transition duration-150 ease-in-out hover:border-coral" x-text="residentView === 'settings' ? '回到对话' : '模型和人设'"></button>
+        </div>
+        <p x-show="resident.error" class="text-xs text-coral" x-text="resident.error"></p>
+
+        <div x-show="residentView === 'chat'" class="flex flex-col gap-2.5">
+          <button type="button" x-show="resident.personaLoaded && !resident.persona.text" @click="residentToggleView()" class="tap self-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-900 px-3 text-xs text-zinc-400 transition hover:border-coral hover:text-zinc-100">还没填人设，现在用的是默认的一句。点这里填</button>
+          <div x-show="!resident.lines.length && !resident.sending" class="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 text-sm text-zinc-400">还没有聊天。说句话吧，Telegram 那边也看得到。</div>
+          <template x-for="line in resident.lines" :key="line.id">
+            <div style="display:contents">
+              <template x-if="line.kind === 'letter'">
+                <details class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm text-zinc-400">
+                  <summary class="cursor-pointer text-zinc-300">更早的聊天收进了一封交接信</summary>
+                  <p class="mt-2 whitespace-pre-wrap leading-7 text-zinc-300" x-text="line.text"></p>
+                </details>
+              </template>
+              <template x-if="line.kind === 'chat'">
+                <div class="rs-row" :class="line.role === 'user' ? 'is-user' : 'is-assistant'">
+                  <template x-for="(bubble, index) in residentBubbles(line)" :key="index">
+                    <div class="rs-bubble" x-text="bubble"></div>
+                  </template>
+                  <div class="flex items-center gap-1.5 px-1 text-[11px] text-zinc-500">
+                    <span x-show="line.at" x-text="fmt(line.at)"></span>
+                    <span x-show="line.via" class="chip" x-text="residentVia(line.via)"></span>
+                    <button type="button" x-show="!line.pending" @click="residentPin(line)" class="tap grid h-7 w-7 place-items-center rounded-xl transition duration-150 ease-in-out hover:text-coral" :class="resident.pinned[line.id] ? 'text-coral' : 'text-zinc-500'" aria-label="存进珍贵" title="存进 Aelios 的珍贵"><svg viewBox="0 0 24 24" width="15" height="15" :fill="resident.pinned[line.id] ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg></button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+          <div x-show="resident.sending" class="rs-typing" aria-label="正在输入"><i></i><i></i><i></i></div>
+          <form @submit.prevent="residentSend()" class="sticky bottom-0 z-20 flex items-end gap-2 bg-[#0a0a0b]/95 py-2 backdrop-blur">
+            <textarea x-model="resident.draft" rows="1" placeholder="说点什么" aria-label="消息" @input="residentGrow($event.target)" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); residentSend(); }" class="max-h-[40vh] min-h-[44px] flex-1 resize-none rounded-2xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-base leading-6 text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral"></textarea>
+            <button type="submit" :disabled="resident.sending || !resident.draft.trim()" class="tap grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-coral text-zinc-950 transition duration-150 ease-in-out active:bg-coral/80 disabled:opacity-50" aria-label="发送"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg></button>
+          </form>
+        </div>
+
+        <div x-show="residentView === 'settings'" class="flex flex-col gap-3">
+          <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+            <h2 class="text-sm font-semibold text-zinc-100">模型</h2>
+            <p class="mt-0.5 text-[11px] leading-5 text-zinc-500">换之前先让它说一个字试试，调不通就不换。Claude 填 anthropic/ 开头的，走 Anthropic 的 Messages 接口、每轮带缓存标记，花 AI Gateway 的额度。留空换上就回到默认。</p>
+            <div class="mt-3 flex gap-2">
+              <input x-model="resident.modelDraft" list="resident-models" :placeholder="'没选时用：' + resident.model.fallback" @keydown.enter.prevent="residentSaveModel()" aria-label="模型" class="h-11 min-w-0 flex-1 rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral">
+              <button type="button" @click="residentSaveModel()" :disabled="resident.savingModel || resident.modelDraft.trim() === resident.model.model" class="tap h-11 shrink-0 rounded-2xl bg-coral px-4 text-sm font-semibold text-zinc-950 transition duration-150 ease-in-out active:bg-coral/80 disabled:opacity-50" x-text="resident.savingModel ? '试调中…' : '换上'"></button>
+            </div>
+            <datalist id="resident-models">
+              <option value="anthropic/claude-opus-5.5"></option>
+              <option value="anthropic/claude-sonnet-5.5"></option>
+              <option value="anthropic/claude-fable-5.1"></option>
+              <option value="@cf/zai-org/glm-4.7-flash"></option>
+            </datalist>
+            <p x-show="resident.modelError" class="mt-2 text-xs text-coral" x-text="resident.modelError"></p>
+            <p x-show="resident.model.lastUsage" class="mt-2 text-[11px] text-zinc-500" x-text="residentUsage(resident.model.lastUsage)"></p>
+          </article>
+
+          <article class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm">
+            <h2 class="text-sm font-semibold text-zinc-100">人设</h2>
+            <p class="mt-0.5 text-[11px] leading-5 text-zinc-500">它是谁、怎么叫你、说话什么样，都写在这里。存在住户自己的 Worker 里，不进代码仓库。留空保存就回到默认的一句。</p>
+            <textarea x-model="resident.personaDraft" maxlength="30000" :placeholder="'没填时用的是：' + resident.persona.fallback" aria-label="人设" class="mt-3 min-h-[45vh] w-full resize-y rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3.5 py-3 text-[15px] leading-7 text-zinc-100 outline-none transition duration-150 ease-in-out focus:border-coral"></textarea>
+            <p x-show="/claude\s*code/i.test(resident.personaDraft)" class="mt-2 text-xs text-coral">用 Max 附带的 API key 时，人设里有「Claude Code」这几个字会报错，换个说法。</p>
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <span class="text-[11px] text-zinc-500" x-text="resident.personaDraft.trim().length + ' / 30000 字'"></span>
+              <span x-show="resident.persona.at" class="text-[11px] text-zinc-500" x-text="'上次改：' + fmt(resident.persona.at)"></span>
+              <div class="flex-1"></div>
+              <button type="button" @click="residentSavePersona()" :disabled="resident.savingPersona || !residentPersonaDirty()" class="tap h-11 rounded-2xl bg-coral px-5 text-sm font-semibold text-zinc-950 transition duration-150 ease-in-out active:bg-coral/80 disabled:opacity-50">保存人设</button>
+            </div>
+            <details x-show="resident.persona.versions.length" class="mt-3 text-sm text-zinc-400">
+              <summary class="cursor-pointer" x-text="'之前的版本（' + resident.persona.versions.length + '）'"></summary>
+              <template x-for="version in resident.persona.versions" :key="version.at">
+                <div class="flex items-center gap-2 border-t border-zinc-800 py-2">
+                  <span class="shrink-0 text-[11px] text-zinc-500" x-text="fmt(version.at)"></span>
+                  <span class="min-w-0 flex-1 truncate text-zinc-300" x-text="version.text"></span>
+                  <button type="button" @click="resident.personaDraft = version.text" class="tap shrink-0 rounded-xl border border-zinc-800 px-3 text-xs text-zinc-400 transition hover:border-coral hover:text-zinc-100">放回去</button>
+                </div>
+              </template>
+            </details>
+          </article>
         </div>
       </section>
 
@@ -1490,6 +1589,27 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
           </div>
         </article>
 
+        <article class="rounded-2xl border border-zinc-800 bg-zinc-900 shadow-sm">
+          <button type="button" @click="gwToggle('住户')" :aria-expanded="gwIsOpen('住户') ? 'true' : 'false'" class="tap flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+            <span class="min-w-0">
+              <span class="block text-sm font-semibold text-zinc-100">住户（可选）</span>
+              <span class="block truncate text-[11px] text-zinc-500" x-text="residentReady() ? '已接上：' + residentUrl : '接上 Aelios-resident，就能在这里跟它聊天、选模型、改人设'"></span>
+            </span>
+            <span class="chev" :class="gwIsOpen('住户') ? 'is-open' : ''">${CHEVRON}</span>
+          </button>
+          <div x-show="gwIsOpen('住户')" class="border-t border-zinc-800 p-4">
+            <label class="text-xs text-zinc-400">住户地址</label>
+            <input x-model="residentUrlInput" @keydown.enter.prevent="residentConnect()" class="mt-2 h-11 w-full rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm outline-none focus:border-coral" placeholder="https://aelios-resident.你的子域.workers.dev">
+            <label class="mt-4 block text-xs text-zinc-400">住户的 WEB_KEY</label>
+            <div class="mt-2 flex gap-2">
+              <input x-model="residentKeyInput" @keydown.enter.prevent="residentConnect()" type="password" class="h-11 min-w-0 flex-1 rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm outline-none focus:border-coral" :placeholder="residentKey ? '已保存，换钥匙才需要再填' : 'WEB_KEY'">
+              <button type="button" @click="residentConnect()" :disabled="resident.connecting" class="tap h-11 shrink-0 rounded-2xl bg-coral px-4 text-sm font-semibold text-zinc-950 active:bg-coral/80 disabled:opacity-60" x-text="resident.connecting ? '连接中…' : '连接'"></button>
+              <button type="button" x-show="residentReady()" @click="residentDisconnect()" class="tap h-11 shrink-0 rounded-2xl border border-zinc-800 bg-[#0a0a0b] px-3 text-sm text-zinc-400 hover:border-coral hover:text-zinc-100">断开</button>
+            </div>
+            <div class="mt-1 text-[11px]" :class="resident.connectError ? 'text-coral' : 'text-zinc-500'" x-text="resident.connectError || '地址和钥匙只存在这台设备的浏览器里。'"></div>
+          </div>
+        </article>
+
         <div x-show="gwDirty()" x-transition.opacity.duration.150ms class="savebar sticky bottom-3 z-30 order-last flex items-center justify-between gap-3 rounded-2xl border px-4 py-2" role="status">
           <span class="text-sm text-zinc-100">助手和上游改了，还没保存</span>
           <div class="flex shrink-0 gap-2">
@@ -1554,8 +1674,9 @@ document.documentElement.dataset.theme = localStorage.getItem('aelios.admin.colo
   </div>
 
   <nav class="z-40 shrink-0 border-t border-zinc-800 bg-[#0a0a0b]/95 px-2 pb-[max(10px,env(safe-area-inset-bottom))] pt-2 backdrop-blur md:hidden">
-    <div class="grid grid-cols-8 gap-0.5">
+    <div class="grid gap-0.5" :class="residentReady() ? 'grid-cols-9' : 'grid-cols-8'">
       <button type="button" @click="go('today')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'today' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="sun" class="h-5 w-5"></i><span>今日</span></button>
+      <button type="button" x-show="residentReady()" @click="go('resident')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'resident' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="message-circle" class="h-5 w-5"></i><span>住户</span></button>
       <button type="button" @click="go('diary')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'diary' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="book-open" class="h-5 w-5"></i><span>日记</span></button>
       <button type="button" @click="go('dream')" class="tap grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'dream' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="moon-star" class="h-5 w-5"></i><span>梦境</span></button>
       <button type="button" @click="go('review')" class="tap relative grid place-items-center rounded-2xl text-[10px] transition duration-150 ease-in-out" :class="page === 'review' ? 'bg-zinc-900 text-coral' : 'text-zinc-400'"><i data-lucide="inbox" class="h-5 w-5"></i><span>审核</span><span x-show="pendingCount" class="absolute right-1 top-1 rounded-full bg-coral px-1.5 text-[10px] font-semibold text-zinc-950" x-text="pendingCount"></span></button>
@@ -1577,6 +1698,8 @@ function memoryAdmin() {
   // 导入聊天记录时读出来的整份消息和切好的段，可能上万条，放在外面不进响应式，页面上只显示数。
   let chatParsed = null;
   let chatChunks = [];
+  // 住户页 5 秒刷新一次的计时器，不进响应式。
+  let residentTimer = null;
   return {
     nav: [
       { id: 'today', label: '今日', icon: 'sun' },
@@ -1632,6 +1755,17 @@ function memoryAdmin() {
     savedApiKey: localStorage.getItem('aelios.admin.apiKey') || '',
     namespace: localStorage.getItem('aelios.admin.namespace') || 'default',
     theme: localStorage.getItem('aelios.admin.colorMode') || 'light',
+    // 住户（Aelios-resident）：另一个 Worker，地址和 WEB_KEY 只存在本机浏览器里。
+    residentUrl: localStorage.getItem('aelios.admin.residentUrl') || '',
+    residentKey: localStorage.getItem('aelios.admin.residentKey') || '',
+    residentUrlInput: localStorage.getItem('aelios.admin.residentUrl') || '',
+    residentKeyInput: '',
+    residentView: 'chat',
+    resident: {
+      lines: [], draft: '', sending: false, error: '', pinned: {}, connecting: false, connectError: '',
+      model: { model: '', at: null, fallback: '', lastUsage: null }, modelDraft: '', modelError: '', savingModel: false,
+      persona: { text: '', at: null, fallback: '', versions: [] }, personaLoaded: false, personaDraft: '', savingPersona: false
+    },
     boot: {},
     stats: {},
 
@@ -1944,8 +2078,13 @@ function memoryAdmin() {
         if (window.lucide) window.lucide.createIcons();
       });
     },
+    // 接上住户后，导航在「今日」后面多一项「住户」。
+    navItems() {
+      if (!this.residentReady()) return this.nav;
+      return [this.nav[0], { id: 'resident', label: '住户', icon: 'message-circle' }].concat(this.nav.slice(1));
+    },
     subtitle() {
-      const found = this.nav.find(function(item) { return item.id === this.page; }, this);
+      const found = this.navItems().find(function(item) { return item.id === this.page; }, this);
       return found ? found.label : '设置';
     },
     savePrefs() {
@@ -2648,6 +2787,7 @@ function memoryAdmin() {
         return;
       }
       this.page = id;
+      if (id === 'resident') this.residentOpen();
       if (id === 'settings') { this.loadRecallHistory(); if (!this.gwGroups.length && this.savedApiKey.trim()) this.gwLoad(); }
       if (id === 'review') { this.loadCandidates(); this.loadJudgeDecisions(); }
       if (id === 'memory') this.loadMemories();
@@ -2919,6 +3059,206 @@ function memoryAdmin() {
     },
     pct(value) {
       return Math.round(Number(value || 0) * 100) + '%';
+    },
+    residentReady() {
+      return Boolean(this.residentUrl && this.residentKey);
+    },
+    async residentRequest(path, options) {
+      const opts = options || {};
+      const headers = { 'x-web-key': opts.key || this.residentKey };
+      if (opts.body) headers['content-type'] = 'application/json';
+      const base = (opts.base || this.residentUrl).replace(/\/+$/, '');
+      const response = await fetch(base + path, {
+        method: opts.body ? 'POST' : 'GET',
+        headers: headers,
+        body: opts.body ? JSON.stringify(opts.body) : undefined
+      });
+      if (response.status === 401) throw new Error('住户的钥匙不对');
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok) throw new Error(payload.error || '住户出错了（' + response.status + '）');
+      return payload;
+    },
+    async residentConnect() {
+      const url = this.residentUrlInput.trim().replace(/\/+$/, '');
+      const key = this.residentKeyInput.trim() || this.residentKey;
+      this.resident.connectError = '';
+      if (!/^https?:\/\//.test(url) || !key) {
+        this.resident.connectError = '地址要以 https:// 开头，钥匙也要填';
+        return;
+      }
+      this.resident.connecting = true;
+      try {
+        await this.residentRequest('/web/check', { base: url, key: key });
+        this.residentUrl = url;
+        this.residentKey = key;
+        this.residentUrlInput = url;
+        this.residentKeyInput = '';
+        localStorage.setItem('aelios.admin.residentUrl', url);
+        localStorage.setItem('aelios.admin.residentKey', key);
+        this.notify('住户接上了，导航里多了「住户」');
+        this.icons();
+      } catch (error) {
+        this.resident.connectError = error instanceof TypeError ? '连不上这个地址' : error.message;
+      } finally {
+        this.resident.connecting = false;
+      }
+    },
+    residentDisconnect() {
+      localStorage.removeItem('aelios.admin.residentUrl');
+      localStorage.removeItem('aelios.admin.residentKey');
+      this.residentUrl = '';
+      this.residentKey = '';
+      this.residentKeyInput = '';
+      this.resident.lines = [];
+      if (this.page === 'resident') this.page = 'today';
+      this.notify('住户断开了');
+    },
+    async residentOpen() {
+      this.residentView = 'chat';
+      this.resident.error = '';
+      try {
+        await Promise.all([this.residentRefresh(true), this.residentLoadPersona()]);
+      } catch (error) {
+        this.resident.error = error instanceof TypeError ? '连不上住户，看看设置里的地址' : error.message;
+      }
+      this.residentPoll();
+    },
+    residentPoll() {
+      const self = this;
+      if (window.clearTimeout) window.clearTimeout(residentTimer);
+      residentTimer = window.setTimeout(async function() {
+        if (self.page !== 'resident' || !self.residentReady()) return;
+        if (!document.hidden && !self.resident.sending && self.residentView === 'chat') await self.residentRefresh(false).catch(function() {});
+        self.residentPoll();
+      }, 5000);
+    },
+    async residentRefresh(scroll) {
+      const data = await this.residentRequest('/web/messages');
+      const next = data.data || [];
+      const lines = this.resident.lines;
+      const last = lines[lines.length - 1];
+      const changed = next.length !== lines.length || (next.length > 0 && (!last || next[next.length - 1].id !== last.id));
+      const stick = scroll || this.residentNearEnd();
+      this.resident.lines = next;
+      if (changed && stick) this.residentScrollSoon();
+    },
+    async residentLoadPersona() {
+      this.resident.persona = await this.residentRequest('/web/persona');
+      this.resident.personaLoaded = true;
+    },
+    async residentSend() {
+      const text = this.resident.draft.trim();
+      if (!text || this.resident.sending) return;
+      this.resident.sending = true;
+      this.resident.draft = '';
+      this.resident.lines = this.resident.lines.concat([{ id: 'pending-' + Date.now(), role: 'user', kind: 'chat', text: text, at: Date.now(), via: 'web', pending: true }]);
+      this.residentScrollSoon();
+      try {
+        const result = await this.residentRequest('/web/say', { body: { text: text } });
+        if (result.status !== 'completed') this.notify('这句没回出来（' + result.status + '）');
+      } catch (error) {
+        this.notify(error.message);
+      } finally {
+        this.resident.sending = false;
+        await this.residentRefresh(true).catch(function() {});
+      }
+    },
+    async residentPin(line) {
+      if (this.resident.pinned[line.id]) return;
+      try {
+        const result = await this.residentRequest('/web/pin', { body: { text: line.text } });
+        if (!result.ok) throw new Error('没存上，住户那边可能没接 Aelios');
+        this.resident.pinned[line.id] = true;
+        this.notify('已存进珍贵');
+      } catch (error) {
+        this.notify(error.message);
+      }
+    },
+    // 住户的回复按空行拆成几个气泡，跟 Telegram 上看到的一样。
+    residentBubbles(line) {
+      if (line.role !== 'assistant') return [line.text];
+      return line.text.split(/\n[^\S\n]*\n\s*/).filter(function(part) { return part.trim(); });
+    },
+    residentVia(via) {
+      return { telegram: 'Telegram', web: '网页', checkin: '主动找你' }[via] || '';
+    },
+    async residentToggleView() {
+      if (this.residentView === 'settings') {
+        if (this.residentPersonaDirty() && !window.confirm('人设改了还没保存，不要了吗？')) return;
+        this.residentView = 'chat';
+        this.residentScrollSoon();
+        return;
+      }
+      try {
+        const loaded = await Promise.all([this.residentRequest('/web/model'), this.residentRequest('/web/persona')]);
+        this.resident.model = loaded[0];
+        this.resident.persona = loaded[1];
+        this.resident.personaLoaded = true;
+      } catch (error) {
+        this.notify(error.message);
+        return;
+      }
+      this.resident.modelDraft = this.resident.model.model;
+      this.resident.modelError = '';
+      this.resident.personaDraft = this.resident.persona.text;
+      this.residentView = 'settings';
+    },
+    residentPersonaDirty() {
+      return this.resident.personaDraft.trim() !== this.resident.persona.text;
+    },
+    async residentSaveModel() {
+      if (this.resident.savingModel) return;
+      this.resident.savingModel = true;
+      this.resident.modelError = '';
+      try {
+        this.resident.model = await this.residentRequest('/web/model', { body: { text: this.resident.modelDraft } });
+        this.resident.modelDraft = this.resident.model.model;
+        this.notify('换好了，下一句开始用 ' + (this.resident.model.model || this.resident.model.fallback));
+      } catch (error) {
+        this.resident.modelError = error.message;
+      } finally {
+        this.resident.savingModel = false;
+      }
+    },
+    async residentSavePersona() {
+      if (this.resident.savingPersona) return;
+      this.resident.savingPersona = true;
+      try {
+        this.resident.persona = await this.residentRequest('/web/persona', { body: { text: this.resident.personaDraft } });
+        this.resident.personaDraft = this.resident.persona.text;
+        this.notify(this.resident.persona.text ? '人设存好了，下一句就按这个说' : '清空了，先用默认的一句');
+      } catch (error) {
+        this.notify(error.message);
+      } finally {
+        this.resident.savingPersona = false;
+      }
+    },
+    residentUsage(usage) {
+      if (!usage) return '';
+      const share = usage.input ? Math.round(usage.cacheRead / usage.input * 100) : 0;
+      return '上一次调用：输入 ' + usage.input + ' token，其中缓存读 ' + usage.cacheRead + '（' + share + '%），输出 ' + usage.output + '（' + this.fmt(usage.at) + '）';
+    },
+    residentGrow(el) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    },
+    // 手机上滚的是外壳里那层内容区，桌面上滚整页。
+    residentScroller() {
+      const box = document.querySelector('.app-shell > div');
+      return box && box.scrollHeight > box.clientHeight ? box : document.scrollingElement;
+    },
+    residentNearEnd() {
+      const el = this.residentScroller();
+      return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    },
+    residentScrollSoon() {
+      const self = this;
+      this.$nextTick(function() {
+        window.setTimeout(function() {
+          const el = self.residentScroller();
+          if (el) el.scrollTop = el.scrollHeight;
+        }, 60);
+      });
     },
     fmt(value) {
       if (!value) return '';

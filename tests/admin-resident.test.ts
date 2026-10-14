@@ -19,6 +19,7 @@ function panel(preferences: Record<string, string> = {}, routes: Record<string, 
     return Response.json(payload, { status });
   };
   const script = ADMIN_HTML.match(/<script>\s*(function memoryAdmin\(\)[\s\S]*?)<\/script>/)?.[1] ?? '';
+  assert.ok(script, 'memoryAdmin script not found in ADMIN_HTML');
   const app = runInNewContext(`${script}\nmemoryAdmin()`, {
     fetch,
     Response,
@@ -120,6 +121,7 @@ test('model and persona are changed on the page; a model that fails its trial ca
   const { app, calls } = panel(
     { 'aelios.admin.residentUrl': 'https://r.example', 'aelios.admin.residentKey': 'web-key' },
     {
+      'GET /web/messages': () => [200, { data: [] }],
       'GET /web/model': () => [200, model],
       'POST /web/model': (body) => {
         if (body.text === 'anthropic/claude-nope') return [400, { error: '这个模型用不了：not found' }];
@@ -147,6 +149,12 @@ test('model and persona are changed on the page; a model that fails its trial ca
 
   app.resident.personaDraft = '新人设 ';
   assert.equal(app.residentPersonaDirty(), true);
+  // Looking at another page and coming back keeps the half-written persona.
+  app.page = 'today';
+  await app.go('resident');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.residentView, 'settings');
+  assert.equal(app.resident.personaDraft, '新人设 ');
   await app.residentSavePersona();
   assert.equal(app.resident.persona.text, '新人设');
   assert.equal(app.residentPersonaDirty(), false);

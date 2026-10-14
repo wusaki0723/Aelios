@@ -3110,14 +3110,15 @@ function memoryAdmin() {
       this.residentKey = '';
       this.residentKeyInput = '';
       this.resident.lines = [];
+      this.residentView = 'chat';
       if (this.page === 'resident') this.page = 'today';
       this.notify('住户断开了');
     },
+    // 回到住户页时留在离开时那一面，写了一半的人设和模型都还在。
     async residentOpen() {
-      this.residentView = 'chat';
       this.resident.error = '';
       try {
-        await Promise.all([this.residentRefresh(true), this.residentLoadPersona()]);
+        await Promise.all([this.residentRefresh(this.residentView === 'chat'), this.residentLoadPersona()]);
       } catch (error) {
         this.resident.error = error instanceof TypeError ? '连不上住户，看看设置里的地址' : error.message;
       }

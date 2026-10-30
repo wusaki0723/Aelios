@@ -30,6 +30,7 @@ import {
 } from "./api/memories";
 import { handleMcp } from "./api/mcp";
 import { handleNotebookApi } from "./api/notebook";
+import { handleRawMessage } from "./api/raw";
 import { handleImportApi } from "./api/transfer";
 import { handleModelCatalog, handleModelTest, handleModels } from "./api/models";
 import { handleRelationsGraph } from "./api/relations";
@@ -192,6 +193,10 @@ export default {
 
     if (url.pathname === "/v1/precious" || url.pathname.startsWith("/v1/precious/")) {
       return handlePrecious(request, env);
+    }
+
+    if (url.pathname.startsWith("/v1/raw/")) {
+      return handleRawMessage(request, env);
     }
 
     if (url.pathname === "/v1/glossary" || url.pathname.startsWith("/v1/glossary/")) {

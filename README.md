@@ -121,7 +121,7 @@ Open `/admin`. The pages are in the menu on the left (on a phone, tap ☰ at the
 
 | Page | What it's for |
 |---|---|
-| **Home** | Today's chats (♥ keeps a line as a keepsake), anything waiting for you, last night's run and the latest journal entry |
+| **Home** | Today's chats (♥ keeps a line as a keepsake; the bin deletes one you don't want kept, such as an error, garbled text or a flat refusal, so the nightly run, the journal and recall never read it), anything waiting for you, last night's run and the latest journal entry |
 | **Review** | Candidate memories from the nightly run. Cloudflare's clef reviews them every night by default; "Auto-handled this week" lists those decisions with an undo. With clef switched off they wait under "Daily" (you can tick several and remember or discard them together), or the assistant reviews them itself over MCP. Anything imported from elsewhere sits under "Imported" and waits for you alone |
 | **Journal** | One entry a day, plus weekly summaries. If one came out empty, open it and press **Rewrite from the originals** |
 | **Memories** | Core memories: browse, search, edit, merge, remove; a memory rewritten in place keeps its earlier versions under History, where you can restore one. Also Keepsakes, Our words (glossary), Notebook and World facts |

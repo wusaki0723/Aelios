@@ -86,7 +86,7 @@ async function openHook(request: Request, env: Env): Promise<HookContext | Respo
 }
 
 function exchangeFor(request: Request, hook: HookContext): Promise<GatewayExchange> {
-  return prepareExchange(request, hook.input.body, hook.identity, hook.input.protocol, hook.turn, hook.source,
+  return prepareExchange(request, { ...hook.input.body, model: hook.input.model }, hook.identity, hook.input.protocol, hook.turn, hook.source,
     hook.input.session);
 }
 
@@ -101,7 +101,7 @@ export async function handleHookRecall(request: Request, env: Env, ctx: Executio
   const recallId = newId("rcl");
   const exchange = await exchangeFor(request, hook);
   const outcome = await rememberAndRecall(env, ctx, hook.identity, hook.input.protocol, hook.input.body, hook.turn,
-    exchange, hook.coding, recallId);
+    exchange, hook.coding, recallId, hook.input.raw.record === true);
   return hookJson({ memory: outcome.memory, patch: outcome.patch, recall_id: recallId, remember: outcome.remember,
     ...(hook.coding ? { coding: hook.coding } : {}) });
 }

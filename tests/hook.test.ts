@@ -9,6 +9,37 @@ import { codingAgent } from "../src/gateway/coding";
 import { persistExchange } from "../src/gateway/record";
 import { lexicalOverlapScore, shapeRecallQuery } from "../src/memory/queryShape";
 
+test("recall requires explicit boolean recording consent before storing speech or remember-now", async () => {
+  precious("partner-a", "喜欢 Cloudflare");
+  for (const record of [undefined, false, "true", 1]) {
+    const { status, json } = await hook("/v1/hook/recall", { protocol: "messages", model: "partner", record,
+      body: humanBody("请记住，我喜欢 Cloudflare") });
+    assert.equal(status, 200);
+    assert.equal(json.memory, "injected");
+    assert.match(json.patch, /喜欢 Cloudflare/);
+    assert.equal(json.remember, "none");
+  }
+  assert.equal(count("conversations"), 0);
+  assert.equal(count("messages"), 0);
+  assert.equal(count("memories"), 0);
+  assert.equal(count("gateway_exchanges"), 0);
+  assert.equal(queue.length, 0);
+});
+test("recall without recording does not store a synthetic credential", async () => {
+  const text = "帮我配置 password=review-fixture-only";
+  const { json } = await hook("/v1/hook/recall", { protocol: "messages", model: "partner", body: humanBody(text) });
+  assert.equal(json.remember, "none");
+  assert.equal(count("messages"), 0);
+  assert.equal(count("memories"), 0);
+});
+test("recall with recording enabled stores speech and explicit remember-now", async () => {
+  const text = "请记住，我喜欢蓝色";
+  const { json } = await hook("/v1/hook/recall", { protocol: "messages", model: "partner", record: true, body: humanBody(text) });
+  assert.ok(["saved", "indexed"].includes(json.remember));
+  assert.equal(count("messages WHERE role = 'user' AND content = ?", text), 1);
+  assert.equal(count("memories"), 1);
+});
+
 // POST /v1/hook/recall and /v1/hook/record against the real SQL schema; nothing may go upstream.
 (crypto.subtle as any).timingSafeEqual = (a: Uint8Array, b: Uint8Array) => timingSafeEqual(a, b);
 let sqlite: DatabaseSync;
@@ -75,7 +106,7 @@ const claudeReply = (text: string) => ({ model: "claude-real", content: [{ type:
 test("a human turn recalls and returns the patch without calling upstream", async () => {
   precious("partner-a", "喜欢 Cloudflare");
   const { status, json } = await hook("/v1/hook/recall", { protocol: "messages", model: "claude-opus-5-5",
-    agent: "claude-desktop", session: "s1", body: humanBody() });
+    agent: "claude-desktop", session: "s1", record: true, body: humanBody() });
   assert.equal(status, 200);
   assert.equal(json.memory, "injected");
   assert.match(json.patch, /喜欢 Cloudflare/);
@@ -124,7 +155,7 @@ test("stateful Responses input steps aside instead of failing", async () => {
 });
 
 test("record after recall keeps the person's words once and adds the reply", async () => {
-  const turn = { protocol: "messages", model: "partner", agent: "claude-desktop", session: "s1", body: humanBody("今晚想吃火锅") };
+  const turn = { protocol: "messages", model: "partner", agent: "claude-desktop", session: "s1", record: true, body: humanBody("今晚想吃火锅") };
   await hook("/v1/hook/recall", turn);
   assert.equal(count("messages WHERE role = 'user'"), 1);
   const { status, json } = await hook("/v1/hook/record", { ...turn, reply: claudeReply("好，去吃火锅。"), success: true, http_status: 200 });
@@ -145,6 +176,29 @@ test("record after recall keeps the person's words once and adds the reply", asy
   const again = await hook("/v1/hook/record", { ...turn, reply: claudeReply("好，去吃火锅。"), success: true });
   assert.equal(again.json.exchange_id, json.exchange_id);
   assert.equal(count("messages"), 2);
+});
+
+test("different main models keep both replies while sharing the same user utterance", async () => {
+  delete env.MEMORY_QUEUE;
+  const turn = { protocol: "messages", session: "same-session", record: true,
+    body: { ...humanBody("今晚吃什么"), model: "ignored-inner-model" } };
+  const ids: string[] = [];
+  for (const [model, text] of [["partner", "吃火锅"], ["claude-opus-5-5", "吃面"]]) {
+    await hook("/v1/hook/recall", { ...turn, model });
+    const { json } = await hook("/v1/hook/record", { ...turn, model, reply: claudeReply(text), success: true });
+    assert.equal(json.recorded, true);
+    assert.equal(json.completion, "complete");
+    ids.push(json.exchange_id);
+    // Retrying each model stays idempotent.
+    const retry = await hook("/v1/hook/record", { ...turn, model, reply: claudeReply(text), success: true });
+    assert.equal(retry.json.exchange_id, json.exchange_id);
+  }
+  assert.notEqual(ids[0], ids[1]);
+  assert.equal(count("messages WHERE role = 'user'"), 1);
+  assert.equal(count("messages WHERE role = 'assistant'"), 2);
+  assert.equal(count("messages WHERE role = 'assistant' AND content = ?", "吃火锅"), 1);
+  assert.equal(count("messages WHERE role = 'assistant' AND content = ?", "吃面"), 1);
+  assert.equal(count("gateway_exchanges"), 2);
 });
 
 test("the session scopes the conversation; without one it falls back to unscoped", async () => {
@@ -176,7 +230,7 @@ test("a tool step's reply is recorded; a failed or missing reply records no assi
 test("the agent id turns on the coding filter, unless the assistant switched it off", async () => {
   delete env.MEMORY_QUEUE;
   const said = "看看这个\n```js\nconst secret = 1;\n```";
-  const turn = { protocol: "messages", model: "partner", agent: "claude-code", body: humanBody(said) };
+  const turn = { protocol: "messages", model: "partner", agent: "claude-code", record: true, body: humanBody(said) };
   const recall = await hook("/v1/hook/recall", turn);
   assert.equal(recall.json.coding, "agent:claude-code");
   await hook("/v1/hook/record", { ...turn, reply: claudeReply("改好了：\n```js\nconst x = 2;\n```\n试试看。"), success: true });
@@ -219,7 +273,7 @@ test("auth, identity, validation and the 2 MB limit", async () => {
   assert.equal(count("messages"), 0);
   // A named identity this key can use is honored.
   setConfig([identity(), identity({ slug: "second", namespace: "second-ns" })]);
-  await hook("/v1/hook/recall", { ...ok, identity: "second" });
+  await hook("/v1/hook/recall", { ...ok, identity: "second", record: true });
   assert.equal(count("messages WHERE namespace = 'second-ns'"), 1);
   assert.deepEqual(upstream, []);
 });

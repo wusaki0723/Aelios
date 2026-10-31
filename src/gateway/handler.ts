@@ -219,16 +219,17 @@ export async function recordExchange(env: Env, exchange: GatewayExchange, coding
 export interface RecallOutcome { memory: string; patch: string; remember: string }
 
 /**
- * A main-model turn that a person said: keep their words at once, then recall for them.
- * Shared by the gateway and POST /v1/hook/recall, so both answer the same turn the same way.
+ * A main-model turn that a person said: optionally keep their words at once, then recall for them.
+ * The gateway always persists; POST /v1/hook/recall requires the caller's recording consent.
  * `memory` and `remember` use the values of the x-aelios-memory and x-aelios-remember headers.
  */
 export async function rememberAndRecall(env: Env, ctx: ExecutionContext, identity: Identity, protocol: Protocol,
-  body: Body, turn: Turn, exchange: GatewayExchange | null, coding: string | null, recallId: string): Promise<RecallOutcome> {
+  body: Body, turn: Turn, exchange: GatewayExchange | null, coding: string | null, recallId: string,
+  persistHuman = true): Promise<RecallOutcome> {
   let patch = "";
   let memory = turn.kind !== "human" ? "skipped" : "empty";
   let remember = "none";
-  if (exchange && turn.kind === "human" && turn.text) {
+  if (persistHuman && exchange && turn.kind === "human" && turn.text) {
     try {
       const captured = await persistHumanUtterance(env, exchange);
       if (captured.remember.wrote) remember = captured.remember.indexed ? "indexed" : "saved";

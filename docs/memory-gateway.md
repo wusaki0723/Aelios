@@ -209,7 +209,7 @@ Anthropic token counting。使用这些额外端点的客户端需要后续适�
 ## hook 接口（magpie 插件用）
 
 客户端不走 Aelios 网关、模型请求由别的网关自己发（比如 magpie 的 Aelios 插件）时，用这两个接口拿到同样的记忆。
-它们**不转发上游**，只做网关里「判断这一轮 → 存人话 → 召回」和「记下这一轮」两段，代码和网关共用（`src/gateway/hook.ts`）。
+它们**不转发上游**，复用网关的轮次判断、召回和记录逻辑（`src/gateway/hook.ts`）。hook 召回默认不保存对话或触发 remember-now，只有显式选择记录才会存人话；现有网关仍自动记录。
 鉴权和网关同一把 Aelios API key（`Authorization: Bearer …`），请求体上限 2 MB（超了 413），两个接口都无状态。
 
 公共字段：
@@ -232,14 +232,15 @@ Anthropic token counting。使用这些额外端点的客户端需要后续适�
 - `memory`：`off`（非主模型）/ `skipped`（不是人说话的一轮）/ `stateful`（Responses 带 `previous_response_id`、`conversation` 或 `item_reference`；网关这里报 400，hook 只跳过）/ `empty` / `injected` / `unavailable`（召回失败，`patch` 为空，仍是 200）。
 - `recall_id` 只在真的召回时有值，其余为 `null`；`remember` 取值同 `x-aelios-remember`。
 - 判定为写代码时多一个 `coding` 字段（同 `x-aelios-coding`）。
-- 人说的那句当场存下（和网关一样），调用方把 `patch` 贴到最后一条用户消息后面。
+- 调用方把 `patch` 贴到最后一条用户消息后面。recall 请求可额外带 `record: true`，此时才当场保存用户原话并处理 remember-now。省略、`false` 或非布尔值均不保存对话、不创建 remember-now 记忆，`remember` 返回 `none`；召回仍正常工作。召回诊断和已有记忆的使用计数仍照常保存。
+- 调用方应在发送 recall 前检查敏感内容；含凭证的轮次应跳过整个 hook。只读召回也会把查询发给 Aelios。
 
 `POST /v1/hook/record` 额外字段：`reply`（该协议的非流式完整回复，可为 `null`）、`success`、`upstream_model`（可空，`reply.model` 优先）、`http_status`（可空）。
 工具步也要发：Claude Code 的最终回答常在工具步里。返回 `{ "recorded": true, "exchange_id": "gw_req_…", "completion": "complete" }`；
 非主模型 `{ "recorded": false, "reason": "off" }`，带服务端状态的 Responses `{ "recorded": false, "reason": "stateful" }`，写入失败 503 `{ "recorded": false, "reason": "unavailable" }`。
 `success: false` 或没有 `reply` 记成 failed，不进 Dream。写进队列（或无队列时直接写 D1）之后才返回。
 
-去重：exchange id 是内容哈希，recall 和 record 发同一份 `body`、同一个 `session`，用户那句只有一行。
+去重：exchange id 是内容哈希，包含外层请求 `model`；recall 和 record 发同一份 `body`、同一个 `session` 和 `model`，用户那句只有一行。同一会话对相同输入使用不同主模型时，两份助手回答分别记录，用户原话仍共享一行。
 `messages.source` 照旧是 `gateway:<助手>`，Dream、日记、看板不用改。要在 `/admin` 把 agent 用的模型名加进助手的主模型（或 `*`），否则两个接口都是 off。
 如果某个 agent 的上游本来就是 Aelios 网关，别再给它开插件，否则会记两遍。
 

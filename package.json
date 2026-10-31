@@ -12,7 +12,7 @@
     "deploy:bare": "wrangler deploy --keep-vars",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "lint": "biome lint . --max-diagnostics=none",
-    "test:gateway": "node --import tsx --test tests/gateway.test.ts tests/request-contract.test.ts",
+    "test:gateway": "node --import tsx --test tests/gateway.test.ts tests/request-contract.test.ts tests/hook.test.ts",
     "test:recall": "node --import tsx --test tests/recall-quality.test.ts tests/danke-recall.test.ts tests/recall-selector.test.ts",
     "test:diary": "node --import tsx --test tests/diary-grounding.test.ts",
     "test:admin": "node --import tsx --test tests/admin-selector.test.ts",

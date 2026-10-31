@@ -12,9 +12,9 @@ import { nowIso } from "../utils/time";
 import { cleanMessageText } from "../utils/sanitize";
 import { codingClient, codingSpeech, recallWords, stripCodeBlocks } from "./coding";
 import { findIdentity, identityNamespace, identityReadNamespaces, isMainModel, loadConfig, type GatewayConfig, type Identity, type Protocol } from "./config";
-import { appendMemory, classifyTurn, hasServerState, inputItems, recentHumanTexts, validateBody, visibleText, type Body } from "./protocol";
+import { appendMemory, classifyTurn, hasServerState, inputItems, recentHumanTexts, validateBody, visibleText, type Body, type Turn } from "./protocol";
 import { RequestContractError } from "./request";
-import { dispatchExchange, persistExchange, persistHumanUtterance, observeResponse, prepareExchange, settleExchange, type GatewayExchange } from "./record";
+import { dispatchExchange, persistExchange, persistHumanUtterance, observeResponse, prepareExchange, settleExchange, type GatewayExchange, type OutputCollector } from "./record";
 import { callGatewayUpstream, prepareGatewayRequest, UpstreamRouteError, type PreparedRequest } from "./upstream";
 
 export function gatewayError(protocol: Protocol, message: string, status: number): Response {
@@ -207,13 +207,68 @@ export async function recallPatch(
  * closes an earlier failed try of the same request; failed or cut off, it is written at once instead
  * of queued, so that a quick retry finds the row to close.
  */
-async function recordExchange(env: Env, exchange: GatewayExchange, coding: boolean): Promise<void> {
+export async function recordExchange(env: Env, exchange: GatewayExchange, coding: boolean): Promise<void> {
   if (coding && exchange.kind !== "human" && !cleanMessageText(exchange.assistantText)) {
     if (exchange.completion === "complete") await settleExchange(env, exchange);
     else await persistExchange(env, exchange);
     return;
   }
   await dispatchExchange(env, exchange);
+}
+
+export interface RecallOutcome { memory: string; patch: string; remember: string }
+
+/**
+ * A main-model turn that a person said: optionally keep their words at once, then recall for them.
+ * The gateway always persists; POST /v1/hook/recall requires the caller's recording consent.
+ * `memory` and `remember` use the values of the x-aelios-memory and x-aelios-remember headers.
+ */
+export async function rememberAndRecall(env: Env, ctx: ExecutionContext, identity: Identity, protocol: Protocol,
+  body: Body, turn: Turn, exchange: GatewayExchange | null, coding: string | null, recallId: string,
+  persistHuman = true): Promise<RecallOutcome> {
+  let patch = "";
+  let memory = turn.kind !== "human" ? "skipped" : "empty";
+  let remember = "none";
+  if (persistHuman && exchange && turn.kind === "human" && turn.text) {
+    try {
+      const captured = await persistHumanUtterance(env, exchange);
+      if (captured.remember.wrote) remember = captured.remember.indexed ? "indexed" : "saved";
+    } catch (error) {
+      remember = "failed";
+      console.error("gateway human utterance persist failed", { identity: identity.slug, error });
+    }
+  }
+  if (turn.kind === "human" && turn.text) {
+    try {
+      // A coding agent's code is not words to search memories with, in this turn or the ones before.
+      const prior = recentHumanTexts(body, protocol).slice(0, -1).slice(-3)
+        .map(text => coding ? recallWords(text) : text).filter(Boolean);
+      patch = await recallPatch(env, identity, coding ? recallWords(turn.text) : turn.text, ctx, prior, {
+        excludeMessageIds: exchange ? [exchange.userId] : [],
+        recallId,
+        // A quote still present in this request's history is visible; recalling it
+        // would spend budget without adding information.
+        excludeVisibleIn: inputItems(body, protocol).slice(0, -1).map(item => cleanMessageText(visibleText(item.content))).join("\n")
+      });
+      memory = patch ? "injected" : "empty";
+    }
+    catch (error) {
+      memory = "unavailable";
+      console.error("gateway recall unavailable", { identity: identity.slug, error });
+    }
+  }
+  return { memory, patch, remember };
+}
+
+/** What the reply said and how it ended, onto the exchange, as the gateway records it. */
+export function settleOutput(exchange: GatewayExchange, out: OutputCollector, coding: boolean, ok: boolean,
+  interrupted: boolean): void {
+  const said = coding ? codingSpeech(out) : out;
+  exchange.assistantText = said.text;
+  if (out.model) exchange.model = out.model;
+  exchange.completion = !ok || out.failed ? "failed" :
+    said.truncated || exchange.completion === "truncated" ? "truncated" :
+    interrupted || !out.complete ? "incomplete" : "complete";
 }
 
 export async function handleGateway(request: Request, env: Env, ctx: ExecutionContext,
@@ -248,39 +303,11 @@ export async function handleGateway(request: Request, env: Env, ctx: ExecutionCo
       error instanceof RequestContractError || error instanceof UpstreamRouteError ? 400 : 502);
   }
   if (prepared.removed.length) console.log("gateway request normalized", { protocol, removed: prepared.removed });
-  let patch = "";
-  let memoryStatus = !main ? "off" : turn.kind !== "human" ? "skipped" : "empty";
-  let rememberStatus = "none";
   const recallId = newId("rcl");
   const exchange = main ? await prepareExchange(request, body, identity, protocol, turn, auth.profile.source) : null;
-  if (exchange && main && turn.kind === "human" && turn.text) {
-    try {
-      const captured = await persistHumanUtterance(env, exchange);
-      if (captured.remember.wrote) rememberStatus = captured.remember.indexed ? "indexed" : "saved";
-    } catch (error) {
-      rememberStatus = "failed";
-      console.error("gateway human utterance persist failed", { identity: identity.slug, error });
-    }
-  }
-  if (main && turn.kind === "human" && turn.text) {
-    try {
-      // A coding agent's code is not words to search memories with, in this turn or the ones before.
-      const prior = recentHumanTexts(body, protocol).slice(0, -1).slice(-3)
-        .map(text => coding ? recallWords(text) : text).filter(Boolean);
-      patch = await recallPatch(env, identity, coding ? recallWords(turn.text) : turn.text, ctx, prior, {
-        excludeMessageIds: exchange ? [exchange.userId] : [],
-        recallId,
-        // A quote still present in this request's history is visible; recalling it
-        // would spend budget without adding information.
-        excludeVisibleIn: inputItems(body, protocol).slice(0, -1).map(item => cleanMessageText(visibleText(item.content))).join("\n")
-      });
-      memoryStatus = patch ? "injected" : "empty";
-    }
-    catch (error) {
-      memoryStatus = "unavailable";
-      console.error("gateway recall unavailable", { identity: identity.slug, error });
-    }
-  }
+  const { memory: memoryStatus, patch, remember: rememberStatus } = main
+    ? await rememberAndRecall(env, ctx, identity, protocol, body, turn, exchange, coding, recallId)
+    : { memory: "off", patch: "", remember: "none" };
   const payload = appendMemory(prepared.body, protocol, patch);
   if (protocol === "responses" && main) payload.store = false;
   try {
@@ -306,12 +333,7 @@ export async function handleGateway(request: Request, env: Env, ctx: ExecutionCo
       return response;
     }
     return observeResponse(response, protocol, ctx, async (out, interrupted) => {
-      const said = coding ? codingSpeech(out) : out;
-      exchange.assistantText = said.text;
-      if (out.model) exchange.model = out.model;
-      exchange.completion = !upstream.ok || out.failed ? "failed" :
-        said.truncated || exchange.completion === "truncated" ? "truncated" :
-        interrupted || !out.complete ? "incomplete" : "complete";
+      settleOutput(exchange, out, Boolean(coding), upstream.ok, interrupted);
       await recordExchange(env, exchange, Boolean(coding));
     }, Boolean(coding));
   } catch (error) {

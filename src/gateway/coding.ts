@@ -57,6 +57,22 @@ export function codingClient(headers: Headers, body: Body): string | null {
     const match = headers.get(name)?.match(CLIENT_RE);
     if (match) return `client:${match[0].toLowerCase()}`;
   }
+  return codingTools(body);
+}
+
+/**
+ * The same judgment for the hook endpoints, which have no client headers: the agent id the caller
+ * passes (magpie's ctx.agent, such as "claude", "codex", "opencode" or "kilo") plays the client header.
+ */
+export function codingAgent(agent: unknown, body: Body): string | null {
+  if (agent === "claude") return "agent:claude";
+  const match = typeof agent === "string" ? agent.match(CLIENT_RE) ?? agent.match(/\bkilo\b/i) : null;
+  if (match) return `agent:${match[0].toLowerCase()}`;
+  return codingTools(body);
+}
+
+/** Both a shell tool and a file-editing tool on offer. */
+function codingTools(body: Body): string | null {
   const names = new Set((Array.isArray(body.tools) ? body.tools : []).flatMap(toolNames));
   const shell = [...names].find(name => SHELL_TOOLS.has(name));
   const edit = [...names].find(name => EDIT_TOOLS.has(name));

@@ -197,6 +197,8 @@ You have the Aelios memory connector: it is your long-term memory of me. In ever
 - Conversations in the Claude app do not pass through Aelios, so the nightly diary and candidates only see what the assistant hands over with `log_conversation`. Clients that go through the gateway don't need it.
 - Only the ten everyday tools are listed by default. For maintenance tools such as `memory_get` and `memory_export`, add `&tools=all` to the address.
 
+**Use it as a magpie plugin** — if your agents already go through the [magpie](https://github.com/yetone/magpie) gateway, its Aelios plugin can recall before each turn and (optionally) record the conversation through `POST /v1/hook/recall` and `/v1/hook/record`, without pointing the agents at Aelios; see [hook endpoints](docs/memory-gateway.md#hook-接口magpie-插件用). `GET /v1/hook/identities` uses the same API key to discover authorized assistants in configuration order: `{identities:[{slug,name,mainModels}],selection:"first_matching_main_model",unmatched:"memory_off"}`. It returns only these public hints, preserves main-model order, and uses the trimmed assistant display name or slug. It only reads configuration, with no writes or outgoing requests; missing/invalid keys get 401, MCP keys or keys without an authorized assistant get 403, configuration failures get 503, and all responses use `Cache-Control: private, no-store`.
+
 If you only have a Claude subscription and cannot use API mode, get automatic per-message recall and batch write-back in Claude Code with the Hook in this repo: [`integrations/claude-code/`](integrations/claude-code/README.md).
 
 **Seeing images (guide-dog)**: add the `GUIDE_DOG_API_KEY` secret, then point your client at `https://<Worker address>/v1/guide-dog` with model `companion`. The guide-dog only describes images — it writes no memory.
@@ -252,6 +254,8 @@ Configuration has three layers, all under `/admin` Settings: upstream, assistant
 | GET | `/api/gateway/models` | Model picker for `/admin` (owner key): every upstream model id, your ChatGPT models, the saved list |
 | POST | `/api/gateway/models/test` | Connectivity test for one model (owner key): `{"model": "…"}` → one tiny chat request, `{ok, status, latency_ms, error?}`; nothing is recorded |
 | GET / POST | `/api/gateway/chatgpt/*` | ChatGPT plan sign-in (owner key): `status`, `login`, `callback`, `test`, `welcome`, `logout` |
+| GET | `/v1/hook/identities` | Authorized assistant routing hints only; read-only, no outgoing requests |
+| POST | `/v1/hook/recall`, `/v1/hook/record` | Recall / optional recording for clients that send model requests themselves |
 | GET / POST | `/mcp` | MCP memory tools |
 | GET / POST | `/v1/memories` | List / create memories |
 | POST | `/v1/memory/recall` | Dynamic recall (preferred by hooks) |

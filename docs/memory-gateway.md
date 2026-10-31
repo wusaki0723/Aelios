@@ -206,6 +206,59 @@ Anthropic token counting。使用这些额外端点的客户端需要后续适�
 
 持久化在响应结束后调度，不是在返回客户端前确认写入；运行时强制终止仍可能丢失末尾记录。
 
+## hook 接口（magpie 插件用）
+
+客户端不走 Aelios 网关、模型请求由别的网关自己发（比如 magpie 的 Aelios 插件）时，用这两个接口拿到同样的记忆。
+它们**不转发上游**，复用网关的轮次判断、召回和记录逻辑（`src/gateway/hook.ts`）。hook 召回默认不保存对话或触发 remember-now，只有显式选择记录才会存人话；现有网关仍自动记录。
+鉴权和网关同一把 Aelios API key（`Authorization: Bearer …`），请求体上限 2 MB（超了 413），两个接口都无状态。
+不传 `identity` 的模型分流只适用于 hook；网关 URL 带 slug 时仍用该助手，不带 slug 时仍用该钥匙的第一个助手。想让 GPT 和 Claude 进入不同分区，在 `/admin` 给两个助手分别配置各自的主模型；重叠匹配取配置中靠前的助手。
+
+`GET /v1/hook/identities` 用同一把 API key 读取有权助手的路由提示，无请求体：
+
+```json
+{
+  "identities": [{ "slug": "coder", "name": "Coder", "mainModels": ["*opus*", "*sonnet*"] }],
+  "selection": "first_matching_main_model",
+  "unmatched": "memory_off"
+}
+```
+
+`identities` 按配置原序，只包含 `allowedIdentities(config, auth)` 允许这把 key 使用的助手；每项只返回 `slug`、`name`、`mainModels`。`name` 是去掉首尾空白的 `assistantName`，未配置时用 slug；`mainModels` 原序复制主模型列表，保留通配符、重复项和空列表。`selection` 表示按原序选第一个匹配主模型的助手；`unmatched` 表示全部不匹配时关闭记忆，现有 hook 仍按第一个有权助手回落并返回 off。模型匹配继续使用网关已有的大小写不敏感、完整模型名或最后一个 `/` 后名称及 `*` 通配规则。
+
+只投影上述公开字段，不返回 namespace、readNamespaces、keys、prompts、settings 或 upstream。这个 GET 只读取配置，不写 SQL、不入队、不调用模型或外部 HTTP。无效或缺失 key 返回 401，MCP key 或没有有权助手的 key 返回 403，配置读取或校验失败返回 503；成功和错误响应均带 `Cache-Control: private, no-store`。
+
+公共字段（以下两个 POST 接口）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `protocol` | `chat` / `messages` / `responses`（`anthropic` 当 `messages`） |
+| `model` | 这一轮用的模型名，按助手的主模型判断；不是主模型就什么都不做 |
+| `agent` | 可空。调用方的 agent id（如 magpie 的 Claude Code 为 `claude`，以及 `codex`、`opencode`、`kilo`）。命中写代码客户端就按 `codingFilter` 只记说的话；同时带跑命令和改文件工具也算 |
+| `session` | 可空。等同网关的 `x-aelios-session-id`；空就照旧读 `body.metadata.session_id`，再空落到 `unscoped` |
+| `identity` | 可空。显式助手 slug 优先（包括插件 `routes` 选出的助手），仅允许这把 key 有权使用的助手；不填时，按配置顺序选第一个主模型匹配本轮 `model` 的有权助手；全部不匹配则回落到第一个有权助手，此时返回 `off`。无有权助手或显式助手不可用时返回 403 |
+| `body` | 请求体（可以是瘦身后的：只留 `messages`/`input`、`tools` 的名字、`metadata`），不需要带 `model` |
+
+`POST /v1/hook/recall` 返回（HTTP 200）：
+
+```json
+{ "memory": "injected", "patch": "……", "recall_id": "rcl_…", "remember": "none" }
+```
+
+- `memory`：`off`（非主模型）/ `skipped`（不是人说话的一轮）/ `stateful`（Responses 带 `previous_response_id`、`conversation` 或 `item_reference`；网关这里报 400，hook 只跳过）/ `empty` / `injected` / `unavailable`（召回失败，`patch` 为空，仍是 200）。
+- `recall_id` 只在真的召回时有值，其余为 `null`；`remember` 取值同 `x-aelios-remember`。
+- 判定为写代码时多一个 `coding` 字段（同 `x-aelios-coding`）。
+- 调用方把 `patch` 贴到最后一条用户消息后面。recall 请求可额外带 `record: true`，此时才当场保存用户原话并处理 remember-now。省略、`false` 或非布尔值均不保存对话、不创建 remember-now 记忆，`remember` 返回 `none`；召回仍正常工作。召回诊断和已有记忆的使用计数仍照常保存。
+- 调用方应在发送 recall 前检查敏感内容；含凭证的轮次应跳过整个 hook。只读召回也会把查询发给 Aelios。
+
+`POST /v1/hook/record` 额外字段：`reply`（该协议的非流式完整回复，可为 `null`）、`success`、`upstream_model`（可空，`reply.model` 优先）、`http_status`（可空）。
+工具步也要发：Claude Code 的最终回答常在工具步里。返回 `{ "recorded": true, "exchange_id": "gw_req_…", "completion": "complete" }`；
+非主模型 `{ "recorded": false, "reason": "off" }`，带服务端状态的 Responses `{ "recorded": false, "reason": "stateful" }`，写入失败 503 `{ "recorded": false, "reason": "unavailable" }`。
+`success: false` 或没有 `reply` 记成 failed，不进 Dream。写进队列（或无队列时直接写 D1）之后才返回。
+
+去重：exchange id 是内容哈希，包含外层请求 `model`；recall 和 record 发同一份 `body`、同一个 `session` 和 `model`，用户那句只有一行。同一会话对相同输入使用不同主模型时，两份助手回答分别记录，用户原话仍共享一行。
+`messages.source` 照旧是 `gateway:<助手>`，Dream、日记、看板不用改。要在 `/admin` 把 agent 用的模型名加进助手的主模型（或 `*`），否则两个接口都是 off。
+如果某个 agent 的上游本来就是 Aelios 网关，别再给它开插件，否则会记两遍。
+
 ## Fallback 与缓存
 
 重试、跨厂商 fallback、预算与限流全部交给 CF AI Gateway（动态路由在 CF 仪表盘配置）。

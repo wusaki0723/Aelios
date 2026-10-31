@@ -213,7 +213,21 @@ Anthropic token counting。使用这些额外端点的客户端需要后续适�
 鉴权和网关同一把 Aelios API key（`Authorization: Bearer …`），请求体上限 2 MB（超了 413），两个接口都无状态。
 不传 `identity` 的模型分流只适用于 hook；网关 URL 带 slug 时仍用该助手，不带 slug 时仍用该钥匙的第一个助手。想让 GPT 和 Claude 进入不同分区，在 `/admin` 给两个助手分别配置各自的主模型；重叠匹配取配置中靠前的助手。
 
-公共字段：
+`GET /v1/hook/identities` 用同一把 API key 读取有权助手的路由提示，无请求体：
+
+```json
+{
+  "identities": [{ "slug": "coder", "name": "Coder", "mainModels": ["*opus*", "*sonnet*"] }],
+  "selection": "first_matching_main_model",
+  "unmatched": "memory_off"
+}
+```
+
+`identities` 按配置原序，只包含 `allowedIdentities(config, auth)` 允许这把 key 使用的助手；每项只返回 `slug`、`name`、`mainModels`。`name` 是去掉首尾空白的 `assistantName`，未配置时用 slug；`mainModels` 原序复制主模型列表，保留通配符、重复项和空列表。`selection` 表示按原序选第一个匹配主模型的助手；`unmatched` 表示全部不匹配时关闭记忆，现有 hook 仍按第一个有权助手回落并返回 off。模型匹配继续使用网关已有的大小写不敏感、完整模型名或最后一个 `/` 后名称及 `*` 通配规则。
+
+只投影上述公开字段，不返回 namespace、readNamespaces、keys、prompts、settings 或 upstream。这个 GET 只读取配置，不写 SQL、不入队、不调用模型或外部 HTTP。无效或缺失 key 返回 401，MCP key 或没有有权助手的 key 返回 403，配置读取或校验失败返回 503；成功和错误响应均带 `Cache-Control: private, no-store`。
+
+公共字段（以下两个 POST 接口）：
 
 | 字段 | 说明 |
 | --- | --- |

@@ -197,7 +197,7 @@ https://<Worker 地址>/mcp?token=<CHATBOX_API_KEY>
 - 官方 App 的对话不经过 Aelios，夜里的日记和候选靠助手调 `log_conversation` 交过来；走网关的客户端不用调。
 - 默认只列 10 个常用工具；要 `memory_get`、`memory_export` 这类维护工具，地址后面加 `&tools=all`。
 
-**也能当 magpie 插件用**（agent 已经走 [magpie](https://github.com/yetone/magpie) 网关时）：magpie 的 Aelios 插件通过 `POST /v1/hook/recall` 和 `/v1/hook/record` 每轮召回、按需记录，不用把 agent 的上游改成 Aelios，见 [hook 接口](docs/memory-gateway.md#hook-接口magpie-插件用)。
+**也能当 magpie 插件用**（agent 已经走 [magpie](https://github.com/yetone/magpie) 网关时）：magpie 的 Aelios 插件通过 `POST /v1/hook/recall` 和 `/v1/hook/record` 每轮召回、按需记录，不用把 agent 的上游改成 Aelios，见 [hook 接口](docs/memory-gateway.md#hook-接口magpie-插件用)。`GET /v1/hook/identities` 用同一把 API key 按配置原序发现有权助手，返回 `{identities:[{slug,name,mainModels}],selection:"first_matching_main_model",unmatched:"memory_off"}`，只包含这些公开提示，主模型保持原序，名字取去掉首尾空白的助手显示名或 slug。接口只读配置，无写入或外部请求；缺失或无效 key 返回 401，MCP key 或没有有权助手的 key 返回 403，配置失败返回 503，所有响应均带 `Cache-Control: private, no-store`。
 
 只有 Claude 订阅、走不了 API 时，想让 Claude Code 每条消息自动召回、批量写回，用仓库里的 Hook：[`integrations/claude-code/`](./integrations/claude-code/README.md)。
 
@@ -263,6 +263,8 @@ CF 上游：chat 走 compat（全厂商，BYOK）；messages / responses 走各�
 | GET | `/api/gateway/models` | `/admin` 的模型选择器（主人钥匙）：上游全部模型 ID、你的 ChatGPT 模型、已存的清单 |
 | POST | `/api/gateway/models/test` | 单个模型的连通性测试（主人钥匙）：`{"model": "…"}` → 发一条很短的聊天请求，返回 `{ok, status, latency_ms, error?}`；不记录任何东西 |
 | GET / POST | `/api/gateway/chatgpt/*` | ChatGPT 套餐登录（主人钥匙）：`status`、`login`、`callback`、`test`、`welcome`、`logout` |
+| GET | `/v1/hook/identities` | 仅返回有权助手的路由提示；只读，无外部请求 |
+| POST | `/v1/hook/recall`、`/v1/hook/record` | 由客户端自行发送模型请求时的召回 / 按需记录 |
 | GET / POST | `/mcp` | MCP 记忆工具 |
 | GET / POST | `/v1/memories` | 记忆列表 / 新建 |
 | POST | `/v1/memory/recall` | 动态召回（hook 优先用这个） |

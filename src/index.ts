@@ -11,7 +11,7 @@ import { handleHealth } from "./api/health";
 import { handleVectorBackfill, handleVectorDoctor, handleVectorHealth, handleVectorReindex } from "./api/debug";
 import { handleDreamHarvest, handleDreamResolve, handleDreamRun, handleDreamStatus } from "./api/dream";
 import { handleGateway } from "./gateway/handler";
-import { handleHookRecall, handleHookRecord } from "./gateway/hook";
+import { handleHookIdentities, handleHookRecall, handleHookRecord } from "./gateway/hook";
 import { handleGatewayAdmin, handleGatewayEnv, handleGatewaySpaces, handleRecallHistory } from "./gateway/admin";
 import { identityNamespace, loadConfig, loadSettings, type Protocol } from "./gateway/config";
 import { applySettings } from "./gateway/settings";
@@ -228,6 +228,10 @@ export default {
     }
 
     // Memory for a caller that sends the model request itself (the magpie plugin); nothing goes upstream.
+    if (request.method === "GET" && url.pathname === "/v1/hook/identities") {
+      return handleHookIdentities(request, env);
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/hook/recall") {
       return handleHookRecall(request, env, ctx);
     }

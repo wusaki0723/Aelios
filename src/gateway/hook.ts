@@ -44,6 +44,30 @@ function hookJson(data: unknown): Response {
   return Response.json(data, { headers: { "cache-control": "no-store" } });
 }
 
+/** GET /v1/hook/identities: only the public routing hints this key is allowed to see. */
+export async function handleHookIdentities(request: Request, env: Env): Promise<Response> {
+  const privateResponse = (response: Response): Response => {
+    response.headers.set("cache-control", "private, no-store");
+    return response;
+  };
+  const auth = await authenticate(request, env);
+  if (!auth.ok) return privateResponse(hookError("Unauthorized", 401));
+  let config: GatewayConfig;
+  try { config = await loadConfig(env); }
+  catch { return privateResponse(hookError("Gateway configuration unavailable. Apply migrations and check /admin.", 503)); }
+  const identities = allowedIdentities(config, auth);
+  if (!identities.length) return privateResponse(hookError("This key has no identity. Configure one at /admin.", 403));
+  return privateResponse(Response.json({
+    identities: identities.map(identity => ({
+      slug: identity.slug,
+      name: identity.assistantName?.trim() || identity.slug,
+      mainModels: [...identity.models]
+    })),
+    selection: "first_matching_main_model",
+    unmatched: "memory_off"
+  }));
+}
+
 const optionalText = (value: unknown): string | null => typeof value === "string" && value.trim() ? value.trim() : null;
 
 /** Auth, body, identity and turn: everything both endpoints decide the same way. */

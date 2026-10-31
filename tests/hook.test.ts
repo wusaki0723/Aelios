@@ -48,6 +48,7 @@ let ctx: any;
 let pending: Promise<unknown>[];
 let upstream: string[];
 let queue: any[];
+let queries: string[];
 const identity = (extra: any = {}) => ({ slug: "partner", namespace: "partner-a", keys: ["CHATBOX_API_KEY"],
   models: ["partner", "*opus*"], ...extra });
 function setConfig(identities: any[] = [identity()]) {
@@ -60,7 +61,9 @@ beforeEach(() => {
     try { sqlite.exec(readFileSync(`migrations/${file}`, "utf8")); }
     catch (error) { if (!String(error).includes("fts5")) throw error; }
   }
+  queries = [];
   const db = { prepare(sql: string) {
+    queries.push(sql);
     const statement = sqlite.prepare(sql); let args: any[] = [];
     const api = { bind(...values: any[]) { args = values; return api; },
       async first() { return statement.get(...args) || null; },
@@ -102,6 +105,78 @@ const toolBody = () => ({ messages: [
   { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "lookup", input: {} }] },
   { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "" }] }] });
 const claudeReply = (text: string) => ({ model: "claude-real", content: [{ type: "text", text }], stop_reason: "end_turn" });
+
+async function discover(headers: Record<string, string> = { authorization: "Bearer owner-key" }) {
+  const before = sqlite.prepare("SELECT total_changes() AS n").get();
+  queries = [];
+  const response = await worker.fetch(new Request("https://aelios.test/v1/hook/identities", { headers }), env, ctx);
+  const json = await response.json();
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.deepEqual(sqlite.prepare("SELECT total_changes() AS n").get(), before);
+  assert.ok(queries.every(sql => sql === "SELECT config_json FROM gateway_config WHERE id = 1"));
+  assert.deepEqual(upstream, []);
+  assert.deepEqual(queue, []);
+  assert.deepEqual(pending, []);
+  return { status: response.status, json };
+}
+
+test("identity discovery isolates key permissions and preserves identity and main-model order with a public projection", async () => {
+  setConfig([
+    identity({ slug: "private", keys: ["IM_API_KEY"], models: ["*"], assistantName: "Private" }),
+    identity({ slug: "z-first", assistantName: "  First assistant  ", models: ["gpt-*", "*opus*", "gpt-*"],
+      readNamespaces: ["shared-private"], userName: "Private user", prompts: { system: "secret prompt" },
+      settings: { secret: "identity setting" }, upstream: { address: "https://private.test" } }),
+    identity({ slug: "empty", models: [] }),
+    identity({ slug: "a-last", keys: ["CHATBOX_API_KEY", "IM_API_KEY"], models: ["Claude-*", "anthropic/claude-*"] })
+  ]);
+  assert.deepEqual(await discover(), { status: 200, json: {
+    identities: [
+      { slug: "z-first", name: "First assistant", mainModels: ["gpt-*", "*opus*", "gpt-*"] },
+      { slug: "empty", name: "empty", mainModels: [] },
+      { slug: "a-last", name: "a-last", mainModels: ["Claude-*", "anthropic/claude-*"] }
+    ], selection: "first_matching_main_model", unmatched: "memory_off"
+  } });
+  // The shared authenticator also accepts x-api-key; no identities from the other key may leak.
+  assert.deepEqual(await discover({ "x-api-key": "im-key" }), { status: 200, json: {
+    identities: [
+      { slug: "private", name: "Private", mainModels: ["*"] },
+      { slug: "a-last", name: "a-last", mainModels: ["Claude-*", "anthropic/claude-*"] }
+    ], selection: "first_matching_main_model", unmatched: "memory_off"
+  } });
+});
+
+test("identity discovery rejects missing or invalid credentials, MCP keys and keys without authorized identities", async () => {
+  env.MEMORY_MCP_API_KEY = "mcp-key";
+  const invalidHeaders: Record<string, string>[] = [{}, { authorization: "Bearer wrong" }];
+  for (const headers of invalidHeaders) {
+    assert.deepEqual(await discover(headers), { status: 401,
+      json: { error: { type: "authentication_error", message: "Unauthorized" } } });
+  }
+  for (const key of ["mcp-key", "im-key"]) {
+    assert.deepEqual(await discover({ authorization: `Bearer ${key}` }), { status: 403,
+      json: { error: { type: "invalid_request_error", message: "This key has no identity. Configure one at /admin." } } });
+  }
+  setConfig([]);
+  assert.equal((await discover()).status, 403);
+});
+
+test("identity discovery fails closed on invalid saved config, invalid environment config and unavailable config storage", async () => {
+  const unavailable = { status: 503, json: { error: { type: "api_error",
+    message: "Gateway configuration unavailable. Apply migrations and check /admin." } } };
+  env.GATEWAY_CONFIG = "not json: private config";
+  invalidateSettingsCache();
+  assert.deepEqual(await discover(), unavailable);
+  setConfig();
+  sqlite.prepare("INSERT INTO gateway_config (id, config_json, updated_at) VALUES (1, ?, ?)")
+    .run(JSON.stringify({ version: 3, identities: "private invalid identities" }), "2026-10-31");
+  invalidateSettingsCache();
+  assert.deepEqual(await discover(), unavailable);
+  // Invalid keys must remain 401 even when the configuration is broken.
+  assert.equal((await discover({ authorization: "Bearer wrong" })).status, 401);
+  env.DB = { prepare() { throw new Error("private database failure"); } };
+  invalidateSettingsCache();
+  assert.deepEqual(await discover(), unavailable);
+});
 
 test("a human turn recalls and returns the patch without calling upstream", async () => {
   precious("partner-a", "喜欢 Cloudflare");

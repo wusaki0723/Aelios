@@ -30,12 +30,13 @@ export interface GatewayExchange {
   createdAt: string;
   stream: boolean;
 }
+/** `session` stands in for the x-aelios-session-id header when the caller has it some other way (the hook endpoints). */
 export async function prepareExchange(request: Request, body: Body, identity: Identity,
-  protocol: Protocol, turn: Turn, source: string): Promise<GatewayExchange> {
-  const session = request.headers.get("x-aelios-session-id") || request.headers.get("session_id") ||
+  protocol: Protocol, turn: Turn, source: string, session: string | null = null): Promise<GatewayExchange> {
+  const scopeSession = session || request.headers.get("x-aelios-session-id") || request.headers.get("session_id") ||
     request.headers.get("x-session-id") || body.metadata?.session_id || "unscoped";
   const namespace = identityNamespace(identity);
-  const scope = canonical([namespace, identity.slug, source, session]);
+  const scope = canonical([namespace, identity.slug, source, scopeSession]);
   const conversationId = `gw_${await sha256Hex(scope)}`;
   const prefix = inputItems(body, protocol).slice(0, turn.index + 1);
   const userId = `gw_user_${await sha256Hex(canonical([scope, protocol, prefix]))}`;

@@ -206,6 +206,43 @@ Anthropic token counting。使用这些额外端点的客户端需要后续适�
 
 持久化在响应结束后调度，不是在返回客户端前确认写入；运行时强制终止仍可能丢失末尾记录。
 
+## hook 接口（magpie 插件用）
+
+客户端不走 Aelios 网关、模型请求由别的网关自己发（比如 magpie 的 Aelios 插件）时，用这两个接口拿到同样的记忆。
+它们**不转发上游**，只做网关里「判断这一轮 → 存人话 → 召回」和「记下这一轮」两段，代码和网关共用（`src/gateway/hook.ts`）。
+鉴权和网关同一把 Aelios API key（`Authorization: Bearer …`），请求体上限 2 MB（超了 413），两个接口都无状态。
+
+公共字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `protocol` | `chat` / `messages` / `responses`（`anthropic` 当 `messages`） |
+| `model` | 这一轮用的模型名，按助手的主模型判断；不是主模型就什么都不做 |
+| `agent` | 可空。调用方的 agent id（如 `claude-code`、`codex`、`opencode`、`kilo`）。命中写代码客户端就按 `codingFilter` 只记说的话；同时带跑命令和改文件工具也算 |
+| `session` | 可空。等同网关的 `x-aelios-session-id`；空就照旧读 `body.metadata.session_id`，再空落到 `unscoped` |
+| `identity` | 可空。助手 slug；不填用这把 key 的默认助手，找不到返回 403 |
+| `body` | 请求体（可以是瘦身后的：只留 `messages`/`input`、`tools` 的名字、`metadata`），不需要带 `model` |
+
+`POST /v1/hook/recall` 返回（HTTP 200）：
+
+```json
+{ "memory": "injected", "patch": "……", "recall_id": "rcl_…", "remember": "none" }
+```
+
+- `memory`：`off`（非主模型）/ `skipped`（不是人说话的一轮）/ `stateful`（Responses 带 `previous_response_id`、`conversation` 或 `item_reference`；网关这里报 400，hook 只跳过）/ `empty` / `injected` / `unavailable`（召回失败，`patch` 为空，仍是 200）。
+- `recall_id` 只在真的召回时有值，其余为 `null`；`remember` 取值同 `x-aelios-remember`。
+- 判定为写代码时多一个 `coding` 字段（同 `x-aelios-coding`）。
+- 人说的那句当场存下（和网关一样），调用方把 `patch` 贴到最后一条用户消息后面。
+
+`POST /v1/hook/record` 额外字段：`reply`（该协议的非流式完整回复，可为 `null`）、`success`、`upstream_model`（可空，`reply.model` 优先）、`http_status`（可空）。
+工具步也要发：Claude Code 的最终回答常在工具步里。返回 `{ "recorded": true, "exchange_id": "gw_req_…", "completion": "complete" }`；
+非主模型 `{ "recorded": false, "reason": "off" }`，带服务端状态的 Responses `{ "recorded": false, "reason": "stateful" }`，写入失败 503 `{ "recorded": false, "reason": "unavailable" }`。
+`success: false` 或没有 `reply` 记成 failed，不进 Dream。写进队列（或无队列时直接写 D1）之后才返回。
+
+去重：exchange id 是内容哈希，recall 和 record 发同一份 `body`、同一个 `session`，用户那句只有一行。
+`messages.source` 照旧是 `gateway:<助手>`，Dream、日记、看板不用改。要在 `/admin` 把 agent 用的模型名加进助手的主模型（或 `*`），否则两个接口都是 off。
+如果某个 agent 的上游本来就是 Aelios 网关，别再给它开插件，否则会记两遍。
+
 ## Fallback 与缓存
 
 重试、跨厂商 fallback、预算与限流全部交给 CF AI Gateway（动态路由在 CF 仪表盘配置）。

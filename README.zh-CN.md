@@ -197,6 +197,8 @@ https://<Worker 地址>/mcp?token=<CHATBOX_API_KEY>
 - 官方 App 的对话不经过 Aelios，夜里的日记和候选靠助手调 `log_conversation` 交过来；走网关的客户端不用调。
 - 默认只列 10 个常用工具；要 `memory_get`、`memory_export` 这类维护工具，地址后面加 `&tools=all`。
 
+**也能当 magpie 插件用**（agent 已经走 [magpie](https://github.com/yetone/magpie) 网关时）：magpie 的 Aelios 插件通过 `POST /v1/hook/recall` 和 `/v1/hook/record` 每轮召回、按需记录，不用把 agent 的上游改成 Aelios，见 [hook 接口](docs/memory-gateway.md#hook-接口magpie-插件用)。
+
 只有 Claude 订阅、走不了 API 时，想让 Claude Code 每条消息自动召回、批量写回，用仓库里的 Hook：[`integrations/claude-code/`](./integrations/claude-code/README.md)。
 
 **看图**

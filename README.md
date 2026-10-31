@@ -197,6 +197,8 @@ You have the Aelios memory connector: it is your long-term memory of me. In ever
 - Conversations in the Claude app do not pass through Aelios, so the nightly diary and candidates only see what the assistant hands over with `log_conversation`. Clients that go through the gateway don't need it.
 - Only the ten everyday tools are listed by default. For maintenance tools such as `memory_get` and `memory_export`, add `&tools=all` to the address.
 
+**Use it as a magpie plugin** — if your agents already go through the [magpie](https://github.com/yetone/magpie) gateway, its Aelios plugin can recall before each turn and (optionally) record the conversation through `POST /v1/hook/recall` and `/v1/hook/record`, without pointing the agents at Aelios; see [hook endpoints](docs/memory-gateway.md#hook-接口magpie-插件用).
+
 If you only have a Claude subscription and cannot use API mode, get automatic per-message recall and batch write-back in Claude Code with the Hook in this repo: [`integrations/claude-code/`](integrations/claude-code/README.md).
 
 **Seeing images (guide-dog)**: add the `GUIDE_DOG_API_KEY` secret, then point your client at `https://<Worker address>/v1/guide-dog` with model `companion`. The guide-dog only describes images — it writes no memory.

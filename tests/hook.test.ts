@@ -141,6 +141,108 @@ test("a model outside the main list is off for both endpoints", async () => {
   assert.equal(count("messages"), 0); assert.equal(queue.length, 0);
 });
 
+test("hooks choose the first authorized main-model match for recall and record namespaces", async () => {
+  setConfig([
+    identity({ slug: "private", namespace: "private-ns", keys: ["IM_API_KEY"], models: ["*"] }),
+    identity({ slug: "claude", namespace: "claude-ns", models: ["claude-*"] }),
+    identity({ slug: "gpt", namespace: "gpt-ns", models: ["gpt-*"] })
+  ]);
+  precious("private-ns", "喜欢 Cloudflare，私密内容");
+  precious("claude-ns", "喜欢 Cloudflare，Claude 分区");
+  precious("gpt-ns", "喜欢 Cloudflare，GPT 分区");
+  for (const [model, slug, namespace, marker, other] of [
+    ["anthropic/claude-sonnet-4", "claude", "claude-ns", "Claude 分区", "GPT 分区"],
+    ["openai/gpt-5", "gpt", "gpt-ns", "GPT 分区", "Claude 分区"]
+  ]) {
+    const turn = { protocol: "messages", model, session: "same-session", record: true, body: humanBody("喜欢 Cloudflare") };
+    const recall = await hook("/v1/hook/recall", turn);
+    assert.equal(recall.status, 200);
+    assert.equal(recall.json.memory, "injected");
+    assert.match(recall.json.patch, new RegExp(marker));
+    assert.doesNotMatch(recall.json.patch, new RegExp(`${other}|私密内容`));
+    assert.equal(count("messages WHERE namespace = ? AND role = 'user'", namespace), 1);
+    assert.equal(count("memory_events WHERE namespace = ? AND id = ?", namespace, recall.json.recall_id), 1);
+    const recorded = await hook("/v1/hook/record", { ...turn, reply: claudeReply(`${marker}回答`), success: true });
+    assert.equal(recorded.status, 200);
+    assert.equal(recorded.json.recorded, true);
+    const exchange = queue.at(-1);
+    assert.equal(exchange.namespace, namespace);
+    assert.equal(exchange.profile, slug);
+    await persistExchange(env, exchange);
+    assert.equal(count("messages WHERE namespace = ? AND role = 'user'", namespace), 1);
+    assert.equal(count("messages WHERE namespace = ? AND role = 'assistant' AND content = ?", namespace, `${marker}回答`), 1);
+    assert.equal(count("gateway_exchanges WHERE namespace = ? AND id = ?", namespace, recorded.json.exchange_id), 1);
+  }
+  for (const path of ["/v1/hook/recall", "/v1/hook/record"]) {
+    assert.equal((await hook(path, { protocol: "messages", model: "gpt-5", identity: "private", body: humanBody(),
+      reply: claudeReply("不能存") })).status, 403);
+  }
+  assert.equal(count("messages WHERE namespace = 'private-ns'"), 0);
+  assert.deepEqual(upstream, []);
+});
+
+test("explicit hook identity wins over model routing, including a non-main model", async () => {
+  delete env.MEMORY_QUEUE;
+  setConfig([identity({ models: ["*"] }), identity({ slug: "second", namespace: "second-ns", models: ["gpt-*"] })]);
+  precious("partner-a", "喜欢 Cloudflare，默认分区");
+  precious("second-ns", "喜欢 Cloudflare，显式分区");
+  const turn = { protocol: "messages", model: "gpt-5", identity: "second", record: true, body: humanBody("喜欢 Cloudflare") };
+  const recall = await hook("/v1/hook/recall", turn);
+  assert.match(recall.json.patch, /显式分区/);
+  assert.doesNotMatch(recall.json.patch, /默认分区/);
+  const record = await hook("/v1/hook/record", { ...turn, reply: claudeReply("显式回答") });
+  assert.equal(record.json.recorded, true);
+  assert.equal(count("messages WHERE namespace = 'second-ns'"), 2);
+  for (const model of ["claude-sonnet-4", "unknown-model"]) {
+    const off = { ...turn, model };
+    assert.equal((await hook("/v1/hook/recall", off)).json.memory, "off");
+    assert.deepEqual((await hook("/v1/hook/record", { ...off, reply: claudeReply("忽略") })).json, { recorded: false, reason: "off" });
+  }
+  assert.equal(count("messages"), 2);
+});
+
+test("overlapping hook main models use the first authorized identity", async () => {
+  delete env.MEMORY_QUEUE;
+  setConfig([identity({ models: ["*"] }), identity({ slug: "second", namespace: "second-ns", models: ["*"] })]);
+  precious("partner-a", "喜欢 Cloudflare，首个分区");
+  precious("second-ns", "喜欢 Cloudflare，后续分区");
+  const turn = { protocol: "messages", model: "gpt-5", record: true, body: humanBody("喜欢 Cloudflare") };
+  const recall = await hook("/v1/hook/recall", turn);
+  assert.match(recall.json.patch, /首个分区/);
+  assert.doesNotMatch(recall.json.patch, /后续分区/);
+  assert.equal((await hook("/v1/hook/record", { ...turn, reply: claudeReply("第一位回答") })).json.recorded, true);
+  assert.equal(count("messages WHERE namespace = 'partner-a'"), 2);
+  assert.equal(count("messages WHERE namespace = 'second-ns'"), 0);
+});
+
+test("unmatched hook models retain the first-identity fallback and keys with no identity get 403", async () => {
+  setConfig([identity({ models: ["claude-*"] }), identity({ slug: "second", models: ["gpt-*"] })]);
+  const turn = { protocol: "messages", model: "unknown-model", record: true, body: humanBody(), reply: claudeReply("忽略") };
+  assert.deepEqual((await hook("/v1/hook/recall", turn)).json, { memory: "off", patch: "", recall_id: null, remember: "none" });
+  assert.deepEqual((await hook("/v1/hook/record", turn)).json, { recorded: false, reason: "off" });
+  for (const path of ["/v1/hook/recall", "/v1/hook/record"]) {
+    assert.equal((await hook(path, turn, { authorization: "Bearer im-key" })).status, 403);
+  }
+  assert.equal(count("messages"), 0);
+  assert.equal(count("memory_events"), 0);
+  assert.equal(queue.length, 0);
+});
+
+test("gateway identity selection still uses the path or first identity regardless of model", async () => {
+  setConfig([identity({ models: ["claude-*"] }), identity({ slug: "second", namespace: "second-ns", models: ["gpt-*"] })]);
+  globalThis.fetch = async () => Response.json({ choices: [{ index: 0, message: { content: "好" }, finish_reason: "stop" }] });
+  for (const [path, slug, memory] of [["/v1/chat/completions", "partner", "off"],
+    ["/partner/v1/chat/completions", "partner", "off"], ["/second/v1/chat/completions", "second", "empty"]]) {
+    const response = await worker.fetch(new Request(`https://aelios.test${path}`, { method: "POST",
+      headers: { authorization: "Bearer owner-key", "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-5", messages: [{ role: "user", content: "你好" }] }) }), env, ctx);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("x-aelios-identity"), slug);
+    assert.equal(response.headers.get("x-aelios-memory"), memory);
+    await response.text(); await Promise.all(pending);
+  }
+});
+
 test("stateful Responses input steps aside instead of failing", async () => {
   const body = { input: [{ type: "item_reference", id: "msg_1" }, { role: "user", content: [{ type: "input_text", text: "记得吗" }] }] };
   const recall = await hook("/v1/hook/recall", { protocol: "responses", model: "partner", body });
@@ -230,9 +332,9 @@ test("a tool step's reply is recorded; a failed or missing reply records no assi
 test("the agent id turns on the coding filter, unless the assistant switched it off", async () => {
   delete env.MEMORY_QUEUE;
   const said = "看看这个\n```js\nconst secret = 1;\n```";
-  const turn = { protocol: "messages", model: "partner", agent: "claude-code", record: true, body: humanBody(said) };
+  const turn = { protocol: "messages", model: "partner", agent: "claude", record: true, body: humanBody(said) };
   const recall = await hook("/v1/hook/recall", turn);
-  assert.equal(recall.json.coding, "agent:claude-code");
+  assert.equal(recall.json.coding, "agent:claude");
   await hook("/v1/hook/record", { ...turn, reply: claudeReply("改好了：\n```js\nconst x = 2;\n```\n试试看。"), success: true });
   const stored = (sqlite.prepare("SELECT role, content FROM messages ORDER BY seq").all() as any[]).map(r => `${r.role}:${r.content}`);
   assert.equal(stored.length, 2);
@@ -251,7 +353,10 @@ test("codingAgent reads magpie agent ids and keeps the tool rule", () => {
   for (const agent of ["claude-code", "codex", "opencode", "cline", "aider", "kilo", "qwen-code"]) {
     assert.ok(codingAgent(agent, {}), agent);
   }
-  assert.equal(codingAgent("claude-desktop", {}), null);
+  assert.equal(codingAgent("claude", {}), "agent:claude");
+  for (const agent of ["claude-desktop", "my-claude", "claude-proxy", "qwen", "kimi"]) {
+    assert.equal(codingAgent(agent, {}), null, agent);
+  }
   assert.equal(codingAgent(null, {}), null);
   assert.equal(codingAgent("claude-desktop", { tools: [{ name: "Bash" }, { name: "Edit" }] }), "tools:bash+edit");
   assert.equal(codingAgent(undefined, { tools: [{ type: "function", function: { name: "shell" } }, { type: "function", function: { name: "apply_patch" } }] }),

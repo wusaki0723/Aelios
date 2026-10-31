@@ -211,6 +211,7 @@ Anthropic token counting。使用这些额外端点的客户端需要后续适�
 客户端不走 Aelios 网关、模型请求由别的网关自己发（比如 magpie 的 Aelios 插件）时，用这两个接口拿到同样的记忆。
 它们**不转发上游**，复用网关的轮次判断、召回和记录逻辑（`src/gateway/hook.ts`）。hook 召回默认不保存对话或触发 remember-now，只有显式选择记录才会存人话；现有网关仍自动记录。
 鉴权和网关同一把 Aelios API key（`Authorization: Bearer …`），请求体上限 2 MB（超了 413），两个接口都无状态。
+不传 `identity` 的模型分流只适用于 hook；网关 URL 带 slug 时仍用该助手，不带 slug 时仍用该钥匙的第一个助手。想让 GPT 和 Claude 进入不同分区，在 `/admin` 给两个助手分别配置各自的主模型；重叠匹配取配置中靠前的助手。
 
 公共字段：
 
@@ -218,9 +219,9 @@ Anthropic token counting。使用这些额外端点的客户端需要后续适�
 | --- | --- |
 | `protocol` | `chat` / `messages` / `responses`（`anthropic` 当 `messages`） |
 | `model` | 这一轮用的模型名，按助手的主模型判断；不是主模型就什么都不做 |
-| `agent` | 可空。调用方的 agent id（如 `claude-code`、`codex`、`opencode`、`kilo`）。命中写代码客户端就按 `codingFilter` 只记说的话；同时带跑命令和改文件工具也算 |
+| `agent` | 可空。调用方的 agent id（如 magpie 的 Claude Code 为 `claude`，以及 `codex`、`opencode`、`kilo`）。命中写代码客户端就按 `codingFilter` 只记说的话；同时带跑命令和改文件工具也算 |
 | `session` | 可空。等同网关的 `x-aelios-session-id`；空就照旧读 `body.metadata.session_id`，再空落到 `unscoped` |
-| `identity` | 可空。助手 slug；不填用这把 key 的默认助手，找不到返回 403 |
+| `identity` | 可空。显式助手 slug 优先（包括插件 `routes` 选出的助手），仅允许这把 key 有权使用的助手；不填时，按配置顺序选第一个主模型匹配本轮 `model` 的有权助手；全部不匹配则回落到第一个有权助手，此时返回 `off`。无有权助手或显式助手不可用时返回 403 |
 | `body` | 请求体（可以是瘦身后的：只留 `messages`/`input`、`tools` 的名字、`metadata`），不需要带 `model` |
 
 `POST /v1/hook/recall` 返回（HTTP 200）：

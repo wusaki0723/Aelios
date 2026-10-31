@@ -62,9 +62,10 @@ export function codingClient(headers: Headers, body: Body): string | null {
 
 /**
  * The same judgment for the hook endpoints, which have no client headers: the agent id the caller
- * passes (magpie's ctx.agent, such as "claude-code", "codex", "opencode" or "kilo") plays the client header.
+ * passes (magpie's ctx.agent, such as "claude", "codex", "opencode" or "kilo") plays the client header.
  */
 export function codingAgent(agent: unknown, body: Body): string | null {
+  if (agent === "claude") return "agent:claude";
   const match = typeof agent === "string" ? agent.match(CLIENT_RE) ?? agent.match(/\bkilo\b/i) : null;
   if (match) return `agent:${match[0].toLowerCase()}`;
   return codingTools(body);

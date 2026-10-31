@@ -2,7 +2,7 @@ import { authenticate } from "../auth/apiKey";
 import type { Env } from "../types";
 import { newId } from "../utils/ids";
 import { codingAgent, stripCodeBlocks } from "./coding";
-import { findIdentity, isMainModel, loadConfig, object, PROTOCOLS, type GatewayConfig, type Identity, type Protocol } from "./config";
+import { allowedIdentities, findIdentity, isMainModel, loadConfig, object, PROTOCOLS, type GatewayConfig, type Identity, type Protocol } from "./config";
 import { recordExchange, rememberAndRecall, settleOutput } from "./handler";
 import { classifyTurn, hasServerState, validateBody, type Body, type Turn } from "./protocol";
 import { OutputCollector, prepareExchange, type GatewayExchange } from "./record";
@@ -71,7 +71,10 @@ async function openHook(request: Request, env: Env): Promise<HookContext | Respo
   let config: GatewayConfig;
   try { config = await loadConfig(env); }
   catch { return hookError("Gateway configuration unavailable. Apply migrations and check /admin.", 503); }
-  const identity = findIdentity(config, auth, input.identity);
+  // Explicit routing wins; only hooks choose a default by model, within this key's permissions.
+  const identities = allowedIdentities(config, auth);
+  const identity = input.identity ? findIdentity(config, auth, input.identity)
+    : identities.find(candidate => isMainModel(candidate, input.model)) ?? identities[0];
   if (!identity) {
     return hookError(input.identity
       ? `No identity "${input.identity}" available for this key. Configure /admin, then use https://<host>/<identity>/v1.`
